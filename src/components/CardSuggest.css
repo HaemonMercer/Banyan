@@ -1,0 +1,20 @@
+.wiki-complete {
+    position: fixed;
+    z-index: var(--z-popover);
+    min-width: 200px;
+    max-width: 260px;
+    margin: 4px 0 0;
+    font-size: var(--fs-md);
+}
+.wiki-complete li {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+}
+.wiki-complete li:hover { background: var(--hover); }
+.wiki-complete li.active { background: var(--accent-soft); color: var(--accent-text); }
+.wiki-complete-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-complete-boards { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; flex-shrink: 0; }

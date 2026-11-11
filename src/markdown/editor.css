@@ -1,0 +1,35 @@
+/* WYSIWYG card editor (Milkdown). Shares `.md` typography with the viewer. */
+.card-editor { position: relative; cursor: text; }
+.card-editor .ProseMirror { outline: none; white-space: pre-wrap; min-height: 1.5em; }
+.card-editor .ProseMirror > :first-child { margin-top: 0; }
+.card-editor .ProseMirror > :last-child { margin-bottom: 0; }
+.card-editor.is-empty::before {
+    content: attr(data-placeholder);
+    position: absolute;
+    color: var(--muted);
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+/* Task lists (GFM preset marks them with data attributes). */
+.md li[data-item-type="task"] { list-style: none; position: relative; margin-left: -1.2em; padding-left: 1.4em; }
+.md li[data-item-type="task"]::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.3em;
+    width: 0.85em;
+    height: 0.85em;
+    border: 1.5px solid var(--muted);
+    border-radius: 3px;
+    box-sizing: border-box;
+}
+.md li[data-item-type="task"][data-checked="true"]::before { background: var(--accent); border-color: var(--accent); }
+.md li[data-item-type="task"][data-checked="true"] > * { color: var(--muted); text-decoration: line-through; }
+
+/* Raw chips: rendered syntax the editor keeps verbatim. */
+.bn-raw { cursor: default; border-radius: var(--r-sm); }
+.bn-raw-inline { display: inline; }
+.bn-raw-block { margin: 0 0 0.6em; }
+.ProseMirror-selectednode.bn-raw, .bn-raw.ProseMirror-selectednode { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bn-raw:hover { background: var(--hover); }

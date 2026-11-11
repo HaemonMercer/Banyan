@@ -1,0 +1,21 @@
+/* Line icons (src/icons). Size follows font-size unless a size is given. */
+.bn-icon {
+    display: inline-block;
+    flex-shrink: 0;
+    vertical-align: -0.15em;
+    overflow: visible;
+}
+
+/* Item type icons: tinted by group so types stay easy to scan in long lists. */
+.bn-type-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    line-height: 1;
+}
+.bn-type-icon.type-literature { color: var(--type-literature); }
+.bn-type-icon.type-media { color: var(--type-media); }
+.bn-type-icon.type-performance { color: var(--type-performance); }
+.bn-type-icon.type-art { color: var(--type-art); }
+.bn-type-icon.type-other { color: var(--type-other); }
