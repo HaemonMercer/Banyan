@@ -77,7 +77,6 @@ function LinkEditor({ link, titleA, titleB, focusKey, onChange, onUnlink }: Prop
                         }
                     }}
                 />
-                <p className="muted wb-hint">備註會顯示在線段中間。Enter 儲存，Shift＋Enter 換行。</p>
             </div>
         </section>
     );

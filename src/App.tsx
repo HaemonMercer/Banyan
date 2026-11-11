@@ -2,13 +2,13 @@ import { useState } from "react";
 import "./App.css";
 import DrawerView from "./components/DrawerView.tsx";
 import GraphModule from "./components/GraphModule.tsx";
-import UpdateDialog from "./components/UpdateDialog.tsx";
 import WhiteboardView from "./components/WhiteboardView.tsx";
+import SettingsView, { type SettingsSection } from "./components/settings/SettingsView.tsx";
 import { Icon } from "./icons/Icon";
 import type { IconName } from "./icons/icons";
-import { THEME_ICON, THEME_LABEL, useTheme } from "./theme";
+import { useTheme } from "./theme";
 
-type Module = "drawer" | "whiteboard" | "graph";
+type Module = "drawer" | "whiteboard" | "graph" | "settings";
 
 const MODULES: { id: Module; icon: IconName; label: string }[] = [
     { id: "drawer", icon: "drawer", label: "Drawer" },
@@ -21,7 +21,7 @@ const STORAGE_KEY = "banyan.module";
 function savedModule(): Module {
     try {
         const v = localStorage.getItem(STORAGE_KEY);
-        if (v === "drawer" || v === "whiteboard" || v === "graph") return v;
+        if (v === "drawer" || v === "whiteboard" || v === "graph" || v === "settings") return v;
     } catch {
         /* storage unavailable */
     }
@@ -30,8 +30,10 @@ function savedModule(): Module {
 
 function App() {
     const [module, setModule] = useState<Module>(savedModule);
-    const [theme, cycleTheme] = useTheme();
-    const [showUpdate, setShowUpdate] = useState(false);
+    const [theme, setTheme] = useTheme();
+    /** Settings stays mounted once opened, so an update download survives switching modules. */
+    const [settingsOpened, setSettingsOpened] = useState(module === "settings");
+    const [settingsJump, setSettingsJump] = useState<{ key: number; section: SettingsSection | null }>({ key: 0, section: null });
     // Jumping between modules: which item or card to show when the other module opens.
     const [nav, setNav] = useState<{ key: number; itemId: number | null; card: { cardId: number; boardId: number } | null }>(
         { key: 0, itemId: null, card: null },
@@ -39,6 +41,7 @@ function App() {
 
     const choose = (m: Module) => {
         setModule(m);
+        if (m === "settings") setSettingsOpened(true);
         try {
             localStorage.setItem(STORAGE_KEY, m);
         } catch {
@@ -53,6 +56,10 @@ function App() {
     const openCard = (cardId: number, boardId: number) => {
         setNav((n) => ({ key: n.key + 1, itemId: null, card: { cardId, boardId } }));
         choose("whiteboard");
+    };
+    const openSettings = (section: SettingsSection) => {
+        setSettingsJump((j) => ({ key: j.key + 1, section }));
+        choose("settings");
     };
 
     return (
@@ -73,29 +80,34 @@ function App() {
                     </button>
                 ))}
                 <div className="rail-spacer" />
-                <button className="rail-btn rail-theme" title="檢查是否有新版本" onClick={() => setShowUpdate(true)}>
-                    <Icon name="refresh" size={18} className="rail-icon" />
-                    <span className="rail-label">更新</span>
-                </button>
                 <button
-                    className="rail-btn rail-theme"
-                    title={`外觀：${THEME_LABEL[theme]}（點一下切換）`}
-                    onClick={cycleTheme}
+                    className={`rail-btn rail-theme${module === "settings" ? " active" : ""}`}
+                    title="設定：外觀、更新、資料儲存位置"
+                    onClick={() => choose("settings")}
                 >
-                    <Icon name={THEME_ICON[theme]} size={18} className="rail-icon" />
-                    <span className="rail-label">{THEME_LABEL[theme]}</span>
+                    <Icon name="settings" size={18} className="rail-icon" />
+                    <span className="rail-label">設定</span>
                 </button>
             </nav>
             <main className="app-main">
-                {module === "drawer" ? (
-                    <DrawerView key={nav.key} initialItemId={nav.itemId} onOpenCard={openCard} />
+                {settingsOpened && (
+                    <div hidden={module !== "settings"} style={{ height: "100%" }}>
+                        <SettingsView theme={theme} onTheme={setTheme} jump={settingsJump} />
+                    </div>
+                )}
+                {module === "settings" ? null : module === "drawer" ? (
+                    <DrawerView
+                        key={nav.key}
+                        initialItemId={nav.itemId}
+                        onOpenCard={openCard}
+                        onOpenSettings={() => openSettings("library")}
+                    />
                 ) : module === "whiteboard" ? (
                     <WhiteboardView key={nav.key} initialCard={nav.card} onOpenItem={openItem} />
                 ) : (
                     <GraphModule onOpenCard={openCard} onOpenItem={openItem} />
                 )}
             </main>
-            {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
         </div>
     );
 }

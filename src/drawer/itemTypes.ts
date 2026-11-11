@@ -1,7 +1,7 @@
 import type { ItemFields } from "./api";
 
 /** Metadata fields that types can choose from (title, creators and abstract are always shown). */
-export type FieldKey = Exclude<keyof ItemFields, "itemType" | "title" | "abstractNote">;
+export type FieldKey = Exclude<keyof ItemFields, "itemType" | "title" | "abstractNote" | "fullText">;
 
 export type ItemGroup = "literature" | "media" | "performance" | "art" | "other";
 
@@ -24,128 +24,133 @@ export interface ItemTypeDef {
     labels?: Partial<Record<FieldKey, string>>;
     /** Placeholder for the title box (default 標題). */
     titleLabel?: string;
+    /** Shows the 原文 section, where the item's text can be pasted as-is. */
+    fullText?: boolean;
 }
 
 export const ITEM_TYPES: ItemTypeDef[] = [
     // ---- 文獻 ----
     { id: "journalArticle", label: "期刊論文", icon: "📄", group: "literature",
       labels: { publication: "期刊" },
-      fields: ["publication", "volume", "issue", "pages", "date", "doi", "url"] },
+      fields: ["publication", "volume", "issue", "pages", "date", "doi", "series", "seriesNumber", "url"] },
     { id: "book", label: "書籍", icon: "📕", group: "literature",
-      fields: ["publisher", "place", "date", "pages", "isbn", "url"],
-      labels: { place: "出版地", pages: "頁數" } },
+      fields: ["publisher", "place", "date", "pages", "series", "seriesNumber", "isbn", "url"],
+      labels: { series: "叢書／系列", seriesNumber: "叢書編號", place: "出版地", pages: "頁數" } },
     { id: "bookSection", label: "書籍章節", icon: "📑", group: "literature",
-      labels: { publication: "書名" },
-      fields: ["publication", "publisher", "pages", "date", "isbn", "url"] },
+      labels: { series: "叢書／系列", seriesNumber: "叢書編號", publication: "書名" },
+      fields: ["publication", "publisher", "pages", "date", "isbn", "series", "seriesNumber", "url"] },
     { id: "magazineArticle", label: "雜誌文章", icon: "📰", group: "literature",
       labels: { publication: "雜誌" },
-      fields: ["publication", "issue", "pages", "date", "url"] },
+      fields: ["publication", "issue", "pages", "date", "series", "seriesNumber", "url"] },
+    { id: "news", label: "新聞", icon: "🗞️", group: "literature", fullText: true,
+      labels: { publication: "媒體", date: "發佈日期", place: "地點", pages: "版次", series: "專欄" },
+      fields: ["publication", "date", "place", "pages", "series", "seriesNumber", "url"] },
     { id: "conferencePaper", label: "會議論文", icon: "🎤", group: "literature",
-      labels: { publication: "會議名稱" },
-      fields: ["publication", "place", "pages", "date", "doi", "url"] },
+      labels: { series: "論文集系列", seriesNumber: "卷號", publication: "會議名稱" },
+      fields: ["publication", "place", "pages", "date", "doi", "series", "seriesNumber", "url"] },
     { id: "thesis", label: "學位論文", icon: "🎓", group: "literature",
       labels: { publication: "學校" },
-      fields: ["publication", "date", "pages", "url"] },
+      fields: ["publication", "date", "pages", "series", "seriesNumber", "url"] },
     { id: "report", label: "報告", icon: "📊", group: "literature",
-      labels: { publication: "機構", catalogNumber: "報告編號" },
-      fields: ["publication", "catalogNumber", "date", "pages", "url"] },
+      labels: { series: "系列", publication: "機構", catalogNumber: "報告編號" },
+      fields: ["publication", "catalogNumber", "date", "pages", "series", "seriesNumber", "url"] },
 
     // ---- 影音 ----
     { id: "music", label: "音樂", icon: "🎵", group: "media",
       titleLabel: "曲名",
       labels: { publication: "專輯", publisher: "唱片公司", date: "發行日期", runningTime: "長度",
                 medium: "格式" },
-      fields: ["publication", "publisher", "date", "runningTime", "medium", "url"] },
+      fields: ["publication", "publisher", "date", "runningTime", "medium", "series", "seriesNumber", "url"] },
     { id: "cd", label: "CD", icon: "💿", group: "media",
       titleLabel: "專輯名稱",
-      labels: { publisher: "唱片公司", date: "發行日期", runningTime: "總長度",
+      labels: { series: "系列", publisher: "唱片公司", date: "發行日期", runningTime: "總長度",
                 catalogNumber: "目錄編號", place: "發行地區" },
-      fields: ["publisher", "date", "catalogNumber", "runningTime", "place", "url"] },
+      fields: ["publisher", "date", "catalogNumber", "runningTime", "place", "series", "seriesNumber", "url"] },
     { id: "dvd", label: "DVD / 藍光", icon: "📀", group: "media",
-      labels: { publisher: "發行商", date: "發行日期", runningTime: "片長", medium: "格式",
+      labels: { series: "系列／套裝", publisher: "發行商", date: "發行日期", runningTime: "片長", medium: "格式",
                 catalogNumber: "編號", place: "區碼／地區" },
-      fields: ["publisher", "date", "runningTime", "medium", "place", "catalogNumber", "url"] },
+      fields: ["publisher", "date", "runningTime", "medium", "place", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "film", label: "電影", icon: "🎬", group: "media",
       titleLabel: "片名",
-      labels: { publisher: "發行公司", date: "上映日期", runningTime: "片長", place: "國家／地區" },
-      fields: ["publisher", "date", "runningTime", "place", "url"] },
+      labels: { series: "系列", seriesNumber: "第幾部", publisher: "發行公司", date: "上映日期", runningTime: "片長", place: "國家／地區" },
+      fields: ["publisher", "date", "runningTime", "place", "series", "seriesNumber", "url"] },
     { id: "tvEpisode", label: "電視節目", icon: "📺", group: "media",
-      labels: { publication: "節目名稱", issue: "集數", publisher: "電視台", date: "播出日期",
+      labels: { seriesNumber: "季", publication: "節目名稱", issue: "集數", publisher: "電視台", date: "播出日期",
                 runningTime: "長度" },
-      fields: ["publication", "issue", "publisher", "date", "runningTime", "url"] },
+      fields: ["publication", "issue", "publisher", "date", "runningTime", "series", "seriesNumber", "url"] },
     { id: "podcast", label: "Podcast", icon: "🎙️", group: "media",
       labels: { publication: "節目名稱", issue: "集數", date: "發佈日期", runningTime: "長度" },
-      fields: ["publication", "issue", "date", "runningTime", "url"] },
+      fields: ["publication", "issue", "date", "runningTime", "series", "seriesNumber", "url"] },
     { id: "video", label: "線上影片", icon: "▶️", group: "media",
-      labels: { publication: "頻道／平台", date: "發佈日期", runningTime: "長度" },
-      fields: ["publication", "date", "runningTime", "url"] },
+      labels: { series: "系列／播放清單", seriesNumber: "集數", publication: "頻道／平台", date: "發佈日期", runningTime: "長度" },
+      fields: ["publication", "date", "runningTime", "series", "seriesNumber", "url"] },
 
     // ---- 現場表演 ----
     { id: "concert", label: "演唱會／音樂會", icon: "🎸", group: "performance",
       titleLabel: "演出名稱",
-      labels: { publication: "巡演／系列", publisher: "主辦單位", date: "演出日期", place: "場地",
+      labels: { publication: "巡演名稱", publisher: "主辦單位", date: "演出日期", place: "場地",
                 runningTime: "演出長度", catalogNumber: "場次" },
-      fields: ["publication", "date", "place", "publisher", "runningTime", "catalogNumber", "url"] },
+      fields: ["publication", "date", "place", "publisher", "runningTime", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "theater", label: "戲劇", icon: "🎭", group: "performance",
       titleLabel: "劇名",
       labels: { publisher: "劇團／製作單位", date: "演出日期", place: "場地", runningTime: "演出長度",
                 catalogNumber: "場次" },
-      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "url"] },
+      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "musical", label: "音樂劇", icon: "🎶", group: "performance",
       titleLabel: "劇名",
       labels: { publisher: "製作單位", date: "演出日期", place: "場地", runningTime: "演出長度",
                 catalogNumber: "場次" },
-      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "url"] },
+      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "opera", label: "歌劇", icon: "🎼", group: "performance",
       titleLabel: "劇名",
       labels: { publisher: "歌劇院／製作單位", date: "演出日期", place: "場地", runningTime: "演出長度",
                 catalogNumber: "場次" },
-      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "url"] },
+      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "dance", label: "舞蹈", icon: "🩰", group: "performance",
       titleLabel: "作品名稱",
       labels: { publisher: "舞團", date: "演出日期", place: "場地", runningTime: "演出長度",
                 catalogNumber: "場次" },
-      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "url"] },
+      fields: ["publisher", "date", "place", "runningTime", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "comedy", label: "喜劇／脫口秀", icon: "😂", group: "performance",
       titleLabel: "演出名稱",
-      labels: { publication: "巡演／系列", publisher: "主辦單位", date: "演出日期", place: "場地",
+      labels: { publication: "巡演名稱", publisher: "主辦單位", date: "演出日期", place: "場地",
                 runningTime: "演出長度" },
-      fields: ["publication", "date", "place", "publisher", "runningTime", "url"] },
+      fields: ["publication", "date", "place", "publisher", "runningTime", "series", "seriesNumber", "url"] },
     { id: "festival", label: "音樂節／藝術節", icon: "🎪", group: "performance",
       titleLabel: "活動名稱",
       labels: { publisher: "主辦單位", date: "舉辦日期", place: "地點", issue: "屆次" },
-      fields: ["issue", "date", "place", "publisher", "url"] },
+      fields: ["issue", "date", "place", "publisher", "series", "seriesNumber", "url"] },
     { id: "talk", label: "演講／講座", icon: "🗣️", group: "performance",
       titleLabel: "講題",
-      labels: { publication: "活動／系列", publisher: "主辦單位", date: "日期", place: "場地",
+      labels: { publication: "活動名稱", publisher: "主辦單位", date: "日期", place: "場地",
                 runningTime: "長度" },
-      fields: ["publication", "date", "place", "publisher", "runningTime", "url"] },
+      fields: ["publication", "date", "place", "publisher", "runningTime", "series", "seriesNumber", "url"] },
 
     // ---- 藝術與圖像 ----
     { id: "painting", label: "繪畫", icon: "🖼️", group: "art",
       titleLabel: "作品名稱",
-      labels: { date: "創作年份", medium: "媒材", place: "收藏地點", catalogNumber: "館藏編號" },
-      fields: ["date", "medium", "dimensions", "place", "catalogNumber", "url"] },
+      labels: { series: "系列", date: "創作年份", medium: "媒材", place: "收藏地點", catalogNumber: "館藏編號" },
+      fields: ["date", "medium", "dimensions", "place", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "artwork", label: "藝術品", icon: "🗿", group: "art",
       titleLabel: "作品名稱",
-      labels: { date: "創作年份", medium: "材質", place: "收藏地點", catalogNumber: "館藏編號" },
-      fields: ["date", "medium", "dimensions", "place", "catalogNumber", "url"] },
+      labels: { series: "系列", date: "創作年份", medium: "材質", place: "收藏地點", catalogNumber: "館藏編號" },
+      fields: ["date", "medium", "dimensions", "place", "catalogNumber", "series", "seriesNumber", "url"] },
     { id: "photo", label: "照片", icon: "📷", group: "art",
-      labels: { date: "拍攝日期", place: "拍攝地點", medium: "器材／底片" },
-      fields: ["date", "place", "medium", "dimensions", "url"] },
+      labels: { series: "系列", date: "拍攝日期", place: "拍攝地點", medium: "器材／底片" },
+      fields: ["date", "place", "medium", "dimensions", "series", "seriesNumber", "url"] },
     { id: "map", label: "地圖", icon: "🗺️", group: "art",
-      labels: { place: "地區", medium: "比例尺" },
-      fields: ["place", "medium", "publisher", "date", "dimensions", "url"] },
+      labels: { series: "圖幅系列", seriesNumber: "圖號", place: "地區", medium: "比例尺" },
+      fields: ["place", "medium", "publisher", "date", "dimensions", "series", "seriesNumber", "url"] },
 
     // ---- 其他 ----
     { id: "webpage", label: "網頁", icon: "🌐", group: "other",
       labels: { publication: "網站", date: "發佈日期" },
-      fields: ["publication", "date", "url"] },
+      fields: ["publication", "date", "series", "seriesNumber", "url"] },
     { id: "software", label: "軟體", icon: "💾", group: "other",
       labels: { publisher: "公司", issue: "版本", medium: "平台" },
-      fields: ["issue", "publisher", "medium", "date", "url"] },
+      fields: ["issue", "publisher", "medium", "date", "series", "seriesNumber", "url"] },
     { id: "document", label: "文件", icon: "🗒️", group: "other",
-      fields: ["publisher", "date", "url"] },
+      fields: ["publisher", "date", "series", "seriesNumber", "url"] },
 ];
 
 /** Creator roles. Ids are stored in the database; labels are only for display. */
@@ -180,6 +185,7 @@ export const ROLE_LABELS: Record<string, string> = {
     musician: "樂手",
     speaker: "講者",
     organizer: "主辦者",
+    reporter: "記者",
 };
 
 /**
@@ -191,6 +197,7 @@ const CREATOR_ROLES: Record<string, string[]> = {
     book: ["author", "editor", "translator", "seriesEditor", "illustrator", "contributor"],
     bookSection: ["author", "editor", "translator", "seriesEditor", "contributor"],
     magazineArticle: ["author", "translator", "contributor"],
+    news: ["reporter", "author", "editor", "translator", "photographer", "contributor"],
     conferencePaper: ["author", "editor", "translator", "contributor"],
     thesis: ["author", "advisor", "contributor"],
     report: ["author", "editor", "translator", "contributor"],
@@ -241,7 +248,13 @@ export const FIELD_LABELS: Record<FieldKey, string> = {
     dimensions: "尺寸",
     place: "地點",
     catalogNumber: "編號",
+    series: "系列",
+    seriesNumber: "系列編號",
 };
+
+/** Types a gallery folder accepts (must match IMAGE_TYPES in drawer.rs). */
+export const IMAGE_TYPES = ["painting", "artwork", "photo", "map"];
+export const isImageType = (id: string) => IMAGE_TYPES.includes(id);
 
 export function itemType(id: string): ItemTypeDef {
     return ITEM_TYPES.find((t) => t.id === id) ?? ITEM_TYPES[ITEM_TYPES.length - 1];

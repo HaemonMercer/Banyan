@@ -8,11 +8,24 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::drawer::{like_pattern, now_ms, DrawerState, Error, Result};
+use crate::history;
 
 pub const DEFAULT_CARD_WIDTH: f64 = 240.0;
 pub const DEFAULT_CARD_HEIGHT: f64 = 160.0;
 const MIN_CARD_WIDTH: f64 = 120.0;
 const MIN_CARD_HEIGHT: f64 = 60.0;
+
+/// What a card is on the board. `note` is a Markdown card; the others keep their own JSON in
+/// `data` (see `src/whiteboard/objects.ts`).
+pub const CARD_KINDS: &[&str] = &["note", "sticky", "image", "video", "pdf", "mindmap", "table", "chart"];
+
+fn check_kind(kind: &str) -> Result<()> {
+    if CARD_KINDS.contains(&kind) {
+        Ok(())
+    } else {
+        Err(Error(format!("不支援的物件類型：{kind}")))
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,8 +42,12 @@ pub struct Whiteboard {
 #[serde(rename_all = "camelCase")]
 pub struct BoardCard {
     id: i64,
+    /// "note", "sticky", "image", "video", "pdf" or "mindmap".
+    kind: String,
     title: String,
     content: String,
+    /// The kind's JSON ("" for notes).
+    data: String,
     x: f64,
     y: f64,
     width: f64,
@@ -187,13 +204,21 @@ pub fn rename_whiteboard(state: State<'_, DrawerState>, id: i64, name: String) -
 pub fn delete_whiteboard(state: State<'_, DrawerState>, id: i64) -> Result<()> {
     let mut lib = state.lock();
     let tx = lib.conn.transaction()?;
-    tx.execute(
-        "DELETE FROM cards WHERE id IN (SELECT card_id FROM board_cards WHERE board_id = ?1)
-           AND NOT EXISTS (SELECT 1 FROM board_cards o WHERE o.card_id = cards.id AND o.board_id <> ?1)",
-        [id],
-    )?;
+    let doomed = tx
+        .prepare(
+            "SELECT card_id FROM board_cards bc WHERE board_id = ?1
+               AND NOT EXISTS (SELECT 1 FROM board_cards o WHERE o.card_id = bc.card_id AND o.board_id <> ?1)",
+        )?
+        .query_map([id], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for card in &doomed {
+        tx.execute("DELETE FROM cards WHERE id = ?1", [card])?;
+    }
     tx.execute("DELETE FROM whiteboards WHERE id = ?1", [id])?;
     tx.commit()?;
+    for card in doomed {
+        crate::card_files::remove_card_files(&lib, card);
+    }
     Ok(())
 }
 
@@ -204,15 +229,17 @@ pub fn get_whiteboard(state: State<'_, DrawerState>, id: i64) -> Result<BoardCon
     let board = load_board(conn, id)?;
     let cards = conn
         .prepare(
-            "SELECT c.id, c.title, c.content, bc.x, bc.y, bc.width, bc.height, c.updated_at
+            "SELECT c.id, c.title, c.content, bc.x, bc.y, bc.width, bc.height, c.updated_at, c.kind, c.data
              FROM board_cards bc JOIN cards c ON c.id = bc.card_id
              WHERE bc.board_id = ?1 ORDER BY c.id",
         )?
         .query_map([id], |r| {
             Ok(BoardCard {
                 id: r.get(0)?,
+                kind: r.get(8)?,
                 title: r.get(1)?,
                 content: r.get(2)?,
+                data: r.get(9)?,
                 x: r.get(3)?,
                 y: r.get(4)?,
                 width: r.get(5)?,
@@ -277,8 +304,10 @@ pub fn create_card(state: State<'_, DrawerState>, board_id: i64, x: f64, y: f64)
     tx.commit()?;
     Ok(BoardCard {
         id,
+        kind: "note".into(),
         title: String::new(),
         content: String::new(),
+        data: String::new(),
         x,
         y,
         width: DEFAULT_CARD_WIDTH,
@@ -289,16 +318,96 @@ pub fn create_card(state: State<'_, DrawerState>, board_id: i64, x: f64, y: f64)
     })
 }
 
+/// Creates a board object of any kind (sticky note, image, video, PDF, mind map…) at the given
+/// rectangle. Files of images and PDFs are added afterwards with `import_card_file`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn create_board_object(
+    state: State<'_, DrawerState>,
+    board_id: i64,
+    kind: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    title: String,
+    content: String,
+    data: String,
+) -> Result<BoardCard> {
+    check_kind(&kind)?;
+    check_rect(&[x, y, width, height])?;
+    let mut lib = state.lock();
+    load_board(&lib.conn, board_id)?;
+    let tx = lib.conn.transaction()?;
+    let now = now_ms();
+    let title = title.trim().to_string();
+    tx.execute(
+        "INSERT INTO cards (kind, title, content, data, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        params![kind, title, content, data, now],
+    )?;
+    let id = tx.last_insert_rowid();
+    let (width, height) = (width.max(MIN_CARD_WIDTH), height.max(MIN_CARD_HEIGHT));
+    tx.execute(
+        "INSERT INTO board_cards (board_id, card_id, x, y, width, height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![board_id, id, x, y, width, height],
+    )?;
+    touch_board(&tx, board_id)?;
+    tx.commit()?;
+    Ok(BoardCard {
+        id,
+        kind,
+        title,
+        content,
+        data,
+        x,
+        y,
+        width,
+        height,
+        updated_at: now,
+        items: Vec::new(),
+        tags: Vec::new(),
+    })
+}
+
+/// Saves a card's title, content and kind data together (e.g. a mind map: its tree in `data`
+/// and an outline of it in `content`, so it can be searched and compared in the history).
+#[tauri::command]
+pub fn update_card_data(state: State<'_, DrawerState>, id: i64, title: String, content: String, data: String) -> Result<()> {
+    let lib = state.lock();
+    let tx = lib.conn.unchecked_transaction()?;
+    if !card_exists(&tx, id)? {
+        return Err(Error("找不到這張卡片".into()));
+    }
+    history::ensure_baseline(&tx, id)?;
+    let now = now_ms();
+    let title = title.trim();
+    tx.execute(
+        "UPDATE cards SET title = ?1, content = ?2, data = ?3, updated_at = ?4 WHERE id = ?5",
+        params![title, content, data, now, id],
+    )?;
+    history::record_version(&tx, id, title, &content, &data, now, false)?;
+    tx.commit()?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn update_card(state: State<'_, DrawerState>, id: i64, title: String, content: String) -> Result<()> {
     let lib = state.lock();
-    let n = lib.conn.execute(
-        "UPDATE cards SET title = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
-        params![title.trim(), content, now_ms(), id],
-    )?;
-    if n == 0 {
+    let tx = lib.conn.unchecked_transaction()?;
+    if !card_exists(&tx, id)? {
         return Err(Error("找不到這張卡片".into()));
     }
+    // Version history: keep the state before the first recorded edit, then record this save.
+    history::ensure_baseline(&tx, id)?;
+    let now = now_ms();
+    let title = title.trim();
+    tx.execute(
+        "UPDATE cards SET title = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
+        params![title, content, now, id],
+    )?;
+    let data: String = tx.query_row("SELECT data FROM cards WHERE id = ?1", [id], |r| r.get(0))?;
+    history::record_version(&tx, id, title, &content, &data, now, false)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -336,6 +445,7 @@ pub fn delete_card(state: State<'_, DrawerState>, id: i64) -> Result<()> {
         params![now_ms(), id],
     )?;
     lib.conn.execute("DELETE FROM cards WHERE id = ?1", [id])?;
+    crate::card_files::remove_card_files(&lib, id);
     Ok(())
 }
 
@@ -510,6 +620,7 @@ pub fn list_card_links(state: State<'_, DrawerState>, card_id: i64) -> Result<Ve
 #[serde(rename_all = "camelCase")]
 pub struct CardHit {
     card_id: i64,
+    kind: String,
     title: String,
     /// The card's Markdown, for showing a preview in lists.
     content: String,
@@ -527,13 +638,13 @@ pub fn search_cards(state: State<'_, DrawerState>, query: String, exclude: Optio
     let pattern = like_pattern(q);
     let hits = conn
         .prepare(
-            r"SELECT c.id, c.title, c.content FROM cards c
+            r"SELECT c.id, c.title, c.content, c.kind FROM cards c
               WHERE (?1 IS NULL OR c.id <> ?1)
                 AND (?2 = '' OR c.title LIKE ?3 ESCAPE '\' OR c.content LIKE ?3 ESCAPE '\')
               ORDER BY c.updated_at DESC, c.id DESC LIMIT 50",
         )?
         .query_map(params![exclude, q, pattern], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut boards_stmt = conn.prepare(
@@ -541,12 +652,13 @@ pub fn search_cards(state: State<'_, DrawerState>, query: String, exclude: Optio
          WHERE bc.card_id = ?1 ORDER BY w.name COLLATE NOCASE",
     )?;
     let mut out = Vec::with_capacity(hits.len());
-    for (card_id, title, content) in hits {
+    for (card_id, title, content, kind) in hits {
         let boards = boards_stmt
             .query_map([card_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         out.push(CardHit {
             card_id,
+            kind,
             title,
             content,
             board_id: boards.first().map(|b| b.0),
@@ -869,6 +981,7 @@ pub fn move_whiteboard(state: State<'_, DrawerState>, id: i64, folder_id: Option
 #[serde(rename_all = "camelCase")]
 pub struct GraphNode {
     id: i64,
+    kind: String,
     title: String,
     tags: Vec<String>,
     /// Boards the card is on.
@@ -909,11 +1022,11 @@ pub fn get_graph(state: State<'_, DrawerState>, board_ids: Option<Vec<i64>>, tag
     }
     let wanted: Option<std::collections::HashSet<i64>> = board_ids.map(|v| v.into_iter().collect());
     let cards: Vec<GraphNode> = conn
-        .prepare("SELECT id, title FROM cards ORDER BY id")?
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .prepare("SELECT id, title, kind FROM cards ORDER BY id")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?
         .into_iter()
-        .map(|(id, title)| GraphNode { id, title, tags: Vec::new(), board_ids: placements.remove(&id).unwrap_or_default() })
+        .map(|(id, title, kind)| GraphNode { id, kind, title, tags: Vec::new(), board_ids: placements.remove(&id).unwrap_or_default() })
         .filter(|n| wanted.as_ref().is_none_or(|w| n.board_ids.iter().any(|b| w.contains(b))))
         .collect();
     let mut cards = cards;
@@ -1104,7 +1217,27 @@ pub fn place_cards(state: State<'_, DrawerState>, board_id: i64, places: Vec<Pla
     Ok(())
 }
 
-/// Deletes several cards everywhere, with their links.
+/// Takes cards off one board only. The cards themselves, their links, tags and cited items stay
+/// (they remain in the card library and on any other board). Returns how many were removed.
+#[tauri::command]
+pub fn remove_cards_from_board(state: State<'_, DrawerState>, board_id: i64, ids: Vec<i64>) -> Result<usize> {
+    let mut lib = state.lock();
+    let tx = lib.conn.transaction()?;
+    let mut removed = 0;
+    for id in &ids {
+        removed += tx.execute(
+            "DELETE FROM board_cards WHERE board_id = ?1 AND card_id = ?2",
+            params![board_id, id],
+        )?;
+    }
+    if removed > 0 {
+        touch_board(&tx, board_id)?;
+    }
+    tx.commit()?;
+    Ok(removed)
+}
+
+/// Deletes several cards everywhere (every board and the card library), with their links.
 #[tauri::command]
 pub fn delete_cards(state: State<'_, DrawerState>, ids: Vec<i64>) -> Result<()> {
     let mut lib = state.lock();
@@ -1117,6 +1250,9 @@ pub fn delete_cards(state: State<'_, DrawerState>, ids: Vec<i64>) -> Result<()> 
         tx.execute("DELETE FROM cards WHERE id = ?1", [id])?;
     }
     tx.commit()?;
+    for id in ids {
+        crate::card_files::remove_card_files(&lib, id);
+    }
     Ok(())
 }
 
@@ -1186,8 +1322,10 @@ pub struct BoardRef {
 #[serde(rename_all = "camelCase")]
 pub struct CardDetail {
     id: i64,
+    kind: String,
     title: String,
     content: String,
+    data: String,
     tags: Vec<String>,
     items: Vec<ItemRef>,
     boards: Vec<BoardRef>,
@@ -1204,10 +1342,17 @@ fn card_boards(conn: &Connection, card_id: i64) -> rusqlite::Result<Vec<BoardRef
     .collect()
 }
 
-fn load_card_detail(conn: &Connection, id: i64) -> Result<CardDetail> {
-    let (title, content, created_at, updated_at) = conn
-        .query_row("SELECT title, content, created_at, updated_at FROM cards WHERE id = ?1", [id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
+pub(crate) fn load_card_detail(conn: &Connection, id: i64) -> Result<CardDetail> {
+    let (title, content, created_at, updated_at, kind, data) = conn
+        .query_row("SELECT title, content, created_at, updated_at, kind, data FROM cards WHERE id = ?1", [id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
         })
         .optional()?
         .ok_or_else(|| Error("找不到這張卡片".into()))?;
@@ -1221,8 +1366,10 @@ fn load_card_detail(conn: &Connection, id: i64) -> Result<CardDetail> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(CardDetail {
         id,
+        kind,
         title,
         content,
+        data,
         tags: card_tags(conn, id)?,
         items,
         boards: card_boards(conn, id)?,
@@ -1263,14 +1410,54 @@ pub struct CardQuery {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryCard {
     id: i64,
+    kind: String,
     title: String,
     content: String,
+    data: String,
     tags: Vec<String>,
     boards: Vec<BoardRef>,
+    /// Sections the card sits in (entirely inside), on any board.
+    sections: Vec<SectionRef>,
+    /// Drawer items it cites (shown on the card face).
+    items: Vec<ItemRef>,
+    /// Size on its first board (by name), so the library can draw it as it looks there;
+    /// `None` when it is on no board.
+    width: Option<f64>,
+    height: Option<f64>,
     link_count: i64,
     item_count: i64,
     created_at: i64,
     updated_at: i64,
+}
+
+/// A section a card is in, for the card library.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionRef {
+    id: i64,
+    title: String,
+    color: String,
+    board_id: i64,
+    board_name: String,
+}
+
+/// Sections that contain the card on any board. Like moving a section, membership is geometric:
+/// the card must be entirely inside the section's rectangle (half a unit of slack for rounding).
+pub fn card_sections(conn: &Connection, card_id: i64) -> rusqlite::Result<Vec<SectionRef>> {
+    conn.prepare_cached(
+        "SELECT s.id, s.title, s.color, w.id, w.name
+         FROM board_cards bc
+         JOIN board_sections s ON s.board_id = bc.board_id
+         JOIN whiteboards w ON w.id = bc.board_id
+         WHERE bc.card_id = ?1
+           AND bc.x >= s.x - 0.5 AND bc.y >= s.y - 0.5
+           AND bc.x + bc.width <= s.x + s.width + 0.5 AND bc.y + bc.height <= s.y + s.height + 0.5
+         ORDER BY w.name COLLATE NOCASE, s.title COLLATE NOCASE, s.id",
+    )?
+    .query_map([card_id], |r| {
+        Ok(SectionRef { id: r.get(0)?, title: r.get(1)?, color: r.get(2)?, board_id: r.get(3)?, board_name: r.get(4)? })
+    })?
+    .collect()
 }
 
 /// The card library: every card matching the filters (at most 1000).
@@ -1292,7 +1479,7 @@ pub fn list_cards(state: State<'_, DrawerState>, filter: CardQuery) -> Result<Ve
     let sql = format!(
         r"SELECT c.id, c.title, c.content, c.created_at, c.updated_at,
                  (SELECT COUNT(*) FROM card_links l WHERE l.card_a = c.id OR l.card_b = c.id),
-                 (SELECT COUNT(*) FROM card_items ci WHERE ci.card_id = c.id)
+                 (SELECT COUNT(*) FROM card_items ci WHERE ci.card_id = c.id), c.kind, c.data
           FROM cards c
           WHERE (?1 = '' OR c.title LIKE ?2 ESCAPE '\' OR c.content LIKE ?2 ESCAPE '\')
             AND (?3 IS NULL OR EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND t.name = ?3))
@@ -1310,17 +1497,36 @@ pub fn list_cards(state: State<'_, DrawerState>, filter: CardQuery) -> Result<Ve
                 r.get::<_, i64>(4)?,
                 r.get::<_, i64>(5)?,
                 r.get::<_, i64>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::with_capacity(rows.len());
-    for (id, title, content, created_at, updated_at, link_count, item_count) in rows {
+    let mut size_stmt = conn.prepare_cached(
+        "SELECT bc.width, bc.height FROM board_cards bc JOIN whiteboards w ON w.id = bc.board_id
+         WHERE bc.card_id = ?1 ORDER BY w.name COLLATE NOCASE, w.id LIMIT 1",
+    )?;
+    let mut items_stmt = conn.prepare_cached(
+        "SELECT i.id, i.item_type, i.title, i.authors, i.date
+         FROM card_items ci JOIN items i ON i.id = ci.item_id
+         WHERE ci.card_id = ?1 ORDER BY ci.created_at, i.id",
+    )?;
+    for (id, title, content, created_at, updated_at, link_count, item_count, kind, data) in rows {
+        let size: Option<(f64, f64)> = size_stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let items = items_stmt.query_map([id], |r| item_ref(r, 0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         out.push(LibraryCard {
             id,
+            kind,
             title,
             content,
+            data,
             tags: card_tags(conn, id)?,
             boards: card_boards(conn, id)?,
+            sections: card_sections(conn, id)?,
+            items,
+            width: size.map(|s| s.0),
+            height: size.map(|s| s.1),
             link_count,
             item_count,
             created_at,

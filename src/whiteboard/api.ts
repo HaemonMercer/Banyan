@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { CardKind } from "./objects";
 import { extractWikiLinks } from "../markdown";
 
 export interface Whiteboard {
@@ -13,8 +14,12 @@ export interface Whiteboard {
 /** A card as placed on one board (position and size are in board coordinates). */
 export interface BoardCard {
     id: number;
+    /** What the object is: a Markdown note (default), sticky note, image, video, PDF or mind map. */
+    kind: CardKind;
     title: string;
     content: string;
+    /** The kind's JSON (see `objects.ts`); "" for notes. */
+    data: string;
     x: number;
     y: number;
     width: number;
@@ -40,6 +45,15 @@ export interface Section {
 
 export const SECTION_COLORS = ["", "blue", "green", "yellow", "red", "purple"] as const;
 
+/** A section a card is in (card library). */
+export interface SectionRef {
+    id: number;
+    title: string;
+    color: string;
+    boardId: number;
+    boardName: string;
+}
+
 export interface BoardRef {
     id: number;
     name: string;
@@ -48,8 +62,10 @@ export interface BoardRef {
 /** Everything about one card (side panel). */
 export interface CardDetail {
     id: number;
+    kind: CardKind;
     title: string;
     content: string;
+    data: string;
     tags: string[];
     items: ItemRef[];
     boards: BoardRef[];
@@ -57,13 +73,36 @@ export interface CardDetail {
     updatedAt: number;
 }
 
+/** A saved state of a card (Version Machine). */
+export interface CardVersion {
+    id: number;
+    cardId: number;
+    title: string;
+    content: string;
+    data: string;
+    /** "" for an automatic version. */
+    name: string;
+    createdAt: number;
+    /** Last time edits were folded into this version. */
+    updatedAt: number;
+}
+
 /** A row of the card library. */
 export interface LibraryCard {
     id: number;
+    kind: CardKind;
     title: string;
     content: string;
+    data: string;
     tags: string[];
     boards: BoardRef[];
+    /** Sections it sits in (entirely inside), on any board. */
+    sections: SectionRef[];
+    /** Drawer items it cites (drawn on the card face). */
+    items: ItemRef[];
+    /** Size on its first board; null when it is on no board. */
+    width: number | null;
+    height: number | null;
     linkCount: number;
     itemCount: number;
     createdAt: number;
@@ -138,6 +177,7 @@ export interface BoardFolder {
 
 export interface GraphNode {
     id: number;
+    kind: CardKind;
     title: string;
     tags: string[];
     boardIds: number[];
@@ -177,6 +217,7 @@ export interface LinkedCard {
 /** A card found by `searchCards`. */
 export interface CardHit {
     cardId: number;
+    kind: CardKind;
     title: string;
     /** The card's Markdown (for previews). */
     content: string;
@@ -211,7 +252,11 @@ export const whiteboardApi = {
     /** Moves or resizes several cards on a board at once. */
     placeCards: (boardId: number, places: { cardId: number; x: number; y: number; width: number; height: number }[]) =>
         invoke<void>("place_cards", { boardId, places }),
+    /** Deletes cards everywhere: every board and the card library. */
     deleteCards: (ids: number[]) => invoke<void>("delete_cards", { ids }),
+    /** Takes cards off one board only; they stay in the library and on other boards. Returns how many. */
+    removeCardsFromBoard: (boardId: number, ids: number[]) =>
+        invoke<number>("remove_cards_from_board", { boardId, ids }),
 
     /** Replaces a card's tags; returns them as stored. */
     setCardTags: (cardId: number, tags: string[]) => invoke<string[]>("set_card_tags", { cardId, tags }),
@@ -227,6 +272,25 @@ export const whiteboardApi = {
     createCard: (boardId: number, x: number, y: number) => invoke<BoardCard>("create_card", { boardId, x, y }),
     updateCard: (id: number, title: string, content: string) =>
         invoke<void>("update_card", { id, title, content }),
+    /** A board object of any kind at the rectangle (files are added afterwards). */
+    createObject: (boardId: number, kind: CardKind, r: { x: number; y: number; width: number; height: number }, title = "", content = "", data = "") =>
+        invoke<BoardCard>("create_board_object", { boardId, kind, ...r, title, content, data }),
+    /** Saves title, content and the kind's data together. */
+    updateCardData: (id: number, title: string, content: string, data: string) =>
+        invoke<void>("update_card_data", { id, title, content, data }),
+
+    /** System picker for an image or a PDF; null when cancelled. */
+    pickCardFile: (kind: "image" | "pdf") => invoke<string | null>("pick_card_file", { kind }),
+    /** Copies a file into the card's folder; returns its stored name. */
+    importCardFile: (cardId: number, path: string) => invoke<string>("import_card_file", { cardId, path }),
+    /** Saves bytes (e.g. a pasted screenshot) as a file of the card; returns its stored name. */
+    saveCardFile: (cardId: number, name: string, bytes: Uint8Array) =>
+        invoke<string>("save_card_file", bytes, {
+            headers: { "x-card-id": String(cardId), "x-file-name": encodeURIComponent(name) },
+        }),
+    readCardFile: (cardId: number, name: string) => invoke<ArrayBuffer>("read_card_file", { cardId, name }),
+    openCardFile: (cardId: number, name: string) => invoke<void>("open_card_file", { cardId, name }),
+    revealCardFile: (cardId: number, name: string) => invoke<void>("reveal_card_file", { cardId, name }),
     placeCard: (boardId: number, cardId: number, x: number, y: number, width: number, height: number) =>
         invoke<void>("place_card", { boardId, cardId, x, y, width, height }),
     deleteCard: (id: number) => invoke<void>("delete_card", { id }),
@@ -246,6 +310,16 @@ export const whiteboardApi = {
     /** Cards whose title or content matches; `exclude` is the card being linked from. */
     searchCards: (query: string, exclude: number | null) =>
         invoke<CardHit[]>("search_cards", { query, exclude }),
+
+    /** A card's versions, newest first; the newest is the card as saved now. */
+    listCardVersions: (cardId: number) => invoke<CardVersion[]>("list_card_versions", { cardId }),
+    /** Saves the card as it is now under a name. */
+    createCardVersion: (cardId: number, name: string) => invoke<CardVersion>("create_card_version", { cardId, name }),
+    /** An empty name makes it an automatic version again. */
+    renameCardVersion: (id: number, name: string) => invoke<CardVersion>("rename_card_version", { id, name }),
+    deleteCardVersion: (id: number) => invoke<void>("delete_card_version", { id }),
+    /** Puts the card back to this version; the restore is recorded as a new version. */
+    restoreCardVersion: (id: number) => invoke<CardDetail>("restore_card_version", { id }),
 
     listCardItems: (cardId: number) => invoke<ItemRef[]>("list_card_items", { cardId }),
     linkCardItem: (cardId: number, itemId: number) => invoke<void>("link_card_item", { cardId, itemId }),

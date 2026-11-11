@@ -54,9 +54,9 @@ fn library_round_trip() {
     let count = |f: Value| list_items(s(), filter(f)).unwrap().len();
 
     // Collections: nesting, validation, rename.
-    let ml = j(create_collection(s(), "機器學習".into(), None).unwrap())["id"].as_i64().unwrap();
-    let nlp = j(create_collection(s(), "NLP".into(), Some(ml)).unwrap())["id"].as_i64().unwrap();
-    assert!(create_collection(s(), "  ".into(), None).is_err());
+    let ml = j(create_collection(s(), "機器學習".into(), None, None).unwrap())["id"].as_i64().unwrap();
+    let nlp = j(create_collection(s(), "NLP".into(), Some(ml), None).unwrap())["id"].as_i64().unwrap();
+    assert!(create_collection(s(), "  ".into(), None, None).is_err());
     rename_collection(s(), nlp, "自然語言".into()).unwrap();
     let cols = j(list_collections(s()).unwrap());
     assert_eq!(cols.as_array().unwrap().len(), 2);
@@ -150,7 +150,7 @@ fn library_round_trip() {
     delete_item(s(), m).unwrap();
 
     // Drag-and-drop onto a folder: add keeps other memberships, move leaves the source.
-    let other = j(create_collection(s(), "其他".into(), None).unwrap())["id"].as_i64().unwrap();
+    let other = j(create_collection(s(), "其他".into(), None, None).unwrap())["id"].as_i64().unwrap();
     assert_eq!(add_items_to_collection(s(), vec![a, b, 999_999], other, None).unwrap(), 2);
     assert_eq!(add_items_to_collection(s(), vec![a], other, None).unwrap(), 0); // already there
     assert_eq!(j(get_item(s(), a).unwrap())["collectionIds"].as_array().unwrap().len(), 2);
@@ -323,7 +323,14 @@ fn old_authors_migrate_to_creators() {
         // Build a current DB, then turn it back into a v3 one with free-text authors.
         let conn = banyan_lib::db::open(&db_path).unwrap();
         conn.execute_batch(
-            "DROP TABLE board_sections;
+            "ALTER TABLE items DROP COLUMN full_text;
+             ALTER TABLE collections DROP COLUMN view;
+             ALTER TABLE cards DROP COLUMN kind;
+             ALTER TABLE cards DROP COLUMN data;
+             DROP TABLE card_versions;
+             ALTER TABLE items DROP COLUMN series;
+             ALTER TABLE items DROP COLUMN series_number;
+             DROP TABLE board_sections;
              DROP TABLE card_tags;
              DROP TABLE item_relations;
              DROP TABLE whiteboard_folders;
@@ -363,7 +370,7 @@ fn old_authors_migrate_to_creators() {
         ]
     );
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 14);
     drop(conn);
     let _ = fs::remove_dir_all(root);
 }
@@ -376,7 +383,14 @@ fn old_notes_become_cards() {
         // Build a current DB, then turn it back into a v5 one with a notes column.
         let conn = banyan_lib::db::open(&db_path).unwrap();
         conn.execute_batch(
-            "DROP TABLE board_sections;
+            "ALTER TABLE items DROP COLUMN full_text;
+             ALTER TABLE collections DROP COLUMN view;
+             ALTER TABLE cards DROP COLUMN kind;
+             ALTER TABLE cards DROP COLUMN data;
+             DROP TABLE card_versions;
+             ALTER TABLE items DROP COLUMN series;
+             ALTER TABLE items DROP COLUMN series_number;
+             DROP TABLE board_sections;
              DROP TABLE card_tags;
              DROP TABLE item_relations;
              DROP TABLE whiteboard_folders;
@@ -416,7 +430,7 @@ fn old_notes_become_cards() {
         .unwrap();
     assert_eq!(has_notes, 0);
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 14);
     drop(conn);
     let _ = fs::remove_dir_all(root);
 }
@@ -483,7 +497,7 @@ fn bulk_editing() {
     let (a, b, c) = (new_item("book"), new_item("book"), new_item("film"));
     let all = vec![a, b, c];
     set_item_tags(s(), a, vec!["小說".into()]).unwrap();
-    let folder = j(create_collection(s(), "文學".into(), None).unwrap())["id"].as_i64().unwrap();
+    let folder = j(create_collection(s(), "文學".into(), None, None).unwrap())["id"].as_i64().unwrap();
     add_items_to_collection(s(), vec![a, b], folder, None).unwrap();
 
     // Summary of what the selection has in common.
@@ -578,5 +592,121 @@ fn related_items() {
     // Deleting an item drops its relations.
     delete_items(s(), vec![b]).unwrap();
     assert_eq!(related(a), vec![d, c]);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn series_fields() {
+    let (app, root, _) = setup();
+    let s = || app.state::<DrawerState>();
+    let new_book = |title: &str, series: &str, no: &str| {
+        let id = j(create_item(s(), "book".into(), None).unwrap())["id"].as_i64().unwrap();
+        let mut f = j(get_item(s(), id).unwrap());
+        f["title"] = json!(title);
+        f["series"] = json!(series);
+        f["seriesNumber"] = json!(no);
+        update_item(s(), id, serde_json::from_value(f).unwrap()).unwrap();
+        id
+    };
+    let a = new_book("魔戒首部曲", "魔戒", "1");
+    new_book("魔戒二部曲", "魔戒", "2");
+    new_book("基地", "基地系列", "1");
+    new_book("沒有系列", "", "");
+
+    let item = j(get_item(s(), a).unwrap());
+    assert_eq!((item["series"].as_str(), item["seriesNumber"].as_str()), (Some("魔戒"), Some("1")));
+
+    // Searchable like other fields.
+    assert_eq!(list_items(s(), filter(json!({ "query": "基地系列" }))).unwrap().len(), 1);
+
+    // Autocomplete values: most used first, blanks left out; only real columns allowed.
+    assert_eq!(field_values(s(), "series".into()).unwrap(), vec!["魔戒", "基地系列"]);
+    assert!(field_values(s(), "id; DROP TABLE items".into()).is_err());
+    assert!(field_values(s(), "item_type".into()).is_err());
+
+    // Bulk-settable.
+    bulk_set_field(s(), vec![a], "series_number".into(), "一".into()).unwrap();
+    assert_eq!(j(get_item(s(), a).unwrap())["seriesNumber"], "一");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gallery_folders() {
+    let (app, root, _) = setup();
+    let s = || app.state::<DrawerState>();
+    let new_item = |t: &str, cid: Option<i64>| create_item(s(), t.into(), cid).map(|v| j(v)["id"].as_i64().unwrap());
+    let set_type = |id: i64, t: &str| {
+        let mut f = j(get_item(s(), id).unwrap());
+        f["itemType"] = json!(t);
+        update_item(s(), id, serde_json::from_value(f).unwrap())
+    };
+
+    let gallery = j(create_collection(s(), "照片牆".into(), None, Some("gallery".into())).unwrap());
+    assert_eq!(gallery["view"], "gallery");
+    let g = gallery["id"].as_i64().unwrap();
+    assert!(create_collection(s(), "x".into(), None, Some("grid".into())).is_err());
+    let folder = j(create_collection(s(), "一般".into(), None, None).unwrap());
+    assert_eq!(folder["view"], "list");
+    let f = folder["id"].as_i64().unwrap();
+
+    // Only image items go in.
+    let photo = new_item("photo", Some(g)).unwrap();
+    assert!(new_item("book", Some(g)).is_err());
+    let book = new_item("book", Some(f)).unwrap();
+    let painting = new_item("painting", None).unwrap();
+    assert!(add_items_to_collection(s(), vec![painting, book], g, None).is_err());
+    assert_eq!(list_items(s(), filter(json!({ "collectionId": g }))).unwrap().len(), 1, "nothing added on refusal");
+    assert_eq!(add_items_to_collection(s(), vec![painting], g, None).unwrap(), 1);
+    assert!(set_item_collections(s(), book, vec![f, g]).is_err());
+
+    // An item in a gallery keeps an image type.
+    assert!(set_type(photo, "book").is_err());
+    set_type(photo, "painting").unwrap();
+    assert!(bulk_set_type(s(), vec![photo, book], "film".into()).is_err());
+    assert_eq!(j(get_item(s(), book).unwrap())["itemType"], "book", "refused bulk change changes nothing");
+
+    // A folder becomes a gallery only when everything in it is an image item.
+    assert!(set_collection_view(s(), f, "gallery".into()).is_err());
+    bulk_set_type(s(), vec![book], "photo".into()).unwrap();
+    set_collection_view(s(), f, "gallery".into()).unwrap();
+    set_collection_view(s(), f, "list".into()).unwrap();
+    assert!(set_collection_view(s(), f, "tiles".into()).is_err());
+
+    // Dropped pictures become photo items; other files are skipped. The first picture is the cover.
+    let dir = root.join("pics");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("海邊.JPG"), b"jpg").unwrap();
+    fs::write(dir.join("readme.txt"), b"txt").unwrap();
+    let paths = ["海邊.JPG", "readme.txt"].map(|n| dir.join(n).to_string_lossy().to_string()).to_vec();
+    let ids = import_images(s(), g, paths.clone()).unwrap();
+    assert_eq!(ids.len(), 1);
+    assert!(import_images(s(), f, paths).is_err(), "folder is a list again");
+    let items = j(list_items(s(), filter(json!({ "collectionId": g }))).unwrap());
+    let new = items.as_array().unwrap().iter().find(|i| i["id"] == ids[0]).unwrap();
+    assert_eq!((new["title"].as_str(), new["itemType"].as_str()), (Some("海邊"), Some("photo")));
+    let image_id = new["imageId"].as_i64().unwrap();
+    assert!(items.as_array().unwrap().iter().filter(|i| i["id"] != ids[0]).all(|i| i["imageId"].is_null()));
+    assert!(read_attachment(s(), image_id).is_ok());
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn news_full_text() {
+    let (app, root, _) = setup();
+    let s = || app.state::<DrawerState>();
+    let id = j(create_item(s(), "news".into(), None).unwrap())["id"].as_i64().unwrap();
+    let text = "颱風今晚登陸\n\n  中央氣象署表示……\n第二段";
+    let mut f = j(get_item(s(), id).unwrap());
+    f["title"] = json!("颱風今晚登陸");
+    f["fullText"] = json!(text);
+    update_item(s(), id, serde_json::from_value(f).unwrap()).unwrap();
+    assert_eq!(j(get_item(s(), id).unwrap())["fullText"], text, "kept exactly as pasted");
+    // The full text is searchable.
+    assert_eq!(list_items(s(), filter(json!({ "query": "中央氣象署" }))).unwrap().len(), 1);
+    // A new reporter is the main role.
+    set_item_creators(s(), id, serde_json::from_value(json!([{ "role": "reporter", "name": "王小明" }])).unwrap()).unwrap();
+    assert_eq!(j(get_item(s(), id).unwrap())["creators"][0]["role"], "reporter");
+    drop(app);
     let _ = fs::remove_dir_all(root);
 }

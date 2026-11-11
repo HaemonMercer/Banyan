@@ -6,8 +6,9 @@ import CreatorsEditor from "./CreatorsEditor";
 import ItemCards from "./ItemCards";
 import ItemRelated from "./ItemRelated";
 import SectionHeader from "./SectionHeader";
+import ItemFullText, { firstLine } from "./ItemFullText";
 import { usePersistentSet } from "../../drawer/usePersistentSet";
-import { GROUP_LABELS, fieldLabel, formatSize, groupedTypes, itemType } from "../../drawer/itemTypes";
+import { GROUP_LABELS, fieldLabel, formatSize, groupedTypes, isImageType, itemType } from "../../drawer/itemTypes";
 
 interface Props {
     itemId: number;
@@ -32,6 +33,8 @@ function ItemDetail({
     const [item, setItem] = useState<Item | null>(null);
     const [draft, setDraft] = useState<ItemFields | null>(null);
     const [tagInput, setTagInput] = useState("");
+    /** Series names already in the library, offered while typing a series. */
+    const [seriesOptions, setSeriesOptions] = useState<string[]>([]);
     /** Folded sections, shared by all items and remembered between sessions. */
     const [folded, toggleFolded, setFolded] = usePersistentSet("banyan.drawer.detailFolded");
 
@@ -77,12 +80,21 @@ function ItemDetail({
     }, [load, save]);
 
     useEffect(() => {
+        if (!itemType(draft?.itemType ?? "").fields.includes("series")) return;
+        let stale = false;
+        drawerApi.fieldValues("series").then((v) => !stale && setSeriesOptions(v), () => {});
+        return () => {
+            stale = true;
+        };
+    }, [itemId, draft?.itemType]);
+
+    useEffect(() => {
         if (reloadKey > 0) load();
     }, [reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!item || !draft) return <aside className="drawer-pane drawer-detail" />;
 
-    const SECTIONS = ["info", "cards", "tags", "folders", "attachments", "related"];
+    const SECTIONS = ["info", "fullText", "cards", "tags", "folders", "attachments", "related"];
     const allFolded = SECTIONS.every((s) => folded.has(s));
     /** Opens a folded section, e.g. when its "add" button is used. */
     const unfold = (id: string) => folded.has(id) && toggleFolded(id);
@@ -118,7 +130,11 @@ function ItemDetail({
             .map((c) => ({ id: c.id, path: collectionPath(collections, c.id) }))
             .sort((a, b) => a.path.localeCompare(b.path));
     const memberOf = withPaths(collections.filter((c) => item.collectionIds.includes(c.id)));
-    const addable = withPaths(collections.filter((c) => !item.collectionIds.includes(c.id)));
+    const addable = withPaths(
+        collections.filter((c) => !item.collectionIds.includes(c.id) && (c.view !== "gallery" || isImageType(draft.itemType))),
+    );
+    /** In a gallery, the type stays an image type. */
+    const inGallery = collections.some((c) => c.view === "gallery" && item.collectionIds.includes(c.id));
 
     return (
         <aside className="drawer-pane drawer-detail">
@@ -134,7 +150,9 @@ function ItemDetail({
                     {groupedTypes().map(([group, types]) => (
                         <optgroup key={group} label={GROUP_LABELS[group]}>
                             {types.map((t) => (
-                                <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
+                                <option key={t.id} value={t.id} disabled={inGallery && !isImageType(t.id)}>
+                                    {t.icon} {t.label}
+                                </option>
                             ))}
                         </optgroup>
                     ))}
@@ -172,9 +190,21 @@ function ItemDetail({
                 {type.fields.map((key) => (
                     <label className="field" key={key}>
                         <span>{fieldLabel(type, key)}</span>
-                        <input value={draft[key]} onChange={(e) => set(key, e.target.value)} />
+                        <input
+                            value={draft[key]}
+                            list={key === "series" ? "series-options" : undefined}
+                            onChange={(e) => set(key, e.target.value)}
+                        />
                     </label>
                 ))}
+
+                {type.fields.includes("series") && (
+                    <datalist id="series-options">
+                        {seriesOptions.map((s) => (
+                            <option key={s} value={s} />
+                        ))}
+                    </datalist>
+                )}
 
                 <label className="field">
                     <span>摘要</span>
@@ -182,6 +212,23 @@ function ItemDetail({
                 </label>
                 </div>
             </section>
+
+            {(type.fullText || draft.fullText !== "") && (
+                <ItemFullText
+                    value={draft.fullText}
+                    onChange={(text) => {
+                        // Pasting into a new item: its first line becomes the title.
+                        const next = { ...draft, fullText: text };
+                        if (!draft.title.trim() && !draft.fullText.trim()) next.title = firstLine(text);
+                        setDraft(next);
+                        draftRef.current = next;
+                    }}
+                    onSave={save}
+                    onError={onError}
+                    collapsed={folded.has("fullText")}
+                    onToggle={() => toggleFolded("fullText")}
+                />
+            )}
 
             <ItemCards
                 itemId={item.id}
@@ -283,7 +330,6 @@ function ItemDetail({
                     </button>
                 </SectionHeader>
                 <div hidden={folded.has("attachments")}>
-                {item.attachments.length === 0 && <p className="muted">把檔案拖進視窗，或按「加入檔案」</p>}
                 <ul className="attachments">
                     {item.attachments.map((a) => (
                         <li

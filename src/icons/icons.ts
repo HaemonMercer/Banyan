@@ -4,11 +4,19 @@
  * Rules for adding icons: Design/UI Style.md → 「圖示」.
  */
 
-/** The Banyan mark: canopy, trunk and aerial roots. Used by the rail and the app icon. */
+/**
+ * The Banyan mark: a broad spreading canopy, a trunk splitting into five boughs, pillar roots reaching the ground
+ * and thinner hanging aerial roots. A filled silhouette (unlike the line icons), so it holds up from 16px to the app icon.
+ */
 export const LOGO =
-    '<path d="M4.5 11.5a2.5 2.5 0 0 1-.6-4.9A3 3 0 0 1 8 4.3a3.6 3.6 0 0 1 6.4-.6 3 3 0 0 1 4.2 2.6 2.6 2.6 0 0 1 1.5 5.2z" fill="currentColor" stroke="none"/>' +
-    '<path d="M11 11c0 3.2-.3 5.8-1.3 9h4.6c-1-3.2-1.3-5.8-1.3-9z" fill="currentColor" stroke="none"/>' +
-    '<path d="M6.6 11.5c0 2.6-.3 4.4-.9 6.6M8.9 11.5v4.3M15.1 11.5v5.6M17.5 11.5c0 2.4.3 4.1 1 6.3M4 20.5h16"/>';
+    '<g fill="currentColor" stroke="none">' +
+    '<path d="M0.8 9.2c-.3-1.7.8-3 2.3-3.2c.4-1.7 2-2.7 3.7-2.4c1-1.6 3-2.3 4.6-1.7c1.7-.9 3.8-.4 4.5 1.1c1.9-.4 3.9.7 4.5 2.4c1.6.3 2.9 2 2.8 3.8c-1.4.6-3 .7-4.7.4c-1.6.4-3.4.4-5 .2c-1.7.4-3.4.3-5-.1c-1.5.3-3.2.3-4.7 0c-1.1.2-2.3 0-3-.5z"/>' +
+    '<path d="M11 14.4C9.8 12.2 6.8 11.3 3.8 9.2M11.5 14C10.8 12.3 9.4 10.9 8 9.8M12 14V9.8M12.5 14C13.2 12.3 14.6 10.9 16 9.8M13 14.4C14.2 12.2 17.2 11.3 20.2 9.2" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>' +
+    '<path d="M10.3 13.6C10.5 16.4 10.1 18.3 8.8 19.5C8.3 20 7.6 20.3 6.9 20.4H17.1C16.4 20.3 15.7 20 15.2 19.5C13.9 18.3 13.5 16.4 13.7 13.6z"/>' +
+    '<path d="M2.4 9.4h1v10.3c0 .3.2.5.5.7H1.9c.3-.2.5-.4.5-.7zM5.2 9.6h.8v10.2c0 .3.2.5.4.6H4.8c.2-.1.4-.3.4-.6zM18 9.6h.8v10.2c0 .3.2.5.4.6h-1.6c.2-.1.4-.3.4-.6zM20.6 9.4h1v10.3c0 .3.2.5.5.7h-2c.3-.2.5-.4.5-.7z"/>' +
+    '<path d="M1.1 9.2h.5v4.3h-.5zM6.9 9.7h.5v6.1h-.5zM16.6 9.7h.5v6.7h-.5zM22.4 9.2h.5v4.8h-.5z"/>' +
+    '<rect x="0.8" y="20.4" width="22.4" height="1.1" rx=".55"/>' +
+    '</g>';
 
 /* ---------- modules ---------- */
 const MODULE = {
@@ -61,6 +69,13 @@ const UI = {
         '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><rect x="6.5" y="7.5" width="5" height="4" rx="1"/><rect x="12.5" y="12.5" width="5" height="4" rx="1"/><path d="M9 11.5v3h3.5"/>',
     cards: '<rect x="7.5" y="3.5" width="13" height="11.5" rx="2"/><path d="M4 8v10a2.5 2.5 0 0 0 2.5 2.5H16"/>',
     section: '<rect x="3.5" y="5" width="17" height="14" rx="2" stroke-dasharray="3.2 2.6"/><path d="M7 9h5"/>',
+    sticky: '<path d="M4.5 4.5h15v10l-5 5h-10z"/><path d="M19.5 14.5h-5v5"/>',
+    image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="9.5" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4"/>',
+    video: '<rect x="3" y="5.5" width="18" height="13" rx="3"/><path d="M10.5 9.5v5l4.5-2.5z" fill="currentColor"/>',
+    pdf: '<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5M8.5 13.5h7M8.5 16.5h4.5"/>',
+    chart: '<path d="M4 4v15.5h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/>',
+    table: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M3.5 14.5h17M9 9.5v10"/>',
+    mindmap: '<rect x="8.5" y="10" width="7" height="4" rx="2"/><path d="M15.5 12c2 0 2-5 4-5M15.5 12c2 0 2 5 4 5M8.5 12c-2 0-2-5-4-5M8.5 12c-2 0-2 5-4 5"/>',
     attachment:
         '<path d="M19.5 11.5l-7.6 7.6a5 5 0 0 1-7.1-7.1l8-8a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3"/>',
     link: '<path d="M10 14a4 4 0 0 0 5.7 0l3.3-3.3a4 4 0 0 0-5.7-5.7l-1.1 1.1"/><path d="M14 10a4 4 0 0 0-5.7 0L5 13.3a4 4 0 0 0 5.7 5.7l1.1-1.1"/>',
@@ -102,6 +117,7 @@ const TYPE = {
     bookSection: BOOK + '<path d="M12.5 3.5v6.5l2-1.5 2 1.5V3.5"/>',
     magazineArticle:
         '<path d="M4 5.5a1 1 0 0 1 1-1h11.5a1 1 0 0 1 1 1V18a2 2 0 0 0 2 2H6a2 2 0 0 1-2-2z"/><path d="M17.5 9H19a1 1 0 0 1 1 1v8a2 2 0 0 1-2 2"/><rect x="7" y="7.5" width="4.5" height="4" rx=".6"/><path d="M14 8h.5M14 11h.5M7 14.5h7.5M7 17h7.5"/>',
+    news: '<rect x="3.5" y="4" width="17" height="16" rx="1.5"/><path d="M7 8h10M7 11.5h4.5M7 14.5h4.5M7 17h10"/><rect x="13.5" y="11" width="3.5" height="4" rx=".5"/>',
     conferencePaper: '<rect x="3" y="3.5" width="18" height="11" rx="1.5"/><path d="M7 7.5h10M7 10.5h6M12 14.5v2M8.5 20.5l3.5-4 3.5 4"/>',
     thesis: '<path d="M2.5 9.5L12 5l9.5 4.5L12 14z"/><path d="M6.5 11.6V16c1.5 1.4 3.5 2 5.5 2s4-.6 5.5-2v-4.4M21.5 9.5V15"/>',
     report: '<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="M9 16.5v-4M12 16.5v-7.5M15 16.5V14"/>',

@@ -25,7 +25,7 @@ export function applyTheme(mode: ThemeMode) {
     else root.setAttribute("data-theme", mode);
 }
 
-export function useTheme(): [ThemeMode, () => void] {
+export function useTheme(): [ThemeMode, (mode: ThemeMode) => void] {
     const [mode, setMode] = useState<ThemeMode>(savedTheme);
     useEffect(() => {
         applyTheme(mode);
@@ -35,6 +35,5 @@ export function useTheme(): [ThemeMode, () => void] {
             /* storage unavailable */
         }
     }, [mode]);
-    const cycle = () => setMode((m) => THEME_ORDER[(THEME_ORDER.indexOf(m) + 1) % THEME_ORDER.length]);
-    return [mode, cycle];
+    return [mode, setMode];
 }

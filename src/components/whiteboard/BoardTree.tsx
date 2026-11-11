@@ -137,7 +137,7 @@ function BoardTree(props: Props) {
 
     const dragHint = (() => {
         if (!drag) return "";
-        if (drag.target === null) return "拖到資料夾上";
+        if (drag.target === null) return "";
         const destName = drag.target === "root" ? "最上層" : `「${folderPath(folders, drag.target)}」`;
         if (drag.kind === "folder" && typeof drag.target === "number" && folderSubtree(folders, drag.id).has(drag.target)) {
             return "不能移到自己裡面";
@@ -302,9 +302,6 @@ function BoardTree(props: Props) {
                 </li>
             </ul>
             <ul className="tree tree-collections">{renderLevel(null, 0)}</ul>
-            {boards.length === 0 && folders.length === 0 && addingUnder === undefined && (
-                <p className="muted wb-boards-empty">還沒有白板，按 ＋ 新增</p>
-            )}
             {drag && (
                 <div className="drag-ghost" style={{ left: drag.x + 14, top: drag.y + 10 }}>
                     <div className="drag-ghost-title"><Icon name={drag.kind === "board" ? "board" : "folder"} /> {drag.name}</div>

@@ -159,7 +159,6 @@ function GraphModule({ onOpenCard, onOpenItem }: Props) {
                     </li>
                 </ul>
                 <ul className="tree tree-collections">{renderLevel(null, 0)}</ul>
-                <p className="muted graph-scope-hint">選擇範圍：全部卡片、一個資料夾（含子資料夾）或一個白板。</p>
                 {tags.length > 0 && (
                     <div className="graph-tags">
                         <div className="graph-tags-title">標籤</div>

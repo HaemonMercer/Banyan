@@ -345,7 +345,6 @@ function GraphView({ boards, boardIds, tag = null, title, reloadKey, onOpenCard,
                 <span className="muted wb-graph-count">
                     {graph ? `${graph.cards.length} 張卡片 · ${graph.links.length} 條連結` : "載入中…"}
                 </span>
-                <span className="muted wb-tips">拖曳節點調整位置 · 點一下顯示相鄰 · 雙擊開啟 · 滾輪縮放</span>
                 <button
                     className="small-btn"
                     title="重新排列"

@@ -63,27 +63,3 @@
 .rail-spacer { flex: 1; }
 
 .app-main { min-width: 0; min-height: 0; overflow: hidden; }
-
-/* Check-for-updates dialog (UpdateDialog.tsx). */
-.update-dialog { width: min(460px, calc(100vw - 32px)); }
-.update-dialog code { font-family: var(--font-mono); font-size: 0.92em; overflow-wrap: anywhere; }
-.update-notes {
-    max-height: 180px;
-    overflow: auto;
-    margin: var(--sp-2) 0;
-    padding: var(--sp-2) 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface-2, var(--hover));
-    font-family: inherit;
-    white-space: pre-wrap;
-    line-height: var(--lh-body);
-}
-.update-progress { display: flex; flex-direction: column; gap: var(--sp-1); margin: var(--sp-2) 0; }
-.update-bar { height: 6px; border-radius: 3px; background: var(--hover); overflow: hidden; }
-.update-bar-fill { height: 100%; background: var(--accent); transition: width var(--dur-fast) linear; }
-.update-bar-fill.indeterminate { width: 30%; animation: update-slide 1.2s var(--ease) infinite; }
-@keyframes update-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
-.update-detail { margin-top: var(--sp-1); font-size: var(--fs-sm); }
-.update-detail summary { cursor: pointer; }
-.update-source { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

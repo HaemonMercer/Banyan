@@ -19,7 +19,7 @@ const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"
   </defs>
   <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
   <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="4"/>
-  <g transform="translate(176 160) scale(28)" color="#ffffff" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="translate(176 184) scale(28)" color="#ffffff">
     ${LOGO}
   </g>
 </svg>

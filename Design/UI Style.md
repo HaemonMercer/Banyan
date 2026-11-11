@@ -144,11 +144,11 @@
 | 線條 | 1.75px，圓角端點與轉角（`stroke-linecap/linejoin: round`） |
 | 顏色 | `currentColor`，跟著文字顏色；條目類型依分類著色（`--type-literature` 藍、`--type-media` 紫、`--type-performance` 橘、`--type-art` 玫瑰、`--type-other` 灰） |
 | 大小 | 預設 1em（跟著字級）；模組列 20px、樹狀清單 16px、條目清單 15px、按鈕內 14–15px |
-| 填色 | 只用在很小的實心部位（⋯ 的點、資訊符號的點、Logo 的樹冠） |
+| 填色 | 線條圖示只在很小的實心部位填色（⋯ 的點、資訊符號的點）；Logo 是唯一的實心剪影 |
 
 | 分組 | 數量 | 內容 |
 |---|---|---|
-| Logo | 1 | 榕樹：樹冠、樹幹與垂下的氣根。App 圖示是綠色圓角方塊上的白色 Logo |
+| Logo | 1 | 雄偉的榕樹剪影：寬闊展開的樹冠、主幹分成五條枝幹、四根落地的支柱根與幾條垂下的氣根，底部一條地面線。App 圖示是綠色漸層圓角方塊（`#3a8c63` → `#245f42`）上的白色 Logo |
 | 模組 | 11 | Drawer、Whiteboard、Graph、Card Hub，以及規劃中的 Writer、Slides、Publisher、Draw、Layout、Base、Version Machine |
 | 介面 | 56 | 新增、刪除、編輯、搜尋、資料夾、標籤、附件、連結、縮放、主題等 |
 | 條目類型 | 29 | 每種 Drawer 條目類型一個 |

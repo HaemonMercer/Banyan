@@ -4,6 +4,23 @@ import { itemType } from "../../drawer/itemTypes";
 import CardEditor from "../../markdown/CardEditor";
 import Markdown from "../../markdown/Markdown";
 import { whiteboardApi, type CardDetail, type CardLink, type LinkedCard } from "../../whiteboard/api";
+import { AUTOSAVE_MS, serial } from "../../whiteboard/autosave";
+import { kindInfo } from "../../whiteboard/objects";
+import { ImagePreview, PdfPages, VideoPlayer } from "./BoardObjects";
+import { tableMarkdown } from "../../whiteboard/table";
+import TableObject from "./TableObject";
+import ChartView from "./ChartView";
+import { readChart } from "../../whiteboard/chart";
+
+/** The chart as saved (the panel has no table to follow live). */
+const chartProps = (data: string) => {
+    const c = readChart(data);
+    return { type: c.type, snapshot: c.snapshot, legend: c.legend };
+};
+import VersionHistory from "./VersionHistory";
+
+/** The panel's table is not on a board; it has no rectangle of its own. */
+const PANEL_RECT = { x: 0, y: 0, width: 0, height: 0 };
 
 interface Props {
     cardId: number;
@@ -21,6 +38,8 @@ interface Props {
     onOpenItem: (itemId: number) => void;
     onWikiLink: (target: string) => void;
     onDelete: (cardId: number) => void;
+    /** Take the card off the open board (only when it is on it). */
+    onRemoveFromBoard?: (cardId: number) => void;
     onError: (text: string) => void;
 }
 
@@ -31,7 +50,8 @@ const fmt = (ms: number) =>
 
 /**
  * Heptabase-style card panel: the whole card, opened beside the board or the card library,
- * with its tags, links and cited Drawer items. Edits save when a field loses focus.
+ * with its tags, links and cited Drawer items. Edits save by themselves shortly after typing
+ * pauses; `[[ ]]` links are made when a field loses focus.
  */
 function CardPanel(props: Props) {
     const { cardId, boardId, reloadKey, onClose, onSaved, onLocate, onOpenCard, onOpenItem, onWikiLink, onDelete, onError } = props;
@@ -40,11 +60,17 @@ function CardPanel(props: Props) {
     const [allTags, setAllTags] = useState<string[]>([]);
     const [tagInput, setTagInput] = useState("");
     const [editing, setEditing] = useState<{ point: { x: number; y: number } | null } | null>(null);
-    /** Title/content as last saved, to skip saves that change nothing. */
-    const saved = useRef({ title: "", content: "" });
+    /** Title (trimmed) and content as last saved, to skip saves that change nothing. */
+    const saved = useRef({ title: "", content: "", data: "" });
     const cardRef = useRef(card);
     cardRef.current = card;
     const busy = useRef(false);
+    /** Saved text whose `[[ ]]` links have not been synced yet. */
+    const unsynced = useRef(false);
+    const queueSave = useRef(serial()).current;
+    /** Google Docs-style save indicator; null until the first edit. */
+    const [status, setStatus] = useState<"unsaved" | "saving" | "saved" | null>(null);
+    const [history, setHistory] = useState(false);
 
     const load = useCallback(async () => {
         try {
@@ -56,7 +82,7 @@ function CardPanel(props: Props) {
             setCard(c);
             setLinked(l);
             setAllTags(tags.map((t) => t.name));
-            saved.current = { title: c.title, content: c.content };
+            saved.current = { title: c.title, content: c.content, data: c.data };
         } catch (e) {
             onError(errorMessage(e));
         }
@@ -64,31 +90,90 @@ function CardPanel(props: Props) {
 
     useEffect(() => {
         setEditing(null);
+        setHistory(false);
         void load();
     }, [cardId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Changes made elsewhere: reload unless the user is typing here.
     useEffect(() => {
-        if (reloadKey === 0 || editing || busy.current) return;
+        if (reloadKey === 0 || editing || history || busy.current) return;
         const el = document.activeElement;
         if (el instanceof HTMLElement && el.closest(".wb-card-panel")) return;
         void load();
     }, [reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    const isSaved = (c: CardDetail) =>
+        c.title.trim() === saved.current.title && c.content === saved.current.content && (c.data ?? "") === (saved.current.data ?? "");
+
+    /** Writes the title and content if they changed (autosave); `[[ ]]` links wait for `save`. */
+    const persist = () =>
+        queueSave(async () => {
+            const c = cardRef.current;
+            if (!c || isSaved(c)) return;
+            busy.current = true;
+            setStatus("saving");
+            try {
+                // Objects other than notes keep their kind's data too (e.g. a table edited here).
+                if (c.kind && c.kind !== "note") await whiteboardApi.updateCardData(c.id, c.title, c.content, c.data);
+                else await whiteboardApi.updateCard(c.id, c.title, c.content);
+                saved.current = { title: c.title.trim(), content: c.content, data: c.data };
+                unsynced.current = true;
+                onSaved({ ...c, title: c.title.trim() }, []);
+                setStatus(cardRef.current && isSaved(cardRef.current) ? "saved" : "unsaved");
+            } catch (e) {
+                setStatus("unsaved");
+                onError(errorMessage(e));
+            } finally {
+                busy.current = false;
+            }
+        });
+
+    // Autosave shortly after typing pauses, like Google Docs.
+    useEffect(() => {
+        if (!card || isSaved(card)) return;
+        setStatus("unsaved");
+        const t = window.setTimeout(() => void persist(), AUTOSAVE_MS);
+        return () => window.clearTimeout(t);
+    }, [card?.title, card?.content, card?.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Closing the panel or switching cards never loses typing.
+    useEffect(() => () => void persist(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    /** A field was left: save what is left and make the `[[ ]]` links. */
     const save = async () => {
+        await persist();
         const c = cardRef.current;
-        if (!c || (c.title === saved.current.title && c.content === saved.current.content)) return;
-        busy.current = true;
+        if (!c || !unsynced.current) return;
+        unsynced.current = false;
         try {
-            await whiteboardApi.updateCard(c.id, c.title, c.content);
-            saved.current = { title: c.title.trim(), content: c.content };
             const created = await whiteboardApi.syncWikiLinks(c.id, c.content);
-            onSaved({ ...c, title: c.title.trim() }, created);
-            if (created.length > 0) setLinked(await whiteboardApi.listCardLinks(c.id));
+            if (created.length > 0) {
+                onSaved({ ...c, title: c.title.trim() }, created);
+                setLinked(await whiteboardApi.listCardLinks(c.id));
+            }
         } catch (e) {
             onError(errorMessage(e));
-        } finally {
-            busy.current = false;
+        }
+    };
+
+    const openHistory = async () => {
+        setEditing(null);
+        await save();
+        setHistory(true);
+    };
+
+    /** A version was restored: show it and update links and the board. */
+    const restored = async (c: CardDetail) => {
+        setCard(c);
+        saved.current = { title: c.title, content: c.content, data: c.data };
+        setStatus("saved");
+        setHistory(false);
+        try {
+            const created = await whiteboardApi.syncWikiLinks(c.id, c.content);
+            onSaved(c, created);
+            setLinked(await whiteboardApi.listCardLinks(c.id));
+        } catch (e) {
+            onError(errorMessage(e));
         }
     };
 
@@ -128,9 +213,9 @@ function CardPanel(props: Props) {
 
     return (
         <aside
-            className="wb-card-panel"
+            className={`wb-card-panel${card.kind === "table" ? " wide" : ""}`}
             onKeyDown={(e) => {
-                if (e.key === "Escape" && !editing && !(e.target instanceof HTMLInputElement)) onClose();
+                if (e.key === "Escape" && !editing && !history && !(e.target instanceof HTMLInputElement)) onClose();
             }}
         >
             <div className="wb-cp-bar">
@@ -150,15 +235,45 @@ function CardPanel(props: Props) {
                         ))
                     )}
                 </div>
-                <button className="danger-btn wb-cp-delete" onClick={() => onDelete(card.id)}>刪除</button>
+                {status && (
+                    <span className={`wb-cp-status${status === "saved" ? " done" : ""}`} aria-live="polite">
+                        {status === "saved" ? "已儲存" : "儲存中…"}
+                    </span>
+                )}
+                <button
+                    className="small-btn wb-cp-history"
+                    title="版本記錄：查看、命名與還原這張卡片的歷史版本"
+                    onClick={() => void openHistory()}
+                >
+                    🕘 版本記錄
+                </button>
+                {here && props.onRemoveFromBoard && (
+                    <button
+                        className="small-btn wb-cp-remove"
+                        title="從目前白板移除：卡片仍保留在卡片庫和其他白板"
+                        onClick={() => props.onRemoveFromBoard!(card.id)}
+                    >
+                        從白板移除
+                    </button>
+                )}
+                <button className="danger-btn wb-cp-delete" title="完全刪除：從所有白板和卡片庫中刪除" onClick={() => onDelete(card.id)}>完全刪除</button>
                 <button className="wb-cp-close" title="關閉（Esc）" onClick={onClose}>×</button>
             </div>
 
+            {history && (
+                <VersionHistory card={card} onRestored={(c) => void restored(c)} onClose={() => setHistory(false)} onError={onError} />
+            )}
+
             <div className="wb-cp-body">
+                {card.kind && card.kind !== "note" && (
+                    <div className="wb-cp-kind muted">{kindInfo(card.kind).label}</div>
+                )}
                 <input
                     className="wb-cp-title"
                     value={card.title}
                     placeholder="標題"
+                    readOnly={card.kind === "mindmap"}
+                    title={card.kind === "mindmap" ? "心智圖的標題就是中心主題，請在白板上修改" : undefined}
                     onChange={(e) => setCard({ ...card, title: e.target.value })}
                     onBlur={() => void save()}
                     onKeyDown={(e) => {
@@ -197,6 +312,33 @@ function CardPanel(props: Props) {
                     </datalist>
                 </div>
 
+                {card.kind === "image" && <ImagePreview cardId={card.id} data={card.data} onError={onError} />}
+                {card.kind === "video" && <VideoPlayer data={card.data} title={card.title} />}
+                {card.kind === "pdf" && <PdfPages cardId={card.id} data={card.data} onError={onError} />}
+
+                {card.kind === "table" ? (
+                    // The sheet itself, editable like Excel (saved like any edit in the panel).
+                    <TableObject
+                        variant="panel"
+                        data={card.data}
+                        rect={PANEL_RECT}
+                        zoom={1}
+                        active
+                        onChange={(t) => setCard((c) => (c ? { ...c, data: JSON.stringify(t), content: tableMarkdown(t) } : c))}
+                        onFit={() => {}}
+                    />
+                ) : card.kind === "chart" ? (
+                    <div className="wb-cp-chart">
+                        <ChartView {...chartProps(card.data)} width={420} height={280} />
+                        <div className="wb-cp-content wb-cp-outline wb-cp-table">
+                            <Markdown source={card.content} onWikiLink={onWikiLink} />
+                        </div>
+                    </div>
+                ) : card.kind === "mindmap" ? (
+                    <div className="wb-cp-content wb-cp-outline">
+                        <Markdown source={card.content} onWikiLink={onWikiLink} />
+                    </div>
+                ) : (
                 <div
                     className={`wb-cp-content${editing ? " editing" : ""}`}
                     tabIndex={editing ? -1 : 0}
@@ -214,7 +356,7 @@ function CardPanel(props: Props) {
                             value={card.content}
                             excludeCardId={card.id}
                             initialPoint={editing.point}
-                            placeholder="內容（支援 Markdown）"
+                            placeholder={card.kind && card.kind !== "note" && card.kind !== "sticky" ? "筆記（支援 Markdown）" : "內容（支援 Markdown）"}
                             onChange={(v) => setCard((c) => (c ? { ...c, content: v } : c))}
                             onBlur={() => {
                                 setEditing(null);
@@ -225,9 +367,12 @@ function CardPanel(props: Props) {
                     ) : card.content.trim() ? (
                         <Markdown source={card.content} onWikiLink={onWikiLink} />
                     ) : (
-                        <div className="wb-card-placeholder">點一下開始寫（支援 Markdown）</div>
+                        <div className="wb-card-placeholder">
+                            {card.kind && card.kind !== "note" && card.kind !== "sticky" ? "點一下寫筆記（支援 Markdown）" : "點一下開始寫（支援 Markdown）"}
+                        </div>
                     )}
                 </div>
+                )}
 
                 <section className="wb-cp-section">
                     <h3 className="wb-section-title">

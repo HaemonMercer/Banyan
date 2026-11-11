@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { drawerApi, errorMessage, type Attachment, type ItemSummary } from "../../drawer/api";
-import { GROUP_LABELS, formatSize, groupedTypes, shortAuthors } from "../../drawer/itemTypes";
+import { drawerApi, errorMessage, type Attachment, type CollectionView, type ItemSummary } from "../../drawer/api";
+import { GROUP_LABELS, formatSize, groupedTypes } from "../../drawer/itemTypes";
 import { NO_SELECTION, clickSelect, inOrder, range, single, type Selection } from "../../drawer/selection";
+import { COLUMNS, TITLE_MIN_WIDTH, useColumns } from "../../drawer/columns";
 import { Icon, TypeIcon } from "../../icons/Icon";
+import GalleryTile from "./GalleryTile";
 
 interface Props {
     title: string;
@@ -17,14 +19,62 @@ interface Props {
     onDragStart: (e: React.PointerEvent, item: ItemSummary) => void;
     draggingIds: number[];
     onError: (message: string) => void;
+    /** "gallery" shows the items as pictures only. */
+    mode: CollectionView;
+    /** Present when a folder is shown: switches how it shows its items. */
+    onModeChange?: (mode: CollectionView) => void;
+    /** Types offered by "＋ 新條目" (a gallery offers image types only). */
+    canCreate: (itemType: string) => boolean;
 }
 
 const MARQUEE_THRESHOLD = 4;
+const TILE_KEY = "banyan.drawer.galleryTile";
+const TILE_SIZES = { min: 80, max: 360, initial: 160 };
+const loadTile = () => {
+    try {
+        const v = Number(localStorage.getItem(TILE_KEY));
+        return v >= TILE_SIZES.min && v <= TILE_SIZES.max ? v : TILE_SIZES.initial;
+    } catch {
+        return TILE_SIZES.initial;
+    }
+};
 
 function ItemList({
     title, items, selection, onSelectionChange, query, onQueryChange, onCreate, onDelete, onDragStart,
-    draggingIds, onError,
+    draggingIds, onError, mode, onModeChange, canCreate,
 }: Props) {
+    const gallery = mode === "gallery";
+    const cols = useColumns();
+    const [colMenu, setColMenu] = useState<{ x: number; y: number; atPointer?: boolean } | null>(null);
+    const [tile, setTile] = useState(loadTile);
+    const changeTile = (v: number) => {
+        setTile(v);
+        try {
+            localStorage.setItem(TILE_KEY, String(v));
+        } catch {
+            /* keep it for this session only */
+        }
+    };
+    const GAP = 8; // matches var(--sp-2)
+    const gridColumns = `minmax(${TITLE_MIN_WIDTH}px, 1fr) ${cols.columns.map((c) => `${c.width}px`).join(" ")}`;
+    const rowMinWidth = TITLE_MIN_WIDTH + cols.columns.reduce((n, c) => n + c.width + GAP, 0) + 24;
+
+    /** Drag the left edge of a column's header to resize it (the title column takes the rest). */
+    const startResize = (e: React.PointerEvent, id: string, width: number, minWidth: number) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const x0 = e.clientX;
+        document.body.classList.add("col-resizing");
+        const onMove = (ev: PointerEvent) => cols.setWidth(id, Math.max(minWidth, width - (ev.clientX - x0)));
+        const onUp = () => {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            document.body.classList.remove("col-resizing");
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+    };
+
     const order = items.map((i) => i.id);
     const selected = new Set(selection.ids);
     const focusId = selection.focus;
@@ -74,6 +124,12 @@ function ItemList({
         });
     const withAttachments = items.filter((it) => it.attachmentCount > 0).map((it) => it.id);
 
+    /** Tiles per row in the gallery (those level with the first). */
+    const galleryColumns = () => {
+        const tiles = [...(tableRef.current?.querySelectorAll<HTMLElement>(".gallery-tile") ?? [])];
+        return Math.max(1, tiles.filter((t) => t.offsetTop === tiles[0]?.offsetTop).length);
+    };
+
     const onKeyDown = (e: React.KeyboardEvent) => {
         if (items.length === 0) return;
         const idx = focusId === null ? -1 : order.indexOf(focusId);
@@ -87,8 +143,11 @@ function ItemList({
                     : single(id),
             );
         };
-        if (e.key === "ArrowDown") moveTo(idx + 1);
-        else if (e.key === "ArrowUp") moveTo(idx < 0 ? 0 : idx - 1);
+        const step = gallery ? galleryColumns() : 1;
+        if (gallery && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+            moveTo(e.key === "ArrowLeft" ? Math.max(0, idx - 1) : idx + 1);
+        } else if (e.key === "ArrowDown") moveTo(idx + step);
+        else if (e.key === "ArrowUp") moveTo(idx < 0 ? 0 : Math.max(0, idx - step));
         else if (e.key === "a" && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             onSelectionChange({ ids: [...order], focus: focusId ?? order[0], anchor: order[0] });
@@ -131,9 +190,11 @@ function ItemList({
             const top = Math.min(start.y, cur.y);
             const bottom = Math.max(start.y, cur.y);
             const left = Math.min(start.x, cur.x);
-            setBox({ top, left, width: Math.abs(cur.x - start.x), height: bottom - top });
+            const right = Math.max(start.x, cur.x);
+            setBox({ top, left, width: right - left, height: bottom - top });
             const hit = [...table.querySelectorAll<HTMLElement>("[data-item-id]")]
                 .filter((el) => el.offsetTop < bottom && el.offsetTop + el.offsetHeight > top)
+                .filter((el) => !gallery || (el.offsetLeft < right && el.offsetLeft + el.offsetWidth > left))
                 .map((el) => Number(el.dataset.itemId));
             onSelectionChange({
                 ids: inOrder(order, [...base, ...hit]),
@@ -201,13 +262,48 @@ function ItemList({
                 <span className="pane-count">
                     {selection.ids.length > 1 ? `已選 ${selection.ids.length} / ${items.length}` : `${items.length} 個條目`}
                 </span>
+                {onModeChange && (
+                    <div className="view-switch" role="group">
+                        <button className={mode === "list" ? "active" : ""} title="清單" onClick={() => onModeChange("list")}>
+                            <Icon name="table" />
+                        </button>
+                        <button className={mode === "gallery" ? "active" : ""} title="畫廊" onClick={() => onModeChange("gallery")}>
+                            <Icon name="image" />
+                        </button>
+                    </div>
+                )}
+                {gallery ? (
+                    <input
+                        className="tile-size"
+                        type="range"
+                        min={TILE_SIZES.min}
+                        max={TILE_SIZES.max}
+                        value={tile}
+                        title="圖片大小"
+                        onChange={(e) => changeTile(Number(e.target.value))}
+                    />
+                ) : (
+                    <button
+                        className="icon-btn"
+                        title="顯示的欄位"
+                        onClick={(e) => {
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setColMenu({ x: r.right, y: r.bottom + 4 });
+                        }}
+                    >
+                        <Icon name="settings" />
+                    </button>
+                )}
                 <div className="new-item">
                     <button className="primary-btn" onClick={() => setMenuOpen((o) => !o)}>＋ 新條目</button>
                     {menuOpen && (
                         <>
                             <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
                             <ul className="menu">
-                                {groupedTypes().map(([group, types]) => (
+                                {groupedTypes()
+                                    .map(([group, types]) => [group, types.filter((t) => canCreate(t.id))] as const)
+                                    .filter(([, types]) => types.length > 0)
+                                    .map(([group, types]) => (
                                     <li key={group} className="menu-group">
                                         <div className="menu-group-label">{GROUP_LABELS[group]}</div>
                                         <ul>
@@ -239,38 +335,110 @@ function ItemList({
                     onChange={(e) => onQueryChange(e.target.value)}
                 />
             </div>
+            {colMenu && (
+                <>
+                    <div
+                        className="menu-backdrop"
+                        onClick={() => setColMenu(null)}
+                        onContextMenu={(e) => {
+                            e.preventDefault();
+                            setColMenu(null);
+                        }}
+                    />
+                    <ul className={`menu col-menu${colMenu.atPointer ? " at-pointer" : ""}`} style={{ left: colMenu.x, top: colMenu.y }}>
+                        <li className="menu-item disabled">
+                            <span className="col-check"><Icon name="check" /></span>標題
+                        </li>
+                        {COLUMNS.map((c) => (
+                            <li key={c.id} className="menu-item" onClick={() => cols.toggle(c.id)}>
+                                <span className="col-check">{cols.visible.includes(c.id) && <Icon name="check" />}</span>
+                                {c.label}
+                            </li>
+                        ))}
+                        <li className="menu-sep" />
+                        <li
+                            className="menu-item"
+                            onClick={() => {
+                                cols.reset();
+                                setColMenu(null);
+                            }}
+                        >
+                            <span className="col-check" />還原預設
+                        </li>
+                    </ul>
+                </>
+            )}
             <div
-                className="item-table"
+                className={`item-table${gallery ? " gallery" : ""}`}
+                style={
+                    gallery
+                        ? ({ "--tile": `${tile}px` } as React.CSSProperties)
+                        : ({ "--cols": gridColumns, "--row-min": `${rowMinWidth}px` } as React.CSSProperties)
+                }
                 ref={tableRef}
                 tabIndex={0}
                 onKeyDown={onKeyDown}
                 onPointerDown={(e) => {
                     // Empty space below the rows (or the empty-list message) starts a selection box.
                     const t = e.target as HTMLElement;
-                    if (t === e.currentTarget || t.classList.contains("empty")) startMarquee(e, true);
+                    if (t === e.currentTarget || t.classList.contains("empty") || t.classList.contains("gallery-grid")) {
+                        startMarquee(e, true);
+                    }
                 }}
             >
                 {box && <div className="marquee" style={box} />}
-                <div className="item-row item-head">
-                    <span className="col-title">
-                        <button
-                            className="twisty"
-                            title={allOpen ? "全部摺疊（-）" : "全部展開附件（+）"}
-                            disabled={withAttachments.length === 0}
-                            onClick={() => (allOpen ? setExpanded(new Set()) : setOpen(withAttachments, true))}
-                        >
-                            <Icon name={allOpen ? "chevronDown" : "chevronRight"} />
-                        </button>
-                        標題
-                    </span>
-                    <span className="col-author">作者</span>
-                    <span className="col-date">日期</span>
-                    <span className="col-att" title="附件"><Icon name="attachment" /></span>
-                </div>
-                {items.length === 0 && (
-                    <div className="empty">{query ? "沒有符合的條目" : "這裡還沒有條目，按「＋ 新條目」開始"}</div>
+                {!gallery && (
+                    <div
+                        className="item-row item-head"
+                        onContextMenu={(e) => {
+                            e.preventDefault();
+                            setColMenu({ x: e.clientX, y: e.clientY, atPointer: true });
+                        }}
+                    >
+                        <span className="col-title">
+                            <button
+                                className="twisty"
+                                title={allOpen ? "全部摺疊（-）" : "全部展開附件（+）"}
+                                disabled={withAttachments.length === 0}
+                                onClick={() => (allOpen ? setExpanded(new Set()) : setOpen(withAttachments, true))}
+                            >
+                                <Icon name={allOpen ? "chevronDown" : "chevronRight"} />
+                            </button>
+                            標題
+                        </span>
+                        {cols.columns.map((c) => (
+                            <span key={c.id} className={`col-cell col-${c.id}`}>
+                                <span
+                                    className="col-resize"
+                                    title="拖曳調整欄寬"
+                                    onPointerDown={(e) => startResize(e, c.id, c.width, c.minWidth)}
+                                />
+                                {c.id === "attachments" ? <span title="附件"><Icon name="attachment" /></span> : c.label}
+                            </span>
+                        ))}
+                    </div>
                 )}
-                {items.map((it) => {
+                {items.length === 0 && (
+                    <div className="empty">{query ? "沒有符合的條目" : "沒有條目"}</div>
+                )}
+                {gallery ? (
+                    <div className="gallery-grid">
+                        {items.map((it) => (
+                            <GalleryTile
+                                key={it.id}
+                                item={it}
+                                selected={selected.has(it.id)}
+                                focused={it.id === focusId && selection.ids.length > 1}
+                                dragSource={draggingIds.includes(it.id)}
+                                onClick={(e) => onRowClick(e, it.id)}
+                                onPointerDown={(e) => onDragStart(e, it)}
+                                onOpen={() => {
+                                    if (it.imageId !== null) drawerApi.openAttachment(it.imageId).catch((e) => onError(errorMessage(e)));
+                                }}
+                            />
+                        ))}
+                    </div>
+                ) : items.map((it) => {
                     const isOpen = expanded.has(it.id) && it.attachmentCount > 0;
                     const children = attachments.get(it.id) ?? [];
                     return (
@@ -300,9 +468,11 @@ function ItemList({
                                     <TypeIcon type={it.itemType} className="type-icon" />
                                     {it.title || <em className="muted">（無標題）</em>}
                                 </span>
-                                <span className="col-author">{shortAuthors(it.authors)}</span>
-                                <span className="col-date">{it.date}</span>
-                                <span className="col-att">{it.attachmentCount > 0 ? it.attachmentCount : ""}</span>
+                                {cols.columns.map((c) => (
+                                    <span key={c.id} className={`col-cell col-${c.id}${c.secondary ? " secondary" : ""}`}>
+                                        {c.value(it)}
+                                    </span>
+                                ))}
                             </div>
                             {isOpen &&
                                 children.map((a) => (
@@ -318,8 +488,7 @@ function ItemList({
                                             {a.fileName}
                                             {a.linked && <span className="badge">連結</span>}
                                         </span>
-                                        <span className="col-date muted">{formatSize(a.size)}</span>
-                                        <span className="col-att" />
+                                        <span className="col-size muted">{formatSize(a.size)}</span>
                                     </div>
                                 ))}
                         </Fragment>

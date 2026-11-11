@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "../../icons/Icon";
 import { errorMessage } from "../../drawer/api";
 import Markdown from "../../markdown/Markdown";
 import CardEditor from "../../markdown/CardEditor";
 import SectionHeader from "./SectionHeader";
 import { whiteboardApi, type CardHit, type ItemCard, type Whiteboard } from "../../whiteboard/api";
+import { AUTOSAVE_MS, serial } from "../../whiteboard/autosave";
 
 interface Props {
     itemId: number;
@@ -27,7 +28,12 @@ const untitled = (t: string) => t || "（無標題）";
  */
 function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, onToggle }: Props) {
     const [cards, setCards] = useState<ItemCard[]>([]);
-    const [saved, setSaved] = useState<Record<number, string>>({});
+    /** Title + content of each card as last saved. */
+    const saved = useRef<Record<number, string>>({});
+    /** Cards whose saved text has not had its `[[ ]]` links synced yet. */
+    const unsynced = useRef(new Set<number>());
+    const cardsRef = useRef<ItemCard[]>([]);
+    const queueSave = useRef(serial()).current;
     const [boards, setBoards] = useState<Whiteboard[]>([]);
     const [hits, setHits] = useState<CardHit[] | null>(null);
     const [query, setQuery] = useState("");
@@ -60,7 +66,7 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
                 whiteboardApi.listWhiteboards(),
             ]);
             setCards(list);
-            setSaved(Object.fromEntries(list.map((c) => [c.cardId, c.title + "\u0000" + c.content])));
+            saved.current = Object.fromEntries(list.map((c) => [c.cardId, c.title + "\u0000" + c.content]));
             setBoards(bs);
         } catch (e) {
             onError(errorMessage(e));
@@ -91,13 +97,40 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
     const edit = (cardId: number, title: string, content: string) =>
         setCards((list) => list.map((c) => (c.cardId === cardId ? { ...c, title, content } : c)));
 
+    cardsRef.current = cards;
+
+    /** Writes a card's text if it changed (autosave); `[[ ]]` links wait for `save`. */
+    const persist = (cardId: number) =>
+        queueSave(async () => {
+            const c = cardsRef.current.find((x) => x.cardId === cardId);
+            if (!c) return;
+            const key = c.title + "\u0000" + c.content;
+            if (saved.current[cardId] === key) return;
+            try {
+                await whiteboardApi.updateCard(cardId, c.title, c.content);
+                saved.current[cardId] = key;
+                unsynced.current.add(cardId);
+            } catch (e) {
+                onError(errorMessage(e));
+            }
+        });
+
+    // Autosave the open card shortly after typing pauses.
+    const open = cards.find((c) => c.cardId === openId);
+    useEffect(() => {
+        if (!open || saved.current[open.cardId] === open.title + "\u0000" + open.content) return;
+        const t = window.setTimeout(() => void persist(open.cardId), AUTOSAVE_MS);
+        return () => window.clearTimeout(t);
+    }, [open?.cardId, open?.title, open?.content]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    /** The editor closed: save what is left and make the `[[ ]]` links. */
     const save = async (c: ItemCard) => {
-        const key = c.title + "\u0000" + c.content;
-        if (saved[c.cardId] === key) return;
+        await persist(c.cardId);
+        if (!unsynced.current.has(c.cardId)) return;
+        unsynced.current.delete(c.cardId);
+        const latest = cardsRef.current.find((x) => x.cardId === c.cardId) ?? c;
         try {
-            await whiteboardApi.updateCard(c.cardId, c.title, c.content);
-            setSaved((s) => ({ ...s, [c.cardId]: key }));
-            const created = await whiteboardApi.syncWikiLinks(c.cardId, c.content);
+            const created = await whiteboardApi.syncWikiLinks(c.cardId, latest.content);
             if (created.length > 0) onInfo(`依 [[ ]] 建立了 ${created.length} 條連結`);
             onChanged();
         } catch (e) {
@@ -182,9 +215,6 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
                 </div>
             )}
 
-            {cards.length === 0 && hits === null && (
-                <p className="muted">還沒有筆記。按「＋ 新增」寫一張卡片，之後可以放到白板上。</p>
-            )}
 
             <ul className="note-cards">
                 {cards.map((c) =>

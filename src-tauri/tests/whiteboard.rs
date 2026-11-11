@@ -412,3 +412,218 @@ fn sections_tags_library_and_batches() {
     drop(app);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn card_version_history() {
+    use banyan_lib::history::*;
+    let (app, root) = setup();
+    let s = || app.state::<DrawerState>();
+
+    let board = j(create_whiteboard(s(), "版本".into(), None).unwrap())["id"].as_i64().unwrap();
+    let card = j(create_card(s(), board, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    // An empty new card has no history yet.
+    assert!(j(list_card_versions(s(), card).unwrap()).as_array().unwrap().is_empty());
+    assert!(list_card_versions(s(), 9999).is_err());
+
+    update_card(s(), card, "草稿".into(), "第一版".into()).unwrap();
+    // A second save right away is folded into the same version.
+    update_card(s(), card, "草稿".into(), "第一版，補充".into()).unwrap();
+    let list = j(list_card_versions(s(), card).unwrap());
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["content"], "第一版，補充");
+    assert_eq!(list[0]["name"], "");
+
+    // Naming the current state names that version instead of copying it.
+    assert!(create_card_version(s(), card, "  ".into()).is_err());
+    let named = j(create_card_version(s(), card, " 初稿 ".into()).unwrap());
+    assert_eq!(named["name"], "初稿");
+    assert_eq!(named["id"], list[0]["id"]);
+    assert_eq!(j(list_card_versions(s(), card).unwrap()).as_array().unwrap().len(), 1);
+
+    // Edits after a named version start a new one.
+    update_card(s(), card, "定稿".into(), "第二版".into()).unwrap();
+    let list = j(list_card_versions(s(), card).unwrap());
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert_eq!(list[0]["title"], "定稿");
+    let first = list[1]["id"].as_i64().unwrap();
+
+    // Restore: the card goes back, and the restore is a new version (so it can be undone).
+    let restored = j(restore_card_version(s(), first).unwrap());
+    assert_eq!(restored["title"], "草稿");
+    assert_eq!(restored["content"], "第一版，補充");
+    let list = j(list_card_versions(s(), card).unwrap());
+    let contents: Vec<&str> = list.as_array().unwrap().iter().map(|v| v["content"].as_str().unwrap()).collect();
+    assert_eq!(contents, ["第一版，補充", "第二版", "第一版，補充"]);
+
+    // Rename / delete; the latest version cannot be deleted.
+    assert_eq!(j(rename_card_version(s(), first, "初稿 A".into()).unwrap())["name"], "初稿 A");
+    assert!(rename_card_version(s(), 9999, "x".into()).is_err());
+    assert!(delete_card_version(s(), list[0]["id"].as_i64().unwrap()).is_err());
+    delete_card_version(s(), list[1]["id"].as_i64().unwrap()).unwrap();
+    assert_eq!(j(list_card_versions(s(), card).unwrap()).as_array().unwrap().len(), 2);
+
+    // Deleting the card removes its history.
+    delete_card(s(), card).unwrap();
+    assert!(restore_card_version(s(), first).is_err());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn remove_from_board_keeps_the_card() {
+    let (app, root) = setup();
+    let s = || app.state::<DrawerState>();
+    let one = j(create_whiteboard(s(), "一".into(), None).unwrap())["id"].as_i64().unwrap();
+    let two = j(create_whiteboard(s(), "二".into(), None).unwrap())["id"].as_i64().unwrap();
+    let a = j(create_card(s(), one, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    let b = j(create_card(s(), one, 300.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    add_card_to_board(s(), two, a, None, None).unwrap();
+    link_cards(s(), a, b, Some(true)).unwrap();
+    set_card_tags(s(), a, vec!["保留".into()]).unwrap();
+
+    // Off board one only: still on board two, still linked and tagged, still in the library.
+    assert_eq!(remove_cards_from_board(s(), one, vec![a, 9999]).unwrap(), 1);
+    let wb1 = j(get_whiteboard(s(), one).unwrap());
+    assert_eq!(wb1["cards"].as_array().unwrap().len(), 1);
+    assert_eq!(wb1["links"].as_array().unwrap().len(), 0, "the link is not drawn without both cards");
+    let detail = j(get_card(s(), a).unwrap());
+    assert_eq!(detail["boards"][0]["id"], two);
+    assert_eq!(detail["tags"][0], "保留");
+    assert_eq!(j(list_card_links(s(), a).unwrap()).as_array().unwrap().len(), 1);
+
+    // Off its last board: the card is unplaced but not deleted.
+    remove_cards_from_board(s(), two, vec![a]).unwrap();
+    let f: CardQuery = serde_json::from_value(serde_json::json!({ "placement": "unplaced" })).unwrap();
+    let unplaced = j(list_cards(s(), f).unwrap());
+    assert_eq!(unplaced[0]["id"], a);
+    assert_eq!(remove_cards_from_board(s(), two, vec![a]).unwrap(), 0);
+
+    // Deleting removes it everywhere.
+    delete_cards(s(), vec![a]).unwrap();
+    assert!(get_card(s(), a).is_err());
+
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn board_objects_of_other_kinds() {
+    use banyan_lib::card_files::*;
+    use banyan_lib::history::*;
+    let (app, root) = setup();
+    let s = || app.state::<DrawerState>();
+    let board = j(create_whiteboard(s(), "物件".into(), None).unwrap())["id"].as_i64().unwrap();
+
+    // Unknown kinds and bad rectangles are refused; sizes are clamped to the minimum.
+    assert!(create_board_object(s(), board, "diagram".into(), 0.0, 0.0, 200.0, 200.0, String::new(), String::new(), String::new()).is_err());
+    assert!(create_board_object(s(), board, "image".into(), f64::NAN, 0.0, 200.0, 200.0, String::new(), String::new(), String::new()).is_err());
+    let video = j(create_board_object(
+        s(), board, "video".into(), 10.0, 20.0, 50.0, 10.0, " 演講 ".into(), String::new(),
+        r#"{"videoId":"dQw4w9WgXcQ"}"#.into(),
+    )
+    .unwrap());
+    assert_eq!(video["kind"], "video");
+    assert_eq!(video["title"], "演講");
+    assert_eq!(video["width"], 120.0);
+    assert_eq!(video["height"], 60.0);
+
+    // A mind map: tree in data, outline in content; both are versioned and restorable.
+    let map = j(create_board_object(
+        s(), board, "mindmap".into(), 0.0, 300.0, 300.0, 200.0, "主題".into(), "- 主題".into(),
+        r#"{"root":{"id":"r","text":"主題","children":[]}}"#.into(),
+    )
+    .unwrap())["id"]
+        .as_i64()
+        .unwrap();
+    let v1 = r#"{"root":{"id":"r","text":"主題","children":[{"id":"a","text":"甲","children":[]}]}}"#;
+    update_card_data(s(), map, "主題".into(), "- 主題\n  - 甲".into(), v1.into()).unwrap();
+    let first = j(create_card_version(s(), map, "一個分支".into()).unwrap())["id"].as_i64().unwrap();
+    update_card_data(s(), map, "主題".into(), "- 主題".into(), r#"{"root":{"id":"r","text":"主題","children":[]}}"#.into()).unwrap();
+    // A plain title/content save keeps the data.
+    update_card(s(), map, "主題二".into(), "- 主題".into()).unwrap();
+    assert_eq!(j(get_card(s(), map).unwrap())["data"], r#"{"root":{"id":"r","text":"主題","children":[]}}"#);
+    let restored = j(restore_card_version(s(), first).unwrap());
+    assert_eq!(restored["data"], v1);
+    assert_eq!(restored["kind"], "mindmap");
+
+    let wb = j(get_whiteboard(s(), board).unwrap());
+    let kinds: Vec<&str> = wb["cards"].as_array().unwrap().iter().map(|c| c["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["video", "mindmap"]);
+    let f: CardQuery = serde_json::from_value(serde_json::json!({ "query": "甲" })).unwrap();
+    let hits = j(list_cards(s(), f).unwrap());
+    assert_eq!(hits[0]["kind"], "mindmap", "mind maps are found by their outline");
+    // Tables (Numbers-style): cells in data, a Markdown table in content.
+    let table = j(create_board_object(s(), board, "table".into(), 0.0, 600.0, 400.0, 200.0, "預算".into(), "| A |
+|---|
+| 1 |".into(), r#"{"cols":[]}"#.into()).unwrap());
+    assert_eq!(table["kind"], "table");
+    let chart = j(create_board_object(s(), board, "chart".into(), 500.0, 600.0, 420.0, 280.0, "圖表".into(), String::new(), r#"{"type":"column"}"#.into()).unwrap());
+    assert_eq!(chart["kind"], "chart");
+    // Plain cards are notes.
+    let note = j(create_card(s(), board, 0.0, 0.0).unwrap());
+    assert_eq!(note["kind"], "note");
+
+    // Files: stored per card, names kept inside the folder, removed with the card.
+    let image = j(create_board_object(s(), board, "image".into(), 0.0, 0.0, 300.0, 200.0, String::new(), String::new(), String::new()).unwrap())["id"].as_i64().unwrap();
+    let src = root.join("相片.png");
+    fs::write(&src, b"PNGDATA").unwrap();
+    let lib_guard = s();
+    {
+        let lib = lib_guard.lock();
+        assert_eq!(import_path(&lib, image, &src).unwrap(), "相片.png");
+        assert_eq!(import_path(&lib, image, &src).unwrap(), "相片 (2).png");
+        assert_eq!(store_bytes(&lib, image, "../貼上.png", b"x").unwrap(), "貼上.png");
+        assert!(store_bytes(&lib, 9999, "a.png", b"x").is_err());
+        let path = file_path(&lib, image, "相片.png").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"PNGDATA");
+        assert!(file_path(&lib, image, "沒有.png").is_err());
+    }
+    let folder = {
+        let lib = lib_guard.lock();
+        file_path(&lib, image, "相片.png").unwrap().parent().unwrap().to_path_buf()
+    };
+    delete_cards(s(), vec![image]).unwrap();
+    assert!(!folder.exists(), "the card's files go with it");
+
+    // Deleting the board deletes the files of cards that were only there.
+    let pdf = j(create_board_object(s(), board, "pdf".into(), 0.0, 0.0, 300.0, 400.0, String::new(), String::new(), String::new()).unwrap())["id"].as_i64().unwrap();
+    let pdf_folder = {
+        let lib = lib_guard.lock();
+        store_bytes(&lib, pdf, "a.pdf", b"%PDF").unwrap();
+        file_path(&lib, pdf, "a.pdf").unwrap().parent().unwrap().to_path_buf()
+    };
+    delete_whiteboard(s(), board).unwrap();
+    assert!(!pdf_folder.exists());
+    assert!(get_card(s(), map).is_err());
+
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn library_shows_sections_and_board_size() {
+    let (app, root) = setup();
+    let s = || app.state::<DrawerState>();
+    let board = j(create_whiteboard(s(), "區塊".into(), None).unwrap())["id"].as_i64().unwrap();
+    let sec = j(create_section(s(), board, "讀書".into(), 0.0, 0.0, 500.0, 400.0).unwrap())["id"].as_i64().unwrap();
+    let card = j(create_card(s(), board, 20.0, 60.0).unwrap())["id"].as_i64().unwrap();
+    let loose = j(create_loose_card(s()).unwrap())["id"].as_i64().unwrap();
+    let all = || j(list_cards(s(), serde_json::from_value(serde_json::json!({})).unwrap()).unwrap());
+
+    let list = all();
+    let row = |id: i64| list.as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert_eq!(row(card)["sections"][0]["id"], sec);
+    assert_eq!(row(card)["sections"][0]["boardName"], "區塊");
+    assert_eq!(row(card)["width"], 240.0);
+    assert!(row(loose)["width"].is_null(), "a card on no board has no size");
+    assert_eq!(row(loose)["sections"].as_array().unwrap().len(), 0);
+
+    // Half outside: no longer in the section.
+    place_card(s(), board, card, 400.0, 60.0, 240.0, 160.0).unwrap();
+    let list = all();
+    let moved = list.as_array().unwrap().iter().find(|c| c["id"] == card).unwrap();
+    assert_eq!(moved["sections"].as_array().unwrap().len(), 0);
+
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}

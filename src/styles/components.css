@@ -176,7 +176,6 @@ select {
 }
 .tree-count { color: var(--muted); font-size: var(--fs-xs); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .tree-row:hover .tree-count { display: none; }
-.tree-empty { padding: var(--sp-1) var(--sp-3) var(--sp-2) 28px; font-size: var(--fs-sm); list-style: none; }
 .tree-row.drop-target {
     background: var(--accent-soft);
     box-shadow: inset 0 0 0 2px var(--accent);

@@ -24,7 +24,7 @@
 }
 .wb-graph-check { display: flex; align-items: center; gap: 4px; white-space: nowrap; font-size: var(--fs-sm); cursor: pointer; }
 .wb-graph-count { font-size: var(--fs-sm); white-space: nowrap; }
-.wb-graph-bar .wb-tips { margin-left: auto; }
+.wb-graph-bar .wb-graph-count { margin-right: auto; }
 .wb-graph-svg { flex: 1; min-height: 0; width: 100%; cursor: grab; touch-action: none; user-select: none; }
 .wb-graph-svg.panning { cursor: grabbing; }
 .wb-g-edge line { stroke: var(--wb-link); stroke-width: 1.5; }
@@ -90,4 +90,3 @@
     white-space: nowrap;
     flex-shrink: 0;
 }
-.graph-scope-hint { padding: 8px 12px; margin: 0; font-size: var(--fs-xs); line-height: var(--lh-body); }

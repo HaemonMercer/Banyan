@@ -1,9 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
+/** How a folder shows its items: the table, or pictures only (image items only). */
+export type CollectionView = "list" | "gallery";
+
 export interface Collection {
     id: number;
     name: string;
     parentId: number | null;
+    view: CollectionView;
 }
 
 export interface ItemSummary {
@@ -12,7 +16,14 @@ export interface ItemSummary {
     title: string;
     authors: string;
     date: string;
+    publication: string;
+    publisher: string;
+    series: string;
+    place: string;
     attachmentCount: number;
+    /** First attachment that is a picture (shown in galleries). */
+    imageId: number | null;
+    createdAt: number;
     updatedAt: number;
 }
 
@@ -29,6 +40,8 @@ export interface ItemFields {
     isbn: string;
     url: string;
     abstractNote: string;
+    /** The item's text pasted as-is, e.g. a news article (原文). */
+    fullText: string;
     /** Length of a recording or film. */
     runningTime: string;
     /** Format or material. */
@@ -37,6 +50,9 @@ export interface ItemFields {
     /** Location / country / holding institution. */
     place: string;
     catalogNumber: string;
+    /** Series (叢書／系列) and the position in it. */
+    series: string;
+    seriesNumber: string;
 }
 
 export interface Attachment {
@@ -115,8 +131,9 @@ export interface ItemFilter {
 
 export const drawerApi = {
     listCollections: () => invoke<Collection[]>("list_collections"),
-    createCollection: (name: string, parentId: number | null) =>
-        invoke<Collection>("create_collection", { name, parentId }),
+    createCollection: (name: string, parentId: number | null, view: CollectionView = "list") =>
+        invoke<Collection>("create_collection", { name, parentId, view }),
+    setCollectionView: (id: number, view: CollectionView) => invoke<void>("set_collection_view", { id, view }),
     renameCollection: (id: number, name: string) => invoke<void>("rename_collection", { id, name }),
     deleteCollection: (id: number) => invoke<void>("delete_collection", { id }),
 
@@ -153,6 +170,8 @@ export const drawerApi = {
     addItemsToCollection: (itemIds: number[], collectionId: number, removeFrom: number | null) =>
         invoke<number>("add_items_to_collection", { itemIds, collectionId, removeFrom }),
 
+    /** Values already used in a field (database column name, e.g. "series"), most used first. */
+    fieldValues: (field: string) => invoke<string[]>("field_values", { field }),
     /** Returns how many relations are new (self, duplicates and missing items are skipped). */
     addRelatedItems: (itemId: number, relatedIds: number[]) =>
         invoke<number>("add_related_items", { itemId, relatedIds }),
@@ -166,6 +185,10 @@ export const drawerApi = {
     addAttachments: (itemId: number, paths: string[]) =>
         invoke<Attachment[]>("add_attachments", { itemId, paths }),
     openAttachment: (id: number) => invoke<void>("open_attachment", { id }),
+    readAttachment: (id: number) => invoke<ArrayBuffer>("read_attachment", { id }),
+    /** Picture files dropped onto a gallery become 照片 items there; returns their ids. */
+    importImages: (collectionId: number, paths: string[]) =>
+        invoke<number[]>("import_images", { collectionId, paths }),
     revealAttachment: (id: number) => invoke<void>("reveal_attachment", { id }),
     deleteAttachment: (id: number) => invoke<void>("delete_attachment", { id }),
 
@@ -199,12 +222,12 @@ export function pickFields(item: ItemDetail): ItemFields {
     const {
         itemType, title, date, publication, volume, issue, pages,
         publisher, doi, isbn, url, abstractNote,
-        runningTime, medium, dimensions, place, catalogNumber,
+        runningTime, medium, dimensions, place, catalogNumber, series, seriesNumber, fullText,
     } = item;
     return {
         itemType, title, date, publication, volume, issue, pages,
         publisher, doi, isbn, url, abstractNote,
-        runningTime, medium, dimensions, place, catalogNumber,
+        runningTime, medium, dimensions, place, catalogNumber, series, seriesNumber, fullText,
     };
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Collection, TagInfo } from "../../drawer/api";
+import type { Collection, CollectionView, TagInfo } from "../../drawer/api";
 import { collectionPath } from "../../drawer/collections";
 import type { DropTarget } from "../../drawer/useItemDrag";
 import { usePersistentSet } from "../../drawer/usePersistentSet";
@@ -15,7 +15,7 @@ interface Props {
     collections: Collection[];
     view: LibraryView;
     onSelect: (view: LibraryView) => void;
-    onCreate: (name: string, parentId: number | null) => Promise<void>;
+    onCreate: (name: string, parentId: number | null, view: CollectionView) => Promise<void>;
     onRename: (id: number, name: string) => Promise<void>;
     onDelete: (collection: Collection) => void;
     onOpenSettings: () => void;
@@ -59,6 +59,14 @@ function CollectionTree({
     const [renaming, setRenaming] = useState<number | null>(null);
     /** `undefined` = not adding; `null` = adding at top level; number = adding under that parent. */
     const [addingUnder, setAddingUnder] = useState<number | null | undefined>(undefined);
+    /** What the folder being added shows: a list or a gallery. */
+    const [addingView, setAddingView] = useState<CollectionView>("list");
+    /** Where the "new folder or gallery" menu opens (fixed, so the scrolling pane doesn't clip it). */
+    const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
+    const startAdd = (parent: number | null, view: CollectionView) => {
+        setAddingView(view);
+        setAddingUnder(parent);
+    };
 
     // Hovering a collapsed folder while dragging opens it, so sub-folders are reachable.
     useEffect(() => {
@@ -86,7 +94,7 @@ function CollectionTree({
     const finishAdd = async (name: string | null) => {
         const parent = addingUnder;
         setAddingUnder(undefined);
-        if (name && parent !== undefined) await onCreate(name, parent);
+        if (name && parent !== undefined) await onCreate(name, parent, addingView);
     };
 
     const renderNodes = (parentId: number | null, depth: number) => (
@@ -114,7 +122,7 @@ function CollectionTree({
                             >
                                 {kids.length > 0 ? <Icon name={isOpen ? "chevronDown" : "chevronRight"} /> : ""}
                             </span>
-                            <Icon name="folder" className="tree-icon" />
+                            <Icon name={c.view === "gallery" ? "image" : "folder"} className="tree-icon" />
                             {renaming === c.id ? (
                                 <NameInput
                                     initial={c.name}
@@ -135,7 +143,7 @@ function CollectionTree({
                                             n.delete(c.id);
                                             return n;
                                         });
-                                        setAddingUnder(c.id);
+                                        startAdd(c.id, "list");
                                     }}
                                 ><Icon name="plus" /></button>
                                 <button title="重新命名" onClick={() => setRenaming(c.id)}><Icon name="edit" /></button>
@@ -152,8 +160,8 @@ function CollectionTree({
                 <li>
                     <div className="tree-row" style={{ paddingLeft: 8 + depth * 14 }}>
                         <span className="tree-twisty" />
-                        <Icon name="folder" className="tree-icon" />
-                        <NameInput initial="新資料夾" onDone={finishAdd} />
+                        <Icon name={addingView === "gallery" ? "image" : "folder"} className="tree-icon" />
+                        <NameInput initial={addingView === "gallery" ? "新畫廊" : "新資料夾"} onDone={finishAdd} />
                     </div>
                 </li>
             )}
@@ -174,7 +182,7 @@ function CollectionTree({
     return (
         <nav className="drawer-pane drawer-tree">
             <div className="pane-header">
-                <span>文獻庫</span>
+                <span>Drawer</span>
             </div>
             <ul className="tree">
                 <li>
@@ -184,7 +192,7 @@ function CollectionTree({
                     >
                         <span className="tree-twisty" />
                         <Icon name="library" className="tree-icon" />
-                        <span className="tree-label">我的文獻庫</span>
+                        <span className="tree-label">我的 Drawer</span>
                     </div>
                 </li>
                 <li>
@@ -203,28 +211,46 @@ function CollectionTree({
                     "folders",
                     "資料夾",
                     collections.length,
-                    <button
-                        className="icon-btn"
-                        title="新增資料夾"
-                        onClick={() => {
-                            if (folded.has("folders")) toggleFolded("folders");
-                            setAddingUnder(null);
-                        }}
-                    ><Icon name="plus" /></button>,
+                    <span className="tree-add">
+                        <button className="icon-btn" title="新增資料夾或畫廊" onClick={(e) => {
+                                const r = e.currentTarget.getBoundingClientRect();
+                                setAddMenu((m) => (m ? null : { x: r.left, y: r.bottom + 4 }));
+                            }}
+                        >
+                            <Icon name="plus" />
+                        </button>
+                        {addMenu && (
+                            <>
+                                <div className="menu-backdrop" onClick={() => setAddMenu(null)} />
+                                <ul className="menu tree-add-menu" style={{ left: addMenu.x, top: addMenu.y }}>
+                                    {(["list", "gallery"] as const).map((v) => (
+                                        <li
+                                            key={v}
+                                            className="menu-item"
+                                            onClick={() => {
+                                                setAddMenu(null);
+                                                if (folded.has("folders")) toggleFolded("folders");
+                                                startAdd(null, v);
+                                            }}
+                                        >
+                                            <Icon name={v === "gallery" ? "image" : "folder"} />
+                                            {v === "gallery" ? "畫廊（只放圖片）" : "資料夾"}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </>
+                        )}
+                    </span>,
                 )}
                 {!folded.has("folders") && (
                     <ul className="tree tree-collections">
                         {renderNodes(null, 0)}
-                        {collections.length === 0 && addingUnder === undefined && (
-                            <li className="tree-empty muted">按 ＋ 新增資料夾</li>
-                        )}
                     </ul>
                 )}
 
                 {sectionHead("tags", "標籤", tags.length)}
                 {!folded.has("tags") && (
                     <ul className="tree tree-tags">
-                        {tags.length === 0 && <li className="tree-empty muted">在右欄為條目加上標籤後會出現在這裡</li>}
                         {tags.map((t) => {
                             const selected = view.kind === "tag" && view.id === t.id;
                             return (

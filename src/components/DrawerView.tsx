@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { drawerApi, errorMessage, linkedNotice, type Collection, type ItemSummary, type TagInfo } from "../drawer/api";
-import LibrarySettings from "./drawer/LibrarySettings";
+import { drawerApi, errorMessage, linkedNotice, type Collection, type CollectionView, type ItemSummary, type TagInfo } from "../drawer/api";
+import { isImageType } from "../drawer/itemTypes";
 import { useItemDrag, type DropTarget } from "../drawer/useItemDrag";
 import { collectionPath } from "../drawer/collections";
 import { NO_SELECTION, single, type Selection } from "../drawer/selection";
@@ -16,11 +16,13 @@ interface Props {
     initialItemId?: number | null;
     /** Opens a card in Whiteboard. */
     onOpenCard: (cardId: number, boardId: number) => void;
+    /** Opens the Settings page at the data-location section. */
+    onOpenSettings: () => void;
 }
 
 const DELETE_WARNING = "它們的附件檔案，以及只屬於這些條目、不在任何白板上的筆記卡片，也會一併刪除，無法復原。";
 
-function DrawerView({ initialItemId = null, onOpenCard }: Props) {
+function DrawerView({ initialItemId = null, onOpenCard, onOpenSettings }: Props) {
     const [collections, setCollections] = useState<Collection[]>([]);
     const [tags, setTags] = useState<TagInfo[]>([]);
     const [view, setView] = useState<LibraryView>({ kind: "all" });
@@ -32,7 +34,12 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
     const [bulkReload, setBulkReload] = useState(0);
     const [dragging, setDragging] = useState(false);
     const [toast, setToast] = useState<{ text: string; kind: "error" | "info" } | null>(null);
-    const [showSettings, setShowSettings] = useState(false);
+
+    const shownCollection = view.kind === "collection" ? collections.find((c) => c.id === view.id) : undefined;
+    /** The folder being viewed is a gallery: pictures only, image items only. */
+    const gallery = shownCollection?.view === "gallery";
+    const galleryRef = useRef<number | null>(null);
+    galleryRef.current = gallery && view.kind === "collection" ? view.id : null;
 
     /** The one item shown in the detail pane (null when none or several are selected). */
     const selectedId = selection.ids.length === 1 ? selection.ids[0] : null;
@@ -109,16 +116,6 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
         drawerApi.getLibraryInfo().then((info) => info.warning && showError(info.warning), () => {});
     }, [refreshCollections, refreshTags, showError]);
 
-    const onLibraryChanged = async () => {
-        setSelection(NO_SELECTION);
-        setQuery("");
-        setView({ kind: "all" });
-        filterRef.current = { view: { kind: "all" }, query: "" };
-        await refreshCollections();
-        await refreshTags();
-        await refreshItems();
-    };
-
     // Reload the list when the view changes, and (debounced) when the search changes.
     useEffect(() => {
         const t = setTimeout(refreshItems, query ? 200 : 0);
@@ -141,6 +138,21 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
                 } else if (p.type === "drop") {
                     setDragging(false);
                     const sel = selectedRef.current;
+                    // Onto a gallery (with no single item selected): each picture becomes a 照片 item.
+                    const galleryId = galleryRef.current;
+                    if (galleryId !== null && sel.ids.length !== 1) {
+                        try {
+                            const ids = await drawerApi.importImages(galleryId, p.paths);
+                            const skipped = p.paths.length - ids.length;
+                            if (ids.length === 0) showError("沒有可以加入的圖片（支援 PNG、JPG、GIF、WebP、BMP、AVIF、SVG）");
+                            else showInfo(`已加入 ${ids.length} 張圖片${skipped > 0 ? `，略過 ${skipped} 個不是圖片的檔案` : ""}`);
+                            await refreshItems();
+                            if (ids.length === 1) setSelection(single(ids[0]));
+                        } catch (e) {
+                            showError(errorMessage(e));
+                        }
+                        return;
+                    }
                     if (sel.ids.length !== 1) {
                         showError(sel.ids.length === 0 ? "請先選一個條目，再把檔案拖進來" : "附件一次只能加到一個條目，請只選一個條目");
                         return;
@@ -167,7 +179,7 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
 
     const viewTitle =
         view.kind === "all"
-            ? "我的文獻庫"
+            ? "我的 Drawer"
             : view.kind === "unfiled"
               ? "未分類"
               : view.kind === "tag"
@@ -210,6 +222,21 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
     };
 
     const countLabel = (ids: number[]) => (ids.length > 1 ? `${ids.length} 個條目` : "");
+    /** How many of the items can't go into the folder because it's a gallery. */
+    const notForGallery = (ids: number[], collectionId: number) => {
+        if (collections.find((c) => c.id === collectionId)?.view !== "gallery") return 0;
+        return items.filter((i) => ids.includes(i.id) && !isImageType(i.itemType)).length;
+    };
+
+    const setCollectionView = async (mode: CollectionView) => {
+        if (view.kind !== "collection" || shownCollection?.view === mode) return;
+        try {
+            await drawerApi.setCollectionView(view.id, mode);
+            await refreshCollections();
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
 
     // Drag items onto a tag: they get the tag.
     const dropOnTag = async (ids: number[], tagId: number) => {
@@ -235,6 +262,10 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
         const removeFrom = shift ? viewing : null;
         const name = collectionPath(collections, collectionId);
         const what = countLabel(ids);
+        if (notForGallery(ids, collectionId) > 0) {
+            showError(`「${name}」是畫廊，只能放圖片類的條目（繪畫、藝術品、照片、地圖）`);
+            return;
+        }
         try {
             const added = await drawerApi.addItemsToCollection(ids, collectionId, removeFrom);
             if (removeFrom !== null) {
@@ -274,7 +305,7 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
               : dropOnCollection(ids, target.id, shift),
     );
 
-    /** Goes to an item (e.g. a related one); shows 我的文獻庫 when the item isn't in the current list. */
+    /** Goes to an item (e.g. a related one); shows 我的 Drawer when the item isn't in the current list. */
     const openItem = (id: number) => {
         if (!items.some((i) => i.id === id)) {
             setQuery("");
@@ -301,7 +332,7 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
     const dragHint = (() => {
         if (!drag) return "";
         const target = drag.target;
-        if (target === null) return "拖到左側資料夾或標籤，或右側的「關聯」";
+        if (target === null) return "";
         if (target.kind === "related") {
             return drag.itemIds.every((id) => id === target.id) ? "不能和自己建立關聯" : "加入關聯";
         }
@@ -312,6 +343,7 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
         const name = collectionPath(collections, target.id);
         const viewing = view.kind === "collection" ? view.id : null;
         if (viewing === target.id) return "已在這個資料夾";
+        if (notForGallery(drag.itemIds, target.id) > 0) return "畫廊只能放圖片類的條目";
         return drag.move && viewing !== null ? `移到「${name}」` : `加入「${name}」`;
     })();
 
@@ -340,7 +372,7 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
     };
 
     const deleteCollection = async (c: Collection) => {
-        if (!confirm(`刪除資料夾「${c.name}」和它的子資料夾？裡面的條目會保留在文獻庫中。`)) return;
+        if (!confirm(`刪除資料夾「${c.name}」和它的子資料夾？裡面的條目會保留在 Drawer 中。`)) return;
         try {
             await drawerApi.deleteCollection(c.id);
             if (view.kind === "collection") setView({ kind: "all" });
@@ -352,7 +384,7 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
     };
 
     return (
-        <div className="drawer">
+        <div className={`drawer${gallery && selection.ids.length === 0 ? " drawer-wide" : ""}`}>
             <CollectionTree
                 collections={collections}
                 view={view}
@@ -360,9 +392,9 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
                     setView(v);
                     setSelection(NO_SELECTION);
                 }}
-                onCreate={async (name, parentId) => {
+                onCreate={async (name, parentId, mode) => {
                     try {
-                        const c = await drawerApi.createCollection(name, parentId);
+                        const c = await drawerApi.createCollection(name, parentId, mode);
                         await refreshCollections();
                         setView({ kind: "collection", id: c.id });
                     } catch (e) {
@@ -378,7 +410,7 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
                     }
                 }}
                 onDelete={deleteCollection}
-                onOpenSettings={() => setShowSettings(true)}
+                onOpenSettings={onOpenSettings}
                 tags={tags}
                 onRenameTag={renameTag}
                 onDeleteTag={deleteTag}
@@ -396,6 +428,9 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
                 onDragStart={startItemDrag}
                 draggingIds={drag?.itemIds ?? []}
                 onError={showError}
+                mode={gallery ? "gallery" : "list"}
+                onModeChange={view.kind === "collection" ? setCollectionView : undefined}
+                canCreate={gallery ? isImageType : () => true}
             />
             {selection.ids.length > 1 ? (
                 <BulkEdit
@@ -423,19 +458,13 @@ function DrawerView({ initialItemId = null, onOpenCard }: Props) {
                     onOpenItem={openItem}
                     relatedDropActive={drag?.target?.kind === "related"}
                 />
-            ) : (
-                <aside className="drawer-pane drawer-detail drawer-detail-empty">
-                    <p className="muted">選一個條目來查看與編輯</p>
-                    <p className="muted small-hint">Ctrl＋點選或 Shift＋點選可多選，也可以從空白處拖曳框選，一次編輯多個條目。</p>
-                </aside>
+            ) : gallery ? null : (
+                <aside className="drawer-pane drawer-detail drawer-detail-empty" />
             )}
 
-            {showSettings && (
-                <LibrarySettings onClose={() => setShowSettings(false)} onChanged={onLibraryChanged} />
-            )}
             {dragging && (
                 <div className="drop-overlay">
-                    {selection.ids.length === 1 ? "放開以加入附件" : "請先只選一個條目"}
+                    {selection.ids.length === 1 ? "放開以加入附件" : gallery ? "放開以加入圖片" : "請先只選一個條目"}
                 </div>
             )}
             {drag && (

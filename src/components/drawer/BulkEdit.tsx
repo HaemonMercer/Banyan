@@ -125,7 +125,6 @@ function BulkEdit({ itemIds, items, collections, reloadKey, onChanged, onDelete,
                     ))}
                     {titles.length > PREVIEW && <li className="muted">…還有 {titles.length - PREVIEW} 個</li>}
                 </ul>
-                <p className="muted small-hint">以下的變更會套用到所有選取的條目。</p>
             </div>
 
             {section("tags", "標籤", info?.tags.length, (

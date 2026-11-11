@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 /// Bump this and append a migration step whenever the schema changes.
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 14;
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -252,6 +252,57 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              COMMIT;",
         )?;
     }
+    if version < 10 {
+        // Series (叢書／系列) and the item's number within it, as in Zotero.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE items ADD COLUMN series        TEXT NOT NULL DEFAULT '';
+             ALTER TABLE items ADD COLUMN series_number TEXT NOT NULL DEFAULT '';
+             COMMIT;",
+        )?;
+    }
+    if version < 11 {
+        // Version history of cards (Version Machine). Each row is a saved state of the card.
+        // Automatic versions (name = '') absorb edits made shortly after them; named versions
+        // are made by the user and never change or get pruned.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE card_versions (
+                 id         INTEGER PRIMARY KEY,
+                 card_id    INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+                 title      TEXT    NOT NULL,
+                 content    TEXT    NOT NULL,
+                 name       TEXT    NOT NULL DEFAULT '',
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX idx_card_versions_card ON card_versions(card_id, id);
+             COMMIT;",
+        )?;
+    }
+    if version < 12 {
+        // Whiteboard object types: a card is a note (Markdown) by default, or a sticky note,
+        // image, YouTube video, PDF or mind map. `data` holds the type's JSON (file name, video
+        // id, the mind map's tree…); `content` stays searchable text. Versions keep `data` too.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE cards ADD COLUMN kind TEXT NOT NULL DEFAULT 'note';
+             ALTER TABLE cards ADD COLUMN data TEXT NOT NULL DEFAULT '';
+             ALTER TABLE card_versions ADD COLUMN data TEXT NOT NULL DEFAULT '';
+             COMMIT;",
+        )?;
+    }
+    if version < 13 {
+        // How a folder shows its items: 'list' (the table) or 'gallery' (pictures only; the
+        // folder then only accepts image items such as photos and paintings).
+        conn.execute_batch(
+            "ALTER TABLE collections ADD COLUMN view TEXT NOT NULL DEFAULT 'list';",
+        )?;
+    }
+    if version < 14 {
+        // Full text of an item pasted as-is, e.g. a news article (原文).
+        conn.execute_batch("ALTER TABLE items ADD COLUMN full_text TEXT NOT NULL DEFAULT '';")?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -272,6 +323,7 @@ pub fn primary_role(item_type: &str) -> &'static str {
         "dance" => "choreographer",
         "festival" => "organizer",
         "talk" => "speaker",
+        "news" => "reporter",
         "podcast" => "host",
         "video" => "creator",
         "painting" => "painter",

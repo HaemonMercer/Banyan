@@ -1,5 +1,7 @@
+pub mod card_files;
 pub mod db;
 pub mod drawer;
+pub mod history;
 pub mod library;
 pub mod whiteboard;
 
@@ -72,7 +74,11 @@ pub fn run() {
             drawer::delete_items,
             drawer::set_item_creators,
             drawer::set_item_collections,
+            drawer::set_collection_view,
+            drawer::read_attachment,
+            drawer::import_images,
             drawer::add_items_to_collection,
+            drawer::field_values,
             drawer::add_related_items,
             drawer::remove_related_item,
             drawer::relate_items,
@@ -93,6 +99,14 @@ pub fn run() {
             whiteboard::delete_whiteboard,
             whiteboard::get_whiteboard,
             whiteboard::create_card,
+            whiteboard::create_board_object,
+            whiteboard::update_card_data,
+            card_files::import_card_file,
+            card_files::save_card_file,
+            card_files::read_card_file,
+            card_files::pick_card_file,
+            card_files::open_card_file,
+            card_files::reveal_card_file,
             whiteboard::update_card,
             whiteboard::place_card,
             whiteboard::delete_card,
@@ -114,6 +128,7 @@ pub fn run() {
             whiteboard::delete_section,
             whiteboard::place_cards,
             whiteboard::delete_cards,
+            whiteboard::remove_cards_from_board,
             whiteboard::set_card_tags,
             whiteboard::list_card_tags,
             whiteboard::get_card,
@@ -125,6 +140,11 @@ pub fn run() {
             whiteboard::list_item_cards,
             whiteboard::create_item_card,
             whiteboard::add_card_to_board,
+            history::list_card_versions,
+            history::create_card_version,
+            history::rename_card_version,
+            history::delete_card_version,
+            history::restore_card_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

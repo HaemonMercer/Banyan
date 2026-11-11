@@ -11,7 +11,25 @@ import {
     type Section,
     type Whiteboard,
 } from "../whiteboard/api";
-import BoardCanvas, { type BoardCanvasHandle, type Rect } from "./whiteboard/BoardCanvas";
+import { AUTOSAVE_MS, serial } from "../whiteboard/autosave";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { cardFileBlob, imageSize, primeCardFile } from "../whiteboard/files";
+import {
+    KINDS,
+    fetchYouTubeTitle,
+    fileNameOf,
+    fitSize,
+    kindForFile,
+    mindMapOutline,
+    newMindMap,
+    parseYouTube,
+    type CardKind,
+} from "../whiteboard/objects";
+import { loadPdf } from "../whiteboard/pdf";
+import { newTable, readTable as readTableSafe, tableMarkdown, tableSize } from "../whiteboard/table";
+import { chartMarkdown, snapshotFromTable, usedRange } from "../whiteboard/chart";
+import InsertToolbar from "./whiteboard/InsertToolbar";
+import BoardCanvas, { sectionAt, type BoardCanvasHandle, type Rect } from "./whiteboard/BoardCanvas";
 import BoardTree, { folderSubtree } from "./whiteboard/BoardTree";
 import CardLibrary from "./whiteboard/CardLibrary";
 import CardPanel from "./whiteboard/CardPanel";
@@ -58,6 +76,10 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     sectionsRef.current = sections;
     /** Cards whose title or content changed since the last save. */
     const dirty = useRef(new Set<number>());
+    /** Cards whose saved text has not had its `[[ ]]` links synced yet. */
+    const unsynced = useRef(new Set<number>());
+    const autosaveTimers = useRef(new Map<number, number>());
+    const queueSave = useRef(serial()).current;
     /** Card to select and scroll to once the next board has loaded. */
     const pendingFocus = useRef<number | null>(initialCard?.cardId ?? null);
 
@@ -67,6 +89,8 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     const showError = useCallback((text: string) => setToast({ text, kind: "error" }), []);
     const showInfo = useCallback((text: string) => setToast({ text, kind: "info" }), []);
     const bumpLinks = () => setLinksVersion((n) => n + 1);
+    /** Bumped to load the open board again (e.g. a card placed from elsewhere). */
+    const [boardLoad, setBoardLoad] = useState(0);
 
     useEffect(() => {
         if (toast?.kind !== "info") return;
@@ -101,8 +125,10 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         });
     }, [refreshBoards]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Load the open board.
+    // Load the open board — also every time it is shown again after the card library, where cards
+    // may have been deleted, retagged or put on this board.
     useEffect(() => {
+        if (mode !== "board") return;
         setSelection([]);
         setSelectedLinkId(null);
         setSelectedSectionId(null);
@@ -136,7 +162,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         return () => {
             stale = true;
         };
-    }, [boardId, showError]);
+    }, [boardId, mode, boardLoad, showError]);
 
     const openBoard = (id: number) => {
         setMode("board");
@@ -205,8 +231,10 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
             const c = await whiteboardApi.createCard(boardId, Math.round(x), Math.round(y));
             setCards((list) => [...list, c]);
             selectOne(c.id);
+            void joinSections(new Map([[c.id, c]]));
             setSelectedLinkId(null);
             refreshBoards();
+            bumpLinks(); // the right-hand card list shows it right away
             requestAnimationFrame(() =>
                 document.querySelector<HTMLInputElement>(`[data-card-input="${c.id}"]`)?.focus(),
             );
@@ -218,22 +246,375 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     const moveCards = (rects: Map<number, Rect>) =>
         setCards((list) => list.map((c) => (rects.has(c.id) ? { ...c, ...rects.get(c.id)! } : c)));
 
-    /** Saves where cards ended up (positions come from the gesture, not possibly stale state). */
-    const placeCards = async (rects: Map<number, Rect>) => {
+    /**
+     * Saves where cards ended up (positions come from the gesture, not possibly stale state).
+     * Cards dropped into a section join it (see `joinSections`), unless `join` is false.
+     */
+    const placeCards = async (rects: Map<number, Rect>, join = true) => {
         if (boardId === null || rects.size === 0) return;
         moveCards(rects);
         const places = [...rects].map(([cardId, r]) => ({ cardId, x: r.x, y: r.y, width: r.width, height: r.height }));
         try {
             await whiteboardApi.placeCards(boardId, places);
+            if (join) await joinSections(rects);
         } catch (e) {
             showError(errorMessage(e));
         }
     };
 
+    /**
+     * Drag-to-join: a card whose center lands in a section belongs to it. Membership is "entirely
+     * inside", so a section grows to take in a card that sticks out of it (room is kept for the
+     * section's title bar). Dragging the card's center out of the section leaves it.
+     */
+    const joinSections = async (rects: Map<number, Rect>) => {
+        const grown = new Map<number, Section>();
+        for (const [, r] of rects) {
+            const target = sectionAt([...sectionsRef.current.map((x) => grown.get(x.id) ?? x)], r);
+            if (!target) continue;
+            const PAD = 20;
+            const HEAD = 44;
+            const left = Math.min(target.x, r.x - PAD);
+            const top = Math.min(target.y, r.y - HEAD);
+            const right = Math.max(target.x + target.width, r.x + r.width + PAD);
+            const bottom = Math.max(target.y + target.height, r.y + r.height + PAD);
+            if (left === target.x && top === target.y && right === target.x + target.width && bottom === target.y + target.height) continue;
+            grown.set(target.id, { ...target, x: Math.round(left), y: Math.round(top), width: Math.round(right - left), height: Math.round(bottom - top) });
+        }
+        if (grown.size === 0) return;
+        setSections((list) => list.map((x) => grown.get(x.id) ?? x));
+        sectionsRef.current = sectionsRef.current.map((x) => grown.get(x.id) ?? x);
+        for (const sec of grown.values()) await whiteboardApi.updateSection(sec);
+        bumpLinks();
+    };
+
     const editCard = (id: number, title: string, content: string) => {
         dirty.current.add(id);
         setCards((list) => list.map((c) => (c.id === id ? { ...c, title, content } : c)));
+        window.clearTimeout(autosaveTimers.current.get(id));
+        autosaveTimers.current.set(
+            id,
+            window.setTimeout(() => {
+                autosaveTimers.current.delete(id);
+                void persistCard(id);
+            }, AUTOSAVE_MS),
+        );
     };
+
+    /** Writes a card's title and content (autosave); its `[[ ]]` links wait for `saveCard`. */
+    const persistCard = (id: number) =>
+        queueSave(async () => {
+            if (!dirty.current.has(id)) return;
+            dirty.current.delete(id);
+            const c = cardsRef.current.find((c) => c.id === id);
+            if (!c) return;
+            try {
+                // Objects other than notes keep their kind's data (mind map tree, sticky colour…) too.
+                if (c.kind && c.kind !== "note") await whiteboardApi.updateCardData(id, c.title, c.content, c.data);
+                else await whiteboardApi.updateCard(id, c.title, c.content);
+                unsynced.current.add(id);
+                bumpLinks(); // titles and previews in the right-hand list and the card library
+            } catch (e) {
+                dirty.current.add(id);
+                showError(errorMessage(e));
+            }
+        });
+
+    /** An object's kind data changed (and with it, for mind maps, its title and outline): autosave. */
+    const editData = (id: number, data: string, title?: string, content?: string) => {
+        dirty.current.add(id);
+        setCards((list) =>
+            list.map((c) => (c.id === id ? { ...c, data, title: title ?? c.title, content: content ?? c.content } : c)),
+        );
+        cardsRef.current = cardsRef.current.map((c) =>
+            c.id === id ? { ...c, data, title: title ?? c.title, content: content ?? c.content } : c,
+        );
+        window.clearTimeout(autosaveTimers.current.get(id));
+        autosaveTimers.current.set(
+            id,
+            window.setTimeout(() => {
+                autosaveTimers.current.delete(id);
+                void persistCard(id).then(bumpLinks);
+            }, AUTOSAVE_MS),
+        );
+    };
+
+    // ---------- other objects: sticky notes, images, videos, PDFs, mind maps ----------
+
+    /** Where a new object goes: centered on `at` (board coordinates), else the middle of the view. */
+    const placeFor = (kind: CardKind, size?: { width: number; height: number }, at?: { x: number; y: number }) => {
+        const { width, height } = size ?? KINDS[kind];
+        const c = at ?? canvas.current?.visibleCenter() ?? { x: 0, y: 0 };
+        return { x: Math.round(c.x - width / 2), y: Math.round(c.y - height / 2), width, height };
+    };
+
+    const addObject = async (
+        kind: CardKind,
+        rect: { x: number; y: number; width: number; height: number },
+        title = "",
+        content = "",
+        data = "",
+    ) => {
+        if (boardId === null) return null;
+        const c = await whiteboardApi.createObject(boardId, kind, rect, title, content, data);
+        setCards((list) => [...list, c]);
+        cardsRef.current = [...cardsRef.current, c];
+        selectOne(c.id);
+        void joinSections(new Map([[c.id, c]]));
+        setSelectedLinkId(null);
+        refreshBoards();
+        bumpLinks(); // the right-hand card list shows it right away
+        return c;
+    };
+
+    /** Writes an object's data right away (after a file was added to it). */
+    const setObjectData = async (id: number, data: string, rect?: Rect, title?: string) => {
+        const c = cardsRef.current.find((x) => x.id === id);
+        if (!c) return;
+        const next = { ...c, data, ...(rect ?? {}), title: title ?? c.title };
+        setCards((list) => list.map((x) => (x.id === id ? next : x)));
+        cardsRef.current = cardsRef.current.map((x) => (x.id === id ? next : x));
+        await whiteboardApi.updateCardData(id, next.title, next.content, data);
+        if (rect && boardId !== null) await whiteboardApi.placeCards(boardId, [{ cardId: id, ...rect }]);
+    };
+
+    const createSticky = async (at?: { x: number; y: number }) => {
+        try {
+            const c = await addObject("sticky", placeFor("sticky", undefined, at), "", "", JSON.stringify({ color: "yellow" }));
+            if (c) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-card-content="${c.id}"]`)?.focus());
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
+
+    const createMindMap = async () => {
+        try {
+            const m = newMindMap();
+            await addObject("mindmap", placeFor("mindmap"), m.root.text, mindMapOutline(m), JSON.stringify(m));
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
+
+    const createTable = async () => {
+        try {
+            const t = newTable();
+            await addObject("table", placeFor("table", tableSize(t)), "表格", tableMarkdown(t), JSON.stringify(t));
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
+
+    /** A chart of a range of a table on this board, placed to the table's right. */
+    const createChart = async (tableId: number, range: string) => {
+        const t = cardsRef.current.find((c) => c.id === tableId);
+        if (!t) return;
+        const snapshot = snapshotFromTable(t.data, range, "col") ?? { labels: [], series: [] };
+        const data = { type: "column", source: { cardId: tableId, range }, seriesBy: "col", legend: true, snapshot };
+        // To the table's right; below any chart (or card) already there.
+        const rect = { x: Math.round(t.x + t.width + 40), y: Math.round(t.y), width: KINDS.chart.width, height: KINDS.chart.height };
+        const hits = (r: typeof rect) =>
+            cardsRef.current.some((c) => c.id !== tableId && r.x < c.x + c.width && c.x < r.x + r.width && r.y < c.y + c.height && c.y < r.y + r.height);
+        for (let i = 0; i < 50 && hits(rect); i++) rect.y += 40;
+        try {
+            await addObject(
+                "chart",
+                rect,
+                `${t.title || "表格"} 圖表`,
+                chartMarkdown(snapshot),
+                JSON.stringify(data),
+            );
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
+
+    /** Toolbar "圖表": a chart of the selected table; with no table selected, a sample table and its chart. */
+    const createChartFromToolbar = async () => {
+        const sel = selection.length === 1 ? cardsRef.current.find((c) => c.id === selection[0]) : undefined;
+        if (sel?.kind === "table") {
+            await createChart(sel.id, usedRange(readTableSafe(sel.data)));
+            return;
+        }
+        const t = newTable(3, 5);
+        const rows = [["月份", "收入", "支出"], ["一月", "120", "80"], ["二月", "150", "95"], ["三月", "135", "110"], ["四月", "180", "120"]];
+        rows.forEach((row, r) => row.forEach((v, c) => (t.rows[r].cells[t.cols[c].id] = v)));
+        try {
+            const size = tableSize(t);
+            // The pair (table, then its chart) is centred in the view.
+            const pair = placeFor("table", { width: size.width + KINDS.chart.width + 40, height: Math.max(size.height, KINDS.chart.height) });
+            const table = await addObject("table", { x: pair.x, y: pair.y, ...size }, "範例資料", tableMarkdown(t), JSON.stringify(t));
+            if (table) await createChart(table.id, usedRange(t));
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
+
+    const createVideo = async (url: string, at?: { x: number; y: number }) => {
+        const v = parseYouTube(url);
+        if (!v) {
+            showError("看不懂這個連結：請貼上 YouTube 影片的網址（youtube.com/watch?v=…、youtu.be/…、shorts/…）");
+            return false;
+        }
+        try {
+            const c = await addObject("video", placeFor("video", undefined, at), "", "", JSON.stringify(v));
+            // The title comes from YouTube when it can be reached.
+            if (c) {
+                const title = await fetchYouTubeTitle(v);
+                if (title && !cardsRef.current.find((x) => x.id === c.id)?.title) editData(c.id, c.data, title);
+            }
+            return true;
+        } catch (e) {
+            showError(errorMessage(e));
+            return false;
+        }
+    };
+
+    /** Image or PDF from a path on disk (picked or dropped). */
+    const createFileObject = async (path: string, at?: { x: number; y: number }) => {
+        const kind = kindForFile(path);
+        if (!kind) {
+            showError(`「${fileNameOf(path)}」不是圖片或 PDF，不能放到白板上`);
+            return;
+        }
+        let card: BoardCard | null = null;
+        try {
+            card = await addObject(kind, placeFor(kind, undefined, at));
+            if (!card) return;
+            const file = await whiteboardApi.importCardFile(card.id, path);
+            await finishFileObject(card, kind, file);
+        } catch (e) {
+            showError(errorMessage(e));
+            if (card) await whiteboardApi.deleteCards([card.id]).catch(() => {});
+            if (card) setCards((list) => list.filter((c) => c.id !== card!.id));
+        }
+    };
+
+    /** After the file is stored: read its size (or pages) and fit the object to it. */
+    const finishFileObject = async (card: BoardCard, kind: "image" | "pdf", file: string, blob?: Blob) => {
+        const cx = card.x + card.width / 2;
+        const cy = card.y + card.height / 2;
+        if (kind === "image") {
+            if (blob) primeCardFile(card.id, file, blob);
+            const natural = await imageSize(blob ?? (await cardFileBlob(card.id, file)));
+            const s = fitSize(natural.width, natural.height);
+            await setObjectData(card.id, JSON.stringify({ file, width: natural.width, height: natural.height }), {
+                x: Math.round(cx - s.width / 2),
+                y: Math.round(cy - s.height / 2),
+                ...s,
+            });
+        } else {
+            const doc = await loadPdf(card.id, file);
+            const page = await doc.getPage(1);
+            const vp = page.getViewport({ scale: 1 });
+            const width = KINDS.pdf.width;
+            // Grip (18) + page + page bar (30).
+            const height = Math.round((vp.height / vp.width) * width + 48);
+            await setObjectData(
+                card.id,
+                JSON.stringify({ file, pages: doc.numPages, page: 1 }),
+                { x: Math.round(cx - width / 2), y: Math.round(cy - height / 2), width, height },
+                fileNameOf(file).replace(/\.pdf$/i, ""),
+            );
+        }
+        bumpLinks();
+    };
+
+    /** A pasted image (screenshot) becomes an image object. */
+    const createPastedImage = async (blob: Blob, at?: { x: number; y: number }) => {
+        let card: BoardCard | null = null;
+        try {
+            card = await addObject("image", placeFor("image", undefined, at));
+            if (!card) return;
+            const ext = (blob.type.split("/")[1] ?? "png").replace("jpeg", "jpg").replace("svg+xml", "svg");
+            const name = blob instanceof File && blob.name && blob.name !== "image.png" ? blob.name : `貼上的圖片.${ext}`;
+            const file = await whiteboardApi.saveCardFile(card.id, name, new Uint8Array(await blob.arrayBuffer()));
+            await finishFileObject(card, "image", file, blob);
+        } catch (e) {
+            showError(errorMessage(e));
+            if (card) await whiteboardApi.deleteCards([card.id]).catch(() => {});
+            if (card) setCards((list) => list.filter((c) => c.id !== card!.id));
+        }
+    };
+
+    const pickFile = async (kind: "image" | "pdf") => {
+        try {
+            const path = await whiteboardApi.pickCardFile(kind);
+            if (path) await createFileObject(path);
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
+
+    // Paste on the board: images become image objects, YouTube links become videos.
+    const pasteRef = useRef<(e: ClipboardEvent) => void>(() => {});
+    pasteRef.current = (e: ClipboardEvent) => {
+        if (mode !== "board" || boardId === null) return;
+        const el = document.activeElement;
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable)) return;
+        const dt = e.clipboardData;
+        if (!dt) return;
+        const images = [...dt.files].filter((f) => f.type.startsWith("image/"));
+        if (images.length > 0) {
+            e.preventDefault();
+            const c = canvas.current?.visibleCenter() ?? { x: 0, y: 0 };
+            images.forEach((f, i) => void createPastedImage(f, { x: c.x + i * 40, y: c.y + i * 40 }));
+            return;
+        }
+        const text = dt.getData("text/plain").trim();
+        if (text && parseYouTube(text) && !/\s/.test(text)) {
+            e.preventDefault();
+            void createVideo(text);
+        }
+    };
+    useEffect(() => {
+        const onPaste = (e: ClipboardEvent) => pasteRef.current(e);
+        window.addEventListener("paste", onPaste);
+        return () => window.removeEventListener("paste", onPaste);
+    }, []);
+
+    // Image and PDF files dropped onto the board become objects where they were dropped.
+    const fileDropRef = useRef<(paths: string[], x: number, y: number) => void>(() => {});
+    fileDropRef.current = (paths, x, y) => {
+        if (mode !== "board" || boardId === null || !canvas.current) return;
+        const at = canvas.current.toBoard(x, y);
+        const usable = paths.filter((p) => kindForFile(p));
+        if (usable.length === 0) {
+            showInfo("只能把圖片或 PDF 拖到白板上");
+            return;
+        }
+        usable.forEach((p, i) => void createFileObject(p, { x: at.x + i * 40, y: at.y + i * 40 }));
+    };
+    const [fileOver, setFileOver] = useState(false);
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        let cancelled = false;
+        try {
+            getCurrentWebview()
+                .onDragDropEvent((event) => {
+                    const p = event.payload;
+                    if (p.type === "enter" || p.type === "over") setFileOver(true);
+                    else if (p.type === "leave") setFileOver(false);
+                    else if (p.type === "drop") {
+                        setFileOver(false);
+                        // Positions are physical pixels.
+                        const k = window.devicePixelRatio || 1;
+                        fileDropRef.current(p.paths, p.position.x / k, p.position.y / k);
+                    }
+                })
+                .then((fn) => {
+                    if (cancelled) fn();
+                    else unlisten = fn;
+                })
+                .catch(() => {});
+        } catch {
+            // Not running inside Tauri (e.g. a plain browser preview).
+        }
+        return () => {
+            cancelled = true;
+            unlisten?.();
+        };
+    }, []);
 
     /** Adds `[[ ]]` links that were just created to the board, if both ends are on it. */
     const showCreatedLinks = (created: CardLink[]) => {
@@ -244,17 +625,19 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         showInfo(`依 [[ ]] 建立了 ${created.length} 條連結`);
     };
 
+    /** The editor closed: save what is left and make the `[[ ]]` links. */
     const saveCard = async (id: number) => {
-        if (!dirty.current.has(id)) return;
-        dirty.current.delete(id);
+        window.clearTimeout(autosaveTimers.current.get(id));
+        autosaveTimers.current.delete(id);
+        await persistCard(id);
+        if (!unsynced.current.has(id)) return;
+        unsynced.current.delete(id);
         const c = cardsRef.current.find((c) => c.id === id);
         if (!c) return;
         try {
-            await whiteboardApi.updateCard(id, c.title, c.content);
             showCreatedLinks(await whiteboardApi.syncWikiLinks(id, c.content));
             bumpLinks(); // titles shown in lists and the side panel
         } catch (e) {
-            dirty.current.add(id);
             showError(errorMessage(e));
         }
     };
@@ -263,14 +646,23 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     const deleteCards = async (ids: number[], title?: string) => {
         if (ids.length === 0) return;
         const n = links.filter((l) => ids.includes(l.cardA) || ids.includes(l.cardB)).length;
-        const extra = n > 0 ? `${ids.length > 1 ? "它們" : "它"}的 ${n} 條連結也會一併移除，` : "";
+        // Links to cards on other boards are not drawn here, so only count what is visible as a hint.
+        const extra = n > 0 ? `連結（這個白板上有 ${n} 條）也會一併移除，` : "連結也會一併移除，";
         const name =
             ids.length > 1
                 ? `這 ${ids.length} 張卡片`
                 : `卡片「${untitled(title ?? cardsRef.current.find((c) => c.id === ids[0])?.title ?? "")}」`;
-        if (!confirm(`刪除${name}？${extra}無法復原。`)) return;
+        if (
+            !confirm(
+                `完全刪除${name}？\n${ids.length > 1 ? "它們" : "它"}會從所有白板和卡片庫中消失，${extra}無法復原。\n\n只想從這個白板拿掉的話，請改用「從白板移除」（×、Delete）。`,
+            )
+        )
+            return;
         try {
-            ids.forEach((id) => dirty.current.delete(id));
+            ids.forEach((id) => {
+                dirty.current.delete(id);
+                window.clearTimeout(autosaveTimers.current.get(id));
+            });
             await whiteboardApi.deleteCards(ids);
             setCards((list) => list.filter((c) => !ids.includes(c.id)));
             setLinks((list) => list.filter((l) => !ids.includes(l.cardA) && !ids.includes(l.cardB)));
@@ -283,6 +675,26 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         }
     };
     const deleteCard = (id: number) => deleteCards([id]);
+
+    /** Takes cards off the open board only; they stay in the card library and on other boards. */
+    const removeFromBoard = async (ids: number[]) => {
+        if (boardId === null || ids.length === 0) return;
+        try {
+            ids.forEach((id) => {
+                // Save pending edits first: the card lives on after leaving the board.
+                if (dirty.current.has(id)) void saveCard(id);
+            });
+            const n = await whiteboardApi.removeCardsFromBoard(boardId, ids);
+            setCards((list) => list.filter((c) => !ids.includes(c.id)));
+            setLinks((list) => list.filter((l) => !ids.includes(l.cardA) && !ids.includes(l.cardB)));
+            setSelection((s) => s.filter((x) => !ids.includes(x)));
+            refreshBoards();
+            bumpLinks();
+            showInfo(n > 1 ? `已從白板移除 ${n} 張卡片（仍在卡片庫中）` : "已從白板移除（卡片仍在卡片庫中）");
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
 
     /** Reloads the Drawer items a card refers to. */
     const refreshCardItems = async (cardId: number) => {
@@ -350,7 +762,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         sectionChange(s);
         try {
             await whiteboardApi.updateSection(s);
-            await placeCards(movedCards);
+            await placeCards(movedCards, false); // they moved with their section
         } catch (e) {
             showError(errorMessage(e));
         }
@@ -481,8 +893,10 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 e.preventDefault();
                 void deleteSection(selectedSectionId);
             } else if (selection.length > 0 && e.key === "Delete") {
+                // Delete: off this board (safe); Shift+Delete: delete everywhere (asks first).
                 e.preventDefault();
-                void deleteCards(selection);
+                if (e.shiftKey) void deleteCards(selection);
+                else void removeFromBoard(selection);
             }
         };
         window.addEventListener("keydown", onKey);
@@ -585,10 +999,14 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 }
                 await whiteboardApi.addCardToBoard(boardId, payload.id, x, y);
                 await reloadBoard(payload.id);
+                const placed = cardsRef.current.find((c) => c.id === payload.id);
+                if (placed) await joinSections(new Map([[placed.id, placed]]));
             } else {
                 const note = await whiteboardApi.createItemCard(payload.id);
                 await whiteboardApi.addCardToBoard(boardId, note.cardId, x, y);
                 await reloadBoard(note.cardId);
+                const placed = cardsRef.current.find((c) => c.id === note.cardId);
+                if (placed) await joinSections(new Map([[placed.id, placed]]));
                 showInfo(`已建立筆記卡片「${untitled(note.title)}」`);
             }
         } catch (e) {
@@ -623,16 +1041,11 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
             setSelectedLinkId(null);
             canvas.current?.centerOn(cardId);
         } else if (onBoard !== null) {
+            // The board loads (again) and then selects and scrolls to the card.
+            pendingFocus.current = cardId;
             setMode("board");
-            if (onBoard === boardId && cardsRef.current.some((c) => c.id === cardId)) {
-                requestAnimationFrame(() => {
-                    selectOne(cardId);
-                    canvas.current?.centerOn(cardId);
-                });
-            } else {
-                pendingFocus.current = cardId;
-                setBoardId(onBoard);
-            }
+            setBoardId(onBoard);
+            setBoardLoad((n) => n + 1);
         } else {
             showInfo("這張卡片不在任何白板上");
         }
@@ -650,7 +1063,9 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
 
     /** The side panel saved a card: mirror it on the board. */
     const panelSaved = (c: CardDetail, created: CardLink[]) => {
-        setCards((list) => list.map((x) => (x.id === c.id ? { ...x, title: c.title, content: c.content, tags: c.tags } : x)));
+        setCards((list) =>
+            list.map((x) => (x.id === c.id ? { ...x, title: c.title, content: c.content, data: c.data ?? x.data, tags: c.tags } : x)),
+        );
         showCreatedLinks(created);
         bumpLinks();
     };
@@ -704,6 +1119,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
             onSection={() => void createSection()}
             onTag={(t) => void tagSelection(t)}
             onDelete={() => void deleteCards(selection)}
+            onRemove={() => void removeFromBoard(selection)}
             onClear={() => setSelection([])}
         />
     ) : undefined;
@@ -745,14 +1161,20 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                     <>
                         <div className="pane-header wb-header">
                             <span className="pane-title">🗂 卡片庫</span>
-                            <span className="muted wb-tips">所有卡片，包括不在任何白板上的。點卡片在側邊面板開啟。</span>
                         </div>
                         <CardLibrary
                             reloadKey={linksVersion}
                             openCardId={openCardId}
                             onOpen={setOpenCardId}
+                            onCloseCard={() => setOpenCardId(null)}
                             onCreate={() => void createLooseCard()}
+                            boards={boards}
+                            onChanged={() => {
+                                bumpLinks();
+                                refreshBoards();
+                            }}
                             onError={showError}
+                            onInfo={showInfo}
                         />
                     </>
                 ) : board ? (
@@ -762,9 +1184,6 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                             <span className="pane-count">
                                 {cards.length} 張卡片 · {links.length} 條連結
                                 {sections.length > 0 ? ` · ${sections.length} 個區塊` : ""}
-                            </span>
-                            <span className="muted wb-tips">
-                                拖曳空白處框選 · Shift＋點選多選 · 空白鍵＋拖曳或滾輪平移 · Ctrl＋滾輪縮放 · ↗ 或 Enter 在側邊開啟卡片
                             </span>
                             <button className="small-btn wb-header-btn" title="新增區塊（選取卡片時會包住它們）" onClick={() => void createSection()}>
                                 <Icon name="section" /> 區塊
@@ -798,6 +1217,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                             onEditCard={editCard}
                             onSaveCard={saveCard}
                             onDeleteCard={deleteCard}
+                            onRemoveCard={(id) => void removeFromBoard([id])}
                             onOpenCard={openPanel}
                             onLink={(a, b) => link(a, b).catch(() => {})}
                             onUnlink={(l) => unlink(l.cardA, l.cardB).catch(() => {})}
@@ -813,11 +1233,30 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                             onSectionEdit={(s) => void sectionEdit(s)}
                             onDeleteSection={(id) => void deleteSection(id)}
                             dropTargetId={dropAt?.kind === "card" ? dropAt.cardId : null}
+                            onEditData={editData}
+                            onError={showError}
+                            onInsertChart={(tableId, range) => void createChart(tableId, range)}
+                            toolbar={
+                                <InsertToolbar
+                                    onCard={() => {
+                                        const c = canvas.current?.visibleCenter() ?? { x: 0, y: 0 };
+                                        void createCard(c.x - 120, c.y - 80);
+                                    }}
+                                    onSticky={() => void createSticky()}
+                                    onSection={() => void createSection()}
+                                    onImage={() => void pickFile("image")}
+                                    onVideo={createVideo}
+                                    onPdf={() => void pickFile("pdf")}
+                                    onMindMap={() => void createMindMap()}
+                                    onTable={() => void createTable()}
+                                    onChart={() => void createChartFromToolbar()}
+                                />
+                            }
                         />
+                        {fileOver && <div className="wb-file-over">圖片／PDF</div>}
                     </>
                 ) : (
                     <div className="wb-none">
-                        <p className="muted">建立一個白板，開始擺放卡片</p>
                         <button className="primary-btn" onClick={() => void createBoard(null)}>
                             ＋ 新增白板
                         </button>
@@ -837,6 +1276,9 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                         onOpenItem={onOpenItem}
                         onWikiLink={(t) => void openWikiLink(t)}
                         onDelete={(id) => void deleteCards([id])}
+                        onRemoveFromBoard={
+                            mode === "board" && boardId !== null ? (id) => void removeFromBoard([id]) : undefined
+                        }
                         onError={showError}
                     />
                 )}
@@ -852,6 +1294,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                     onOpenCard={(id) => !justDropped.current && openPanel(id)}
                     onUnlink={(other) => (selectedCard ? unlink(selectedCard.id, other) : Promise.resolve())}
                     onDelete={deleteCard}
+                    onRemove={(id) => void removeFromBoard([id])}
                     onOpenItem={(id) => !justDropped.current && onOpenItem(id)}
                     onItemsChanged={() => selectedCard && refreshCardItems(selectedCard.id)}
                     onError={showError}
@@ -884,12 +1327,14 @@ function MultiSelection({
     onSection,
     onTag,
     onDelete,
+    onRemove,
     onClear,
 }: {
     count: number;
     onSection: () => void;
     onTag: (tag: string) => void;
     onDelete: () => void;
+    onRemove: () => void;
     onClear: () => void;
 }) {
     const [tag, setTag] = useState("");
@@ -900,7 +1345,6 @@ function MultiSelection({
                 <button className="small-btn" onClick={onClear} title="取消選取（Esc）">取消選取</button>
             </div>
             <div className="wb-selected-body">
-                <p className="muted wb-hint">拖曳其中一張卡片的把手可以一起移動。</p>
                 <button className="wb-multi-btn" onClick={onSection}><Icon name="section" /> 包成區塊</button>
                 <div className="wb-multi-tag">
                     <input
@@ -926,7 +1370,14 @@ function MultiSelection({
                         加上
                     </button>
                 </div>
-                <button className="danger-btn wb-multi-delete" onClick={onDelete}>刪除 {count} 張卡片（Delete）</button>
+                <div className="wb-delete-choices">
+                    <button className="wb-multi-btn" onClick={onRemove} title="卡片仍保留在卡片庫和其他白板">
+                        <Icon name="close" /> 從白板移除 {count} 張（Delete）
+                    </button>
+                    <button className="danger-btn wb-multi-delete" onClick={onDelete} title="從所有白板和卡片庫中刪除">
+                        <Icon name="trash" /> 完全刪除 {count} 張（Shift＋Delete）
+                    </button>
+                </div>
             </div>
         </section>
     );

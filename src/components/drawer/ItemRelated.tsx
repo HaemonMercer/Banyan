@@ -9,7 +9,7 @@ interface Props {
     related: RelatedItem[];
     /** Runs a change, then reloads the item. */
     run: (fn: () => Promise<unknown>) => void;
-    /** Selects the item in the list (switching to 我的文獻庫 if it isn't shown). */
+    /** Selects the item in the list (switching to 我的 Drawer if it isn't shown). */
     onOpenItem: (id: number) => void;
     onError: (message: string) => void;
     /** Items are being dragged over this section. */
@@ -115,9 +115,6 @@ function ItemRelated({ itemId, related, run, onOpenItem, onError, dropActive, co
                     </div>
                 )}
 
-                {related.length === 0 && !picking && (
-                    <p className="muted">沒有關聯的條目。按「＋ 新增」，或把清單中的條目拖到這裡。</p>
-                )}
                 <ul className="related-items">
                     {related.map((r) => (
                         <li key={r.id}>

@@ -72,6 +72,8 @@ pub struct Collection {
     id: i64,
     name: String,
     parent_id: Option<i64>,
+    /// "list" or "gallery".
+    view: String,
 }
 
 #[derive(Serialize)]
@@ -82,8 +84,68 @@ pub struct ItemSummary {
     title: String,
     authors: String,
     date: String,
+    publication: String,
+    publisher: String,
+    series: String,
+    place: String,
     attachment_count: i64,
+    /// First attachment that is a picture (shown in galleries).
+    image_id: Option<i64>,
+    created_at: i64,
     updated_at: i64,
+}
+
+/// Item types a gallery folder accepts (藝術與圖像).
+pub const IMAGE_TYPES: [&str; 4] = ["painting", "artwork", "photo", "map"];
+const GALLERY_ONLY: &str = "畫廊只能放圖片類的條目（繪畫、藝術品、照片、地圖）";
+/// Attachments with these extensions count as pictures.
+const IMAGE_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg"];
+
+fn is_image_file(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+fn is_gallery(conn: &Connection, collection_id: i64) -> Result<bool> {
+    Ok(conn
+        .query_row("SELECT view = 'gallery' FROM collections WHERE id = ?1", [collection_id], |r| r.get(0))
+        .optional()?
+        .unwrap_or(false))
+}
+
+/// Errors when the item may not go into the collection (a gallery takes image items only).
+fn check_fits(conn: &Connection, item_id: i64, collection_id: i64) -> Result<()> {
+    if !is_gallery(conn, collection_id)? {
+        return Ok(());
+    }
+    let item_type: Option<String> = conn
+        .query_row("SELECT item_type FROM items WHERE id = ?1", [item_id], |r| r.get(0))
+        .optional()?;
+    match item_type {
+        Some(t) if !IMAGE_TYPES.contains(&t.as_str()) => Err(Error(GALLERY_ONLY.into())),
+        _ => Ok(()),
+    }
+}
+
+/// Errors when an item that is in a gallery would get a type that isn't an image type.
+fn check_type_change(conn: &Connection, item_id: i64, item_type: &str) -> Result<()> {
+    if IMAGE_TYPES.contains(&item_type) {
+        return Ok(());
+    }
+    let gallery: Option<String> = conn
+        .query_row(
+            "SELECT c.name FROM item_collections ic JOIN collections c ON c.id = ic.collection_id
+             WHERE ic.item_id = ?1 AND c.view = 'gallery' LIMIT 1",
+            [item_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match gallery {
+        Some(name) => Err(Error(format!("條目在畫廊「{name}」裡，只能是圖片類的類型（繪畫、藝術品、照片、地圖）"))),
+        None => Ok(()),
+    }
 }
 
 /// The editable metadata of an item.
@@ -141,6 +203,12 @@ item_fields! {
     place,
     /// Catalogue or inventory number.
     catalog_number,
+    /// Series the item belongs to: a book series, film franchise, series of paintings…
+    series,
+    /// Position within the series, e.g. "3", "第 2 部".
+    series_number,
+    /// The item's text pasted as-is, e.g. a news article (原文).
+    full_text,
 }
 
 #[derive(Serialize)]
@@ -230,12 +298,13 @@ pub fn list_collections(state: State<'_, DrawerState>) -> Result<Vec<Collection>
     let lib = state.lock();
     let conn = &lib.conn;
     let mut stmt =
-        conn.prepare("SELECT id, name, parent_id FROM collections ORDER BY name COLLATE NOCASE")?;
+        conn.prepare("SELECT id, name, parent_id, view FROM collections ORDER BY name COLLATE NOCASE")?;
     let rows = stmt.query_map([], |r| {
         Ok(Collection {
             id: r.get(0)?,
             name: r.get(1)?,
             parent_id: r.get(2)?,
+            view: r.get(3)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -246,22 +315,60 @@ pub fn create_collection(
     state: State<'_, DrawerState>,
     name: String,
     parent_id: Option<i64>,
+    view: Option<String>,
 ) -> Result<Collection> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err(Error("資料夾名稱不能是空的".into()));
     }
+    let view = view.unwrap_or_else(|| "list".into());
+    check_view(&view)?;
     let lib = state.lock();
     let conn = &lib.conn;
     conn.execute(
-        "INSERT INTO collections (name, parent_id, created_at) VALUES (?1, ?2, ?3)",
-        params![name, parent_id, now_ms()],
+        "INSERT INTO collections (name, parent_id, created_at, view) VALUES (?1, ?2, ?3, ?4)",
+        params![name, parent_id, now_ms(), view],
     )?;
     Ok(Collection {
         id: conn.last_insert_rowid(),
         name,
         parent_id,
+        view,
     })
+}
+
+fn check_view(view: &str) -> Result<()> {
+    match view {
+        "list" | "gallery" => Ok(()),
+        _ => Err(Error(format!("未知的顯示方式：{view}"))),
+    }
+}
+
+/// Changes how a folder shows its items. A folder becomes a gallery only when everything in
+/// it is an image item.
+#[tauri::command]
+pub fn set_collection_view(state: State<'_, DrawerState>, id: i64, view: String) -> Result<()> {
+    check_view(&view)?;
+    let lib = state.lock();
+    let conn = &lib.conn;
+    if view == "gallery" {
+        let others: i64 = conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM item_collections ic JOIN items i ON i.id = ic.item_id
+                 WHERE ic.collection_id = ?1 AND i.item_type NOT IN ({})",
+                IMAGE_TYPES.map(|t| format!("'{t}'")).join(", ")
+            ),
+            [id],
+            |r| r.get(0),
+        )?;
+        if others > 0 {
+            return Err(Error(format!(
+                "資料夾裡有 {others} 個不是圖片類的條目，不能改成畫廊。畫廊只能放繪畫、藝術品、照片、地圖。"
+            )));
+        }
+    }
+    conn.execute("UPDATE collections SET view = ?1 WHERE id = ?2", params![view, id])?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -311,9 +418,17 @@ pub fn list_items(state: State<'_, DrawerState>, filter: ItemFilter) -> Result<V
         .filter(|c| **c != "item_type")
         .map(|c| format!("i.{c} LIKE ?3 ESCAPE '\\' OR "))
         .collect();
+    let image_match: String = IMAGE_EXTS
+        .iter()
+        .map(|e| format!("lower(a.file_name) LIKE '%.{e}'"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
     let sql = format!(
         r"SELECT i.id, i.item_type, i.title, i.authors, i.date, i.updated_at,
-                 (SELECT COUNT(*) FROM attachments a WHERE a.item_id = i.id)
+                 (SELECT COUNT(*) FROM attachments a WHERE a.item_id = i.id),
+                 i.publication, i.publisher, i.series, i.place, i.created_at,
+                 (SELECT a.id FROM attachments a WHERE a.item_id = i.id AND ({image_match})
+                  ORDER BY a.created_at, a.id LIMIT 1)
           FROM items i
           WHERE (?1 IS NULL OR EXISTS (SELECT 1 FROM item_collections ic
                                        WHERE ic.item_id = i.id AND ic.collection_id = ?1))
@@ -341,6 +456,12 @@ pub fn list_items(state: State<'_, DrawerState>, filter: ItemFilter) -> Result<V
             date: r.get(4)?,
             updated_at: r.get(5)?,
             attachment_count: r.get(6)?,
+            publication: r.get(7)?,
+            publisher: r.get(8)?,
+            series: r.get(9)?,
+            place: r.get(10)?,
+            created_at: r.get(11)?,
+            image_id: r.get(12)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -432,6 +553,11 @@ pub fn create_item(
 ) -> Result<ItemDetail> {
     let mut lib = state.lock();
     let conn = &mut lib.conn;
+    if let Some(cid) = collection_id {
+        if is_gallery(conn, cid)? && !IMAGE_TYPES.contains(&item_type.as_str()) {
+            return Err(Error(GALLERY_ONLY.into()));
+        }
+    }
     let tx = conn.transaction()?;
     let now = now_ms();
     tx.execute(
@@ -453,6 +579,7 @@ pub fn create_item(
 pub fn update_item(state: State<'_, DrawerState>, id: i64, fields: ItemFields) -> Result<()> {
     let lib = state.lock();
     let conn = &lib.conn;
+    check_type_change(conn, id, &fields.item_type)?;
     let assignments: Vec<String> = ItemFields::COLUMNS.iter().map(|c| format!("{c} = ?")).collect();
     let sql = format!(
         "UPDATE items SET {}, updated_at = ? WHERE id = ?",
@@ -673,6 +800,9 @@ pub fn set_item_collections(
 ) -> Result<()> {
     let mut lib = state.lock();
     let conn = &mut lib.conn;
+    for &cid in &collection_ids {
+        check_fits(conn, id, cid)?;
+    }
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM item_collections WHERE item_id = ?1", [id])?;
     for cid in collection_ids {
@@ -705,6 +835,9 @@ pub fn add_items_to_collection(
     if !exists {
         return Err(Error("找不到這個資料夾".into()));
     }
+    for &id in &item_ids {
+        check_fits(conn, id, collection_id)?;
+    }
     let tx = conn.transaction()?;
     let mut added = 0;
     for &id in &item_ids {
@@ -727,6 +860,24 @@ pub fn add_items_to_collection(
     }
     tx.commit()?;
     Ok(added)
+}
+
+/// Distinct non-empty values of one text field, most used first (for autocomplete, e.g. series).
+#[tauri::command]
+pub fn field_values(state: State<'_, DrawerState>, field: String) -> Result<Vec<String>> {
+    if !ItemFields::COLUMNS.contains(&field.as_str()) || field == "item_type" {
+        return Err(Error("無效的欄位".into()));
+    }
+    let lib = state.lock();
+    let values = lib
+        .conn
+        .prepare(&format!(
+            "SELECT {field} FROM items WHERE trim({field}) <> ''
+             GROUP BY {field} ORDER BY COUNT(*) DESC, {field} COLLATE NOCASE LIMIT 200"
+        ))?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(values)
 }
 
 // ---------- related items ----------
@@ -810,7 +961,7 @@ fn remove_dir_if_exists(dir: &Path) -> std::io::Result<()> {
 }
 
 /// Picks a file name inside `dir` that does not exist yet: `a.pdf`, `a (2).pdf`, ...
-fn unique_target(dir: &Path, file_name: &str) -> PathBuf {
+pub(crate) fn unique_target(dir: &Path, file_name: &str) -> PathBuf {
     let candidate = dir.join(file_name);
     if !candidate.exists() {
         return candidate;
@@ -931,6 +1082,48 @@ pub fn add_attachments(
 ) -> Result<Vec<Attachment>> {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     import_files(&state, item_id, &paths)
+}
+
+/// The attachment's bytes, sent to the page without JSON encoding (gallery pictures).
+#[tauri::command]
+pub fn read_attachment(state: State<'_, DrawerState>, id: i64) -> Result<tauri::ipc::Response> {
+    let path = attachment_path(&state, id)?;
+    Ok(tauri::ipc::Response::new(fs::read(path)?))
+}
+
+/// Picture files dropped onto a gallery: each becomes a 照片 item (titled after the file) in the
+/// gallery, with the file attached. Other files are skipped. Returns the new items' ids.
+#[tauri::command]
+pub fn import_images(state: State<'_, DrawerState>, collection_id: i64, paths: Vec<String>) -> Result<Vec<i64>> {
+    let mut ids = Vec::new();
+    for path in paths.iter().map(PathBuf::from) {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !path.is_file() || !is_image_file(name) {
+            continue;
+        }
+        let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let id = {
+            let lib = state.lock();
+            let conn = &lib.conn;
+            if !is_gallery(conn, collection_id)? {
+                return Err(Error("只能把圖片直接拖進畫廊".into()));
+            }
+            let now = now_ms();
+            conn.execute(
+                "INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('photo', ?1, ?2, ?2)",
+                params![title, now],
+            )?;
+            let id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO item_collections (item_id, collection_id) VALUES (?1, ?2)",
+                params![id, collection_id],
+            )?;
+            id
+        };
+        import_files(&state, id, &[path])?;
+        ids.push(id);
+    }
+    Ok(ids)
 }
 
 fn attachment_path(state: &DrawerState, id: i64) -> Result<PathBuf> {
@@ -1127,6 +1320,9 @@ pub fn remove_items_from_collection(
 #[tauri::command]
 pub fn bulk_set_type(state: State<'_, DrawerState>, item_ids: Vec<i64>, item_type: String) -> Result<()> {
     let mut lib = state.lock();
+    for &id in &item_ids {
+        check_type_change(&lib.conn, id, &item_type)?;
+    }
     let tx = lib.conn.transaction()?;
     for &id in &item_ids {
         tx.execute("UPDATE items SET item_type = ?1 WHERE id = ?2", params![item_type, id])?;
