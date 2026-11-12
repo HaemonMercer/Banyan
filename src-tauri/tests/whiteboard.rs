@@ -184,74 +184,7 @@ fn cards_refer_to_drawer_items() {
 }
 
 #[test]
-fn wiki_links_create_two_way_links() {
-    let (app, root) = setup();
-    let s = || app.state::<DrawerState>();
-    let board = j(create_whiteboard(s(), "主板".into(), None).unwrap())["id"].as_i64().unwrap();
-    let other = j(create_whiteboard(s(), "別板".into(), None).unwrap())["id"].as_i64().unwrap();
-
-    let src = j(create_card(s(), board, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
-    let near = j(create_card(s(), board, 300.0, 0.0).unwrap())["id"].as_i64().unwrap();
-    let far = j(create_card(s(), other, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
-    let english = j(create_card(s(), other, 300.0, 0.0).unwrap())["id"].as_i64().unwrap();
-    update_card(s(), src, "來源".into(), String::new()).unwrap();
-    // Same title on two boards: the one sharing a board with `src` wins, even if older.
-    update_card(s(), near, "同名".into(), String::new()).unwrap();
-    update_card(s(), far, "同名".into(), String::new()).unwrap();
-    update_card(s(), english, "Rust Notes".into(), String::new()).unwrap();
-
-    let titles = vec![
-        " 同名 ".to_string(),
-        "rust notes".to_string(), // ASCII case-insensitive
-        "同名".to_string(),       // duplicate target
-        "來源".to_string(),       // itself: skipped
-        "不存在".to_string(),     // no match: skipped
-        "".to_string(),
-    ];
-    let created = j(sync_wiki_links(s(), src, titles.clone()).unwrap());
-    let created = created.as_array().unwrap();
-    assert_eq!(created.len(), 2);
-    let pairs: Vec<(i64, i64)> = created
-        .iter()
-        .map(|l| (l["cardA"].as_i64().unwrap(), l["cardB"].as_i64().unwrap()))
-        .collect();
-    assert!(pairs.contains(&(src.min(near), src.max(near))));
-    assert!(pairs.contains(&(src.min(english), src.max(english))));
-
-    // Two-way: the target sees the link too.
-    let back = j(list_card_links(s(), near).unwrap());
-    assert_eq!(back.as_array().unwrap().len(), 1);
-    assert_eq!(back[0]["cardId"], src);
-
-    // Running again creates nothing new; existing hand-made links are not reported.
-    assert_eq!(j(sync_wiki_links(s(), src, titles).unwrap()).as_array().unwrap().len(), 0);
-    link_cards(s(), src, far, None).unwrap();
-    assert_eq!(
-        j(sync_wiki_links(s(), far, vec!["來源".into()]).unwrap()).as_array().unwrap().len(),
-        0
-    );
-
-    // Backward: `[[後來]]` written before the card "後來" exists links once that card is saved.
-    update_card(s(), src, "來源".into(), "先寫 [[後來]] 與 [[別名|顯示]]，`code` 不算".into()).unwrap();
-    let later = j(create_card(s(), other, 600.0, 0.0).unwrap())["id"].as_i64().unwrap();
-    update_card(s(), later, "後來".into(), String::new()).unwrap();
-    let back = j(sync_wiki_links(s(), later, vec![]).unwrap());
-    assert_eq!(back.as_array().unwrap().len(), 1);
-    assert_eq!(back[0]["cardA"], src.min(later));
-    let alias = j(create_card(s(), other, 900.0, 0.0).unwrap())["id"].as_i64().unwrap();
-    update_card(s(), alias, "別名".into(), String::new()).unwrap();
-    assert_eq!(j(sync_wiki_links(s(), alias, vec![]).unwrap()).as_array().unwrap().len(), 1);
-    // A title that only appears as plain text (no brackets) does not link.
-    let plain = j(create_card(s(), other, 0.0, 300.0).unwrap())["id"].as_i64().unwrap();
-    update_card(s(), plain, "code".into(), String::new()).unwrap();
-    assert_eq!(j(sync_wiki_links(s(), plain, vec![]).unwrap()).as_array().unwrap().len(), 0);
-
-    assert!(sync_wiki_links(s(), 9999, vec!["同名".into()]).is_err());
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn folders_directed_links_and_graph() {
+fn folders_and_directed_links() {
     let (app, root) = setup();
     let s = || app.state::<DrawerState>();
 
@@ -276,7 +209,6 @@ fn folders_directed_links_and_graph() {
     let a = j(create_card(s(), b1, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
     let b = j(create_card(s(), b1, 300.0, 0.0).unwrap())["id"].as_i64().unwrap();
     let c = j(create_card(s(), b2, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
-    let loose = j(create_card(s(), b2, 0.0, 300.0).unwrap())["id"].as_i64().unwrap();
     let l = j(link_cards(s(), b, a, Some(true)).unwrap()); // b → a, stored as (a, b)
     assert_eq!(l["cardA"], a);
     assert_eq!(l["direction"], 2);
@@ -292,26 +224,6 @@ fn folders_directed_links_and_graph() {
     let undirected = j(link_cards(s(), a, c, None).unwrap());
     assert_eq!(undirected["direction"], 0);
     assert_eq!(j(get_whiteboard(s(), b1).unwrap())["links"][0]["note"], "支持");
-
-    // [[ ]] links point from the card that mentions.
-    update_card(s(), c, "C".into(), String::new()).unwrap();
-    update_card(s(), loose, "D".into(), "見 [[C]]".into()).unwrap();
-    let made = j(sync_wiki_links(s(), loose, vec!["C".into()]).unwrap());
-    let (from, to) = if made[0]["direction"] == 1 { (made[0]["cardA"].clone(), made[0]["cardB"].clone()) } else { (made[0]["cardB"].clone(), made[0]["cardA"].clone()) };
-    assert_eq!((from, to), (serde_json::json!(loose), serde_json::json!(c)));
-
-    // Graph: everything, or just some boards.
-    let item = j(banyan_lib::drawer::create_item(s(), "book".into(), None).unwrap())["id"].as_i64().unwrap();
-    link_card_item(s(), a, item).unwrap();
-    let g = j(get_graph(s(), None, None).unwrap());
-    assert_eq!(g["cards"].as_array().unwrap().len(), 4);
-    assert_eq!(g["links"].as_array().unwrap().len(), 3);
-    assert_eq!(g["items"].as_array().unwrap().len(), 1);
-    assert_eq!(g["refs"][0]["cardId"], a);
-    let g = j(get_graph(s(), Some(vec![b1]), None).unwrap());
-    assert_eq!(g["cards"].as_array().unwrap().len(), 2);
-    assert_eq!(g["links"].as_array().unwrap().len(), 1, "links leaving the boards are left out");
-    assert_eq!(g["cards"][0]["boardIds"][0], b1);
 
     // Deleting a folder deletes its sub-folders; boards move to the top level.
     delete_whiteboard_folder(s(), top).unwrap();
@@ -398,11 +310,6 @@ fn sections_tags_library_and_batches() {
     assert_eq!(detail["tags"], serde_json::json!(["AI", "研究"]));
     assert_eq!(detail["boards"][0]["id"], board);
     assert!(get_card(s(), 9999).is_err());
-
-    // Graph filtered by tag.
-    let g = j(get_graph(s(), None, Some("ai".into())).unwrap());
-    assert_eq!(g["cards"].as_array().unwrap().len(), 2);
-    assert_eq!(g["links"].as_array().unwrap().len(), 1);
 
     // Batch delete removes cards, links and tags.
     delete_cards(s(), vec![a, b]).unwrap();
@@ -552,7 +459,7 @@ fn board_objects_of_other_kinds() {
     let f: CardQuery = serde_json::from_value(serde_json::json!({ "query": "甲" })).unwrap();
     let hits = j(list_cards(s(), f).unwrap());
     assert_eq!(hits[0]["kind"], "mindmap", "mind maps are found by their outline");
-    // Tables (Numbers-style): cells in data, a Markdown table in content.
+    // Tables (Numbers-style): cells in data, their text in content.
     let table = j(create_board_object(s(), board, "table".into(), 0.0, 600.0, 400.0, 200.0, "預算".into(), "| A |
 |---|
 | 1 |".into(), r#"{"cols":[]}"#.into()).unwrap());
@@ -624,6 +531,75 @@ fn library_shows_sections_and_board_size() {
     let moved = list.as_array().unwrap().iter().find(|c| c["id"] == card).unwrap();
     assert_eq!(moved["sections"].as_array().unwrap().len(), 0);
 
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn wiki_links_create_two_way_links() {
+    let (app, root) = setup();
+    let s = || app.state::<DrawerState>();
+    let board = j(create_whiteboard(s(), "主板".into(), None).unwrap())["id"].as_i64().unwrap();
+    let other = j(create_whiteboard(s(), "別板".into(), None).unwrap())["id"].as_i64().unwrap();
+
+    let src = j(create_card(s(), board, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    let near = j(create_card(s(), board, 300.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    let far = j(create_card(s(), other, 0.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    let english = j(create_card(s(), other, 300.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    let by_id = j(create_card(s(), other, 600.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    update_card(s(), src, "來源".into(), String::new()).unwrap();
+    // Same title on two boards: the one sharing a board with `src` wins, even if older.
+    update_card(s(), near, "同名".into(), String::new()).unwrap();
+    update_card(s(), far, "同名".into(), String::new()).unwrap();
+    update_card(s(), english, "Rust Notes".into(), String::new()).unwrap();
+
+    let targets = vec![
+        " 同名 ".to_string(),
+        "rust notes".to_string(),     // case-insensitive
+        "同名".to_string(),           // duplicate target
+        "來源".to_string(),           // itself: skipped
+        "不存在".to_string(),         // no match: skipped
+        format!("card:{by_id}"),      // by id
+        format!("card:{src}"),        // itself by id: skipped
+        "card:999999".to_string(),    // missing id: skipped
+        "@kahneman2011".to_string(),  // citation key: skipped
+        "board:1".to_string(),        // other kinds: skipped
+        "".to_string(),
+    ];
+    let created = j(sync_wiki_links(s(), src, targets.clone()).unwrap());
+    let created = created.as_array().unwrap();
+    assert_eq!(created.len(), 3);
+    let pairs: Vec<(i64, i64)> = created
+        .iter()
+        .map(|l| (l["cardA"].as_i64().unwrap(), l["cardB"].as_i64().unwrap()))
+        .collect();
+    assert!(pairs.contains(&(src.min(near), src.max(near))));
+    assert!(pairs.contains(&(src.min(english), src.max(english))));
+    assert!(pairs.contains(&(src.min(by_id), src.max(by_id))));
+
+    // Two-way: the target sees the link too.
+    let back = j(list_card_links(s(), near).unwrap());
+    assert_eq!(back.as_array().unwrap().len(), 1);
+    assert_eq!(back[0]["cardId"], src);
+
+    // Running again creates nothing new.
+    assert_eq!(j(sync_wiki_links(s(), src, targets).unwrap()).as_array().unwrap().len(), 0);
+
+    // Backward: `[[後來]]` / `[[card:id|…]]` written before the card is saved links it then.
+    let later = j(create_card(s(), other, 900.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    let alias = j(create_card(s(), other, 1200.0, 0.0).unwrap())["id"].as_i64().unwrap();
+    update_card(s(), src, "來源".into(), format!("先寫 [[後來]] 與 [[card:{alias}|別名]]")).unwrap();
+    update_card(s(), later, "後來".into(), String::new()).unwrap();
+    let back = j(sync_wiki_links(s(), later, vec![]).unwrap());
+    assert_eq!(back.as_array().unwrap().len(), 1);
+    assert_eq!(back[0]["cardA"], src.min(later));
+    assert_eq!(j(sync_wiki_links(s(), alias, vec![]).unwrap()).as_array().unwrap().len(), 1);
+    // A title that only appears as plain text (no brackets) does not link.
+    let plain = j(create_card(s(), other, 0.0, 300.0).unwrap())["id"].as_i64().unwrap();
+    update_card(s(), plain, "先寫".into(), String::new()).unwrap();
+    assert_eq!(j(sync_wiki_links(s(), plain, vec![]).unwrap()).as_array().unwrap().len(), 0);
+
+    assert!(sync_wiki_links(s(), 999999, vec!["同名".into()]).is_err());
     drop(app);
     let _ = fs::remove_dir_all(root);
 }

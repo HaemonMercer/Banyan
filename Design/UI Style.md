@@ -21,14 +21,14 @@
 | `src/styles/components.css` | 共用元件：窗格標題、按鈕、輸入框、樹狀清單、選單、標籤、分段按鈕、對話框、提示、拖曳 |
 | `src/styles/index.css` | 依序匯入以上三個檔案；只在 `main.tsx` 匯入一次 |
 | `src/theme.ts` | 主題切換（跟隨系統／淺色／深色），存在 `localStorage` 的 `banyan.theme` |
-| 各模組 CSS | 只寫該模組的版面與專屬元件（`Drawer.css`、`Whiteboard.css`、`Graph.css`、`markdown.css`…） |
+| 各模組 CSS | 只寫該模組的版面與專屬元件（`Drawer.css`、`Whiteboard.css`、`PlainText.css`…） |
 
 ## 顏色
 
 ### 表面（由下到上）
 | 變數 | 淺色 | 深色 | 用途 |
 |---|---|---|---|
-| `--bg` | `#f6f5f1` | `#1a1a19` | 視窗底色、白板與關係圖畫布 |
+| `--bg` | `#f6f5f1` | `#1a1a19` | 視窗底色、白板畫布 |
 | `--sidebar` | `#efeee9` | `#1e1e1d` | 左側直欄、左欄 |
 | `--pane` | `#ffffff` | `#232322` | 中欄、右欄、卡片 |
 | `--raised` | `#ffffff` | `#2a2a28` | 選單、對話框、浮動面板（縮放列、節點資訊） |
@@ -61,7 +61,7 @@
 | `--info` | 資訊、`:::info` |
 
 ### 畫布
-`--canvas-dot`（白板點格）、`--link-line`（白板與關係圖的連線）。
+`--canvas-dot`（白板點格）、`--link-line`（白板的連線）。
 
 ## 文字
 
@@ -78,7 +78,7 @@
 | `--fs-2xl` | 20px | 頁面標題（保留） |
 
 - 字重只用 400／500／600／700（`--fw-*`）；區塊標題（資料夾、標籤、清單欄名）用 11px 半粗體＋ 0.04em 字距。
-- 行高：介面 `--lh-tight`（1.3），段落與 Markdown `--lh-body`（1.5）。數字欄位用等寬數字（`tabular-nums`）。
+- 行高：介面 `--lh-tight`（1.3），段落與卡片文字 `--lh-body`（1.5）。數字欄位用等寬數字（`tabular-nums`）。
 
 ## 間距與尺寸
 
@@ -115,11 +115,12 @@
 | 輸入框 | `.input`、`.search input`、`.wb-search` | 28px 高；停留加深框線；聚焦綠框＋光暈 |
 | 行內欄位 | 右欄條目詳情 | 平時無框，停留細框，聚焦綠框 |
 | 樹狀列 | `.tree-row` | 左右留 4px、圓角；選取為淡綠底＋深綠字 |
-| 選單 | `.menu`、`.wb-mini-menu`、`.wiki-complete` | `--raised` 底、8px 圓角、`--shadow-md`，出現時淡入下滑 3px |
+| 選單 | `.menu`、`.wb-mini-menu` | `--raised` 底、8px 圓角、`--shadow-md`，出現時淡入下滑 3px |
 | 分段按鈕／分頁 | `.wb-seg`、`.wb-tabs` | 灰底膠囊，選取項為白底＋小陰影 |
 | 標籤 | `.tag`、`.badge` | 膠囊形、淡綠底、深綠字 |
 | 對話框 | `.modal` | 12px 圓角、`--shadow-lg`、背景遮罩 `--overlay` |
-| 提示訊息 | `.toast`（錯誤）、`.toast.info` | 畫面底部置中，從下方淡入 |
+| 確認對話框 | `ask()`（`components/Feedback.tsx`，`.modal.ask`） | 取代 `window.confirm`：粗體問題＋灰字說明，按鈕寫動作（「刪除」「還原」），不寫「確定」。刪除類 `danger: true`：紅色按鈕、焦點先在「取消」、Enter 不會直接刪除。Esc 或點遮罩取消；多個依序顯示；在所有層（閱讀器、浮動視窗）之上 |
+| 提示訊息 | `<Toast>`＋`useToast()`（`.toast`、`.toast.info`） | 畫面底部置中，從下方淡入。一般訊息依長度顯示 2.5 秒以上（有動作時 6 秒），錯誤至少 8 秒；滑鼠停留時不消失；右側 × 關閉；可帶一個動作按鈕（`.toast-action`，例如「復原」） |
 | 拖曳提示 | `.drag-ghost` | 游標旁的小卡，說明放開後會發生什麼（綠字） |
 
 ## 互動與動畫
@@ -142,16 +143,16 @@
 |---|---|
 | 網格 | 24 × 24，主要內容在 3–21 之間 |
 | 線條 | 1.75px，圓角端點與轉角（`stroke-linecap/linejoin: round`） |
-| 顏色 | `currentColor`，跟著文字顏色；條目類型依分類著色（`--type-literature` 藍、`--type-media` 紫、`--type-performance` 橘、`--type-art` 玫瑰、`--type-other` 灰） |
+| 顏色 | `currentColor`，跟著文字顏色；條目類型依分類著色（`--type-literature` 藍、`--type-media` 紫、`--type-performance` 橘、`--type-art` 玫瑰、`--type-other` 灰、`--type-file` 青綠） |
 | 大小 | 預設 1em（跟著字級）；模組列 20px、樹狀清單 16px、條目清單 15px、按鈕內 14–15px |
 | 填色 | 線條圖示只在很小的實心部位填色（⋯ 的點、資訊符號的點）；Logo 是唯一的實心剪影 |
 
 | 分組 | 數量 | 內容 |
 |---|---|---|
 | Logo | 1 | 雄偉的榕樹剪影：寬闊展開的樹冠、主幹分成五條枝幹、四根落地的支柱根與幾條垂下的氣根，底部一條地面線。App 圖示是綠色漸層圓角方塊（`#3a8c63` → `#245f42`）上的白色 Logo |
-| 模組 | 11 | Drawer、Whiteboard、Graph、Card Hub，以及規劃中的 Writer、Slides、Publisher、Draw、Layout、Base、Version Machine |
+| 模組 | 11 | Drawer、Whiteboard、Annotator、Card Hub，以及規劃中的 Writer、Slides、Publisher、Draw、Layout、Base、Version Machine |
 | 介面 | 56 | 新增、刪除、編輯、搜尋、資料夾、標籤、附件、連結、縮放、主題等 |
-| 條目類型 | 29 | 每種 Drawer 條目類型一個 |
+| 條目類型 | 41 | 每種 Drawer 條目類型一個（文獻庫 30、檔案庫 11；檔案類型都是折角的檔案，裡面畫出種類） |
 
 使用方式：
 
@@ -171,4 +172,5 @@ import { Icon, TypeIcon } from "../icons/Icon";
 2. 先找 `components.css` 有沒有現成元件；需要新的共用元件就加在那裡，不要複製到模組 CSS。
 3. 在淺色與深色主題都看一次。
 4. 次要操作預設隱藏，滑鼠停留或選取時出現。
-5. 圖示用 `<Icon name="…" />`（見下方「圖示」），不要再用 emoji。
+5. 要使用者確認時用 `await ask({…})`，不要用 `window.confirm`；訊息用 `useToast()`，不要在模組裡自己寫。
+6. 圖示用 `<Icon name="…" />`（見下方「圖示」），不要再用 emoji。

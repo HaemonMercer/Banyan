@@ -1,62 +1,86 @@
 /**
- * Shared Markdown layer (文字模型). Built on unified / remark:
+ * Banyan Flavored Markdown engine (see `Design/Markdown Language.md`).
  *
- *   remark-parse → mdast → remark plugins → (remark-rehype → hast → React)
+ *   source ─ parse() ─▶ syntax tree ─┬─ <Markdown> (React, `Markdown.tsx`)
+ *                                    ├─ renderHtml()
+ *                                    ├─ summarize() / plainText()
+ *                                    └─ extractLinks()
  *
- * Every module (Whiteboard cards, Drawer note cards, later Writer / Layout / Publisher)
- * should go through `remarkPlugins` so they all accept the same syntax.
+ * Everything goes through the one `parse()`, so every view agrees on what the text means.
  */
-/// <reference types="mdast-util-directive" />
-import type { Root } from "mdast";
-import remarkDirective from "remark-directive";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import remarkParse from "remark-parse";
-import { unified, type PluggableList } from "unified";
-import { visit } from "unist-util-visit";
-import { remarkBanyanDirectives, remarkWikiLink } from "./plugins";
+import type { Document, MdNode, ParseOptions } from "./ast.ts";
+import { parseDocument } from "./blocks.ts";
 
-export { registerDirective, type DirectiveProps, type DirectiveRenderer } from "./directives";
+export type { Align, Document, MdNode, NodeType, ParseOptions } from "./ast.ts";
+export { renderHtml } from "./html.ts";
 
-/** The syntax Banyan accepts, in order. */
-export const remarkPlugins: PluggableList = [remarkGfm, remarkMath, remarkDirective, remarkBanyanDirectives, remarkWikiLink];
+const cache = new Map<string, Document>();
+const CACHE_MAX = 300;
 
-const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath).use(remarkDirective).use(remarkBanyanDirectives).use(remarkWikiLink);
-
-/** Parses Markdown into an mdast tree with all Banyan plugins applied. */
-export function parseMarkdown(source: string): Root {
-    return parser.runSync(parser.parse(source)) as Root;
+/** Parses BFM. Results are cached (cards re-render often with the same text); treat them as read-only. */
+export function parse(source: string, options?: ParseOptions): Document {
+    if (options) return parseDocument(source, options);
+    const hit = cache.get(source);
+    if (hit) {
+        cache.delete(source);
+        cache.set(source, hit);
+        return hit;
+    }
+    const doc = parseDocument(source);
+    cache.set(source, doc);
+    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+    return doc;
 }
 
-/** Distinct `[[targets]]` in a document, in order of appearance (for backlinks / link indexing). */
-export function extractWikiLinks(source: string): string[] {
-    const seen = new Set<string>();
-    visit(parseMarkdown(source), "wikiLink", (node) => {
-        seen.add((node as { target: string }).target);
-    });
-    return [...seen];
-}
+const BLOCKISH = new Set(["listItem", "tableRow", "tableCell", "callout", "blockquote", "list", "table"]);
 
-const BLOCK_CONTAINERS = new Set(["list", "listItem", "blockquote", "table", "tableRow", "containerDirective"]);
+/** The readable text of nodes (links as their text, `[[links]]` as their label, math as source). */
+export function plainText(nodes: MdNode[] | undefined): string {
+    let s = "";
+    for (const n of nodes ?? []) {
+        switch (n.type) {
+            case "text":
+            case "code":
+            case "math":
+            case "codeBlock":
+            case "mathBlock":
+                s += n.value ?? "";
+                break;
+            case "softBreak":
+            case "hardBreak":
+                s += " ";
+                break;
+            case "wikiLink":
+                s += n.label || n.target || "";
+                break;
+            case "tag":
+                s += "#" + (n.name ?? "");
+                break;
+            case "htmlInline":
+            case "htmlBlock":
+            case "comment":
+            case "commentBlock":
+            case "footnoteRef":
+                break;
+            default:
+                if (n.type === "callout" && n.titleChildren?.length) s += plainText(n.titleChildren) + " ";
+                s += BLOCKISH.has(n.type)
+                    ? (n.children ?? []).map((c) => plainText([c])).join(" ")
+                    : plainText(n.children);
+        }
+    }
+    return s;
+}
 
 /**
- * A short plain-text summary of a document (e.g. for a zoomed-out card): blocks joined by
- * " · ", `[[links]]` as their label, math as its source, cut at `max` characters.
+ * A one-line summary (zoomed-out cards, lists): blocks joined by " · ", cut at `max` characters.
  */
-export function summarizeMarkdown(source: string, max = 120): string {
-    const textOf = (node: unknown): string => {
-        const n = node as { type: string; value?: string; label?: string; target?: string; children?: unknown[] };
-        if (n.type === "wikiLink") return n.label || n.target || "";
-        if (typeof n.value === "string" && n.type !== "html") return n.value;
-        // List items, table cells and the like are separate pieces of text; inline runs are not.
-        const sep = BLOCK_CONTAINERS.has(n.type) ? " " : "";
-        return (n.children ?? []).map(textOf).join(sep);
-    };
+export function summarize(source: string, max = 120): string {
     const blocks: string[] = [];
     let length = 0;
-    for (const block of parseMarkdown(source).children) {
-        if (block.type === "definition" || block.type === "html") continue;
-        const t = textOf(block).replace(/\s+/g, " ").trim();
+    for (const block of parse(source).children) {
+        if (block.type === "htmlBlock" || block.type === "commentBlock" || block.type === "thematicBreak") continue;
+        const t = plainText([block]).replace(/\s+/g, " ").trim();
         if (!t) continue;
         blocks.push(t);
         length += t.length;
@@ -64,4 +88,40 @@ export function summarizeMarkdown(source: string, max = 120): string {
     }
     const out = blocks.join(" · ");
     return out.length > max ? out.slice(0, max - 1).trimEnd() + "…" : out;
+}
+
+export interface ExtractedLink {
+    target: string;
+    label: string;
+    embed: boolean;
+}
+
+/** `[[links]]` in order of appearance, each target once. */
+export function extractLinks(source: string): ExtractedLink[] {
+    const seen = new Map<string, ExtractedLink>();
+    const walk = (nodes: MdNode[] | undefined) => {
+        for (const n of nodes ?? []) {
+            if (n.type === "wikiLink" && n.target && !seen.has(n.target)) {
+                seen.set(n.target, { target: n.target, label: n.label ?? "", embed: !!n.embed });
+            }
+            walk(n.children);
+            walk(n.titleChildren);
+        }
+    };
+    walk(parse(source).children);
+    return [...seen.values()];
+}
+
+/** `#tags` in order of appearance, each once. */
+export function extractTags(source: string): string[] {
+    const seen = new Set<string>();
+    const walk = (nodes: MdNode[] | undefined) => {
+        for (const n of nodes ?? []) {
+            if (n.type === "tag" && n.name) seen.add(n.name);
+            walk(n.children);
+            walk(n.titleChildren);
+        }
+    };
+    walk(parse(source).children);
+    return [...seen];
 }

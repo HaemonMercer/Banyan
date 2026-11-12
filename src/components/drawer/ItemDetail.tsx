@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "../../icons/Icon";
-import { drawerApi, errorMessage, linkedNotice, pickFields, type Collection, type ItemDetail as Item, type ItemFields } from "../../drawer/api";
+import { drawerApi, errorMessage, attachNotice, pickFields, type Collection, type ItemDetail as Item, type ItemFields } from "../../drawer/api";
 import { collectionPath } from "../../drawer/collections";
 import CreatorsEditor from "./CreatorsEditor";
 import ItemCards from "./ItemCards";
@@ -8,7 +8,10 @@ import ItemRelated from "./ItemRelated";
 import SectionHeader from "./SectionHeader";
 import ItemFullText, { firstLine } from "./ItemFullText";
 import { usePersistentSet } from "../../drawer/usePersistentSet";
-import { GROUP_LABELS, fieldLabel, formatSize, groupedTypes, isImageType, itemType } from "../../drawer/itemTypes";
+import { GROUP_LABELS, fieldLabel, formatSize, groupedTypes, isImageType, itemType, libraryOf } from "../../drawer/itemTypes";
+import FilePreview from "./FilePreview";
+import { canRead, type ReaderFile } from "../reader/Reader";
+import { ask, splitAsk } from "../Feedback";
 
 interface Props {
     itemId: number;
@@ -17,6 +20,8 @@ interface Props {
     reloadKey: number;
     onChanged: () => void;
     onDelete: (id: number) => void;
+    /** The item is gone (a 檔案庫 item whose last file was removed). */
+    onRemoved: () => void;
     onError: (message: string) => void;
     onInfo: (message: string) => void;
     /** Opens a note card in Whiteboard. */
@@ -25,10 +30,12 @@ interface Props {
     onOpenItem: (id: number) => void;
     /** Items are being dragged over the 關聯 section. */
     relatedDropActive: boolean;
+    /** Opens files in the full-window reader. */
+    onRead: (files: ReaderFile[], index: number) => void;
 }
 
 function ItemDetail({
-    itemId, collections, reloadKey, onChanged, onDelete, onError, onInfo, onOpenCard, onOpenItem, relatedDropActive,
+    itemId, collections, reloadKey, onChanged, onDelete, onRemoved, onError, onInfo, onOpenCard, onOpenItem, relatedDropActive, onRead,
 }: Props) {
     const [item, setItem] = useState<Item | null>(null);
     const [draft, setDraft] = useState<ItemFields | null>(null);
@@ -94,12 +101,21 @@ function ItemDetail({
 
     if (!item || !draft) return <aside className="drawer-pane drawer-detail" />;
 
-    const SECTIONS = ["info", "fullText", "cards", "tags", "folders", "attachments", "related"];
+    const SECTIONS = ["preview", "info", "fullText", "cards", "tags", "folders", "attachments", "related"];
     const allFolded = SECTIONS.every((s) => folded.has(s));
     /** Opens a folded section, e.g. when its "add" button is used. */
     const unfold = (id: string) => folded.has(id) && toggleFolded(id);
 
     const type = itemType(draft.itemType);
+    /** A 檔案庫 item: the file comes first, and there are no bibliographic fields or people. */
+    const library = libraryOf(draft.itemType);
+    const isFile = library === "files";
+    const mainFile = isFile ? item.attachments[0] : undefined;
+    /** The item's files the reader can show; ‹ › in the reader go through them. */
+    const readable = item.attachments.filter(canRead);
+    const read = (id: number) => onRead(readable, Math.max(0, readable.findIndex((a) => a.id === id)));
+    const openFile = (a: { id: number; fileName: string }) =>
+        canRead(a) ? read(a.id) : run(() => drawerApi.openAttachment(a.id));
     const set = (key: keyof ItemFields, value: string) => setDraft({ ...draft, [key]: value });
 
     const run = async (fn: () => Promise<unknown>) => {
@@ -147,7 +163,7 @@ function ItemDetail({
                         save();
                     }}
                 >
-                    {groupedTypes().map(([group, types]) => (
+                    {groupedTypes(library).map(([group, types]) => (
                         <optgroup key={group} label={GROUP_LABELS[group]}>
                             {types.map((t) => (
                                 <option key={t.id} value={t.id} disabled={inGallery && !isImageType(t.id)}>
@@ -177,15 +193,38 @@ function ItemDetail({
                 />
             </div>
 
+            {mainFile && (
+                <section className="detail-section">
+                    <SectionHeader title="預覽" collapsed={folded.has("preview")} onToggle={() => toggleFolded("preview")}>
+                        {canRead(mainFile) && (
+                            <button className="small-btn" title="在 Banyan 中閱讀（整個視窗）" onClick={() => read(mainFile.id)}>閱讀</button>
+                        )}
+                        <button className="small-btn" title="用預設程式開啟" onClick={() => run(() => drawerApi.openAttachment(mainFile.id))}>開啟</button>
+                        <button className="small-btn" title="在檔案總管中顯示" onClick={() => run(() => drawerApi.revealAttachment(mainFile.id))}>位置</button>
+                    </SectionHeader>
+                    {!folded.has("preview") && (
+                        <>
+                            <FilePreview key={mainFile.id} attachment={mainFile} onOpen={() => openFile(mainFile)} />
+                            <p className="file-preview-meta muted" title={mainFile.linked ? `連結檔案（未複製）：${mainFile.linkedPath}` : mainFile.fileName}>
+                                {mainFile.fileName} · {formatSize(mainFile.size)}{mainFile.linked ? " · 連結" : ""}
+                                {mainFile.mirrorOf !== null ? " · 與文獻共用（見「關聯」）" : ""}
+                            </p>
+                        </>
+                    )}
+                </section>
+            )}
+
             <section className="detail-section">
                 <SectionHeader title="資料" collapsed={folded.has("info")} onToggle={() => toggleFolded("info")} />
                 <div hidden={folded.has("info")} onBlur={save}>
-                <CreatorsEditor
-                    key={item.id}
-                    itemType={draft.itemType}
-                    creators={item.creators}
-                    onSave={(creators) => run(() => drawerApi.setItemCreators(item.id, creators))}
-                />
+                {!isFile && (
+                    <CreatorsEditor
+                        key={item.id}
+                        itemType={draft.itemType}
+                        creators={item.creators}
+                        onSave={(creators) => run(() => drawerApi.setItemCreators(item.id, creators))}
+                    />
+                )}
 
                 {type.fields.map((key) => (
                     <label className="field" key={key}>
@@ -207,7 +246,7 @@ function ItemDetail({
                 )}
 
                 <label className="field">
-                    <span>摘要</span>
+                    <span>{isFile ? "說明" : "摘要"}</span>
                     <textarea rows={4} value={draft.abstractNote} onChange={(e) => set("abstractNote", e.target.value)} />
                 </label>
                 </div>
@@ -311,7 +350,7 @@ function ItemDetail({
 
             <section className="detail-section">
                 <SectionHeader
-                    title="附件"
+                    title={isFile ? "檔案" : "附件"}
                     count={item.attachments.length}
                     collapsed={folded.has("attachments")}
                     onToggle={() => toggleFolded("attachments")}
@@ -320,7 +359,7 @@ function ItemDetail({
                         className="small-btn"
                         onClick={() =>
                             run(async () => {
-                                const notice = linkedNotice(await drawerApi.pickAttachments(item.id));
+                                const notice = attachNotice(await drawerApi.pickAttachments(item.id));
                                 if (notice) onInfo(notice);
                                 unfold("attachments");
                             })
@@ -335,7 +374,7 @@ function ItemDetail({
                         <li
                             key={a.id}
                             className={a.linked ? "linked" : undefined}
-                            onDoubleClick={() => run(() => drawerApi.openAttachment(a.id))}
+                            onDoubleClick={() => openFile(a)}
                         >
                             <span
                                 className="att-name"
@@ -344,21 +383,40 @@ function ItemDetail({
                                 <Icon name={a.linked ? "link" : "attachment"} /> {a.fileName}
                             </span>
                             {a.linked && <span className="badge">連結</span>}
+                            {a.mirrorOf !== null && <span className="badge" title="這個檔案屬於關聯的文獻條目，和它共用同一份檔案">文獻</span>}
+                            {a.mirrored && <span className="badge" title="這個附件也以檔案條目出現在檔案庫中">檔案庫</span>}
                             <span className="att-size">{formatSize(a.size)}</span>
                             <span className="att-actions">
-                                <button title="開啟" onClick={() => run(() => drawerApi.openAttachment(a.id))}>開啟</button>
+                                {canRead(a) && <button title="在 Banyan 中閱讀" onClick={() => read(a.id)}>閱讀</button>}
+                                <button title="用預設程式開啟" onClick={() => run(() => drawerApi.openAttachment(a.id))}>開啟</button>
                                 <button title="在檔案總管中顯示" onClick={() => run(() => drawerApi.revealAttachment(a.id))}>位置</button>
                                 <button
-                                    title={a.linked ? "移除連結" : "刪除附件"}
-                                    onClick={() => {
-                                        const message = a.linked
-                                            ? `移除「${a.fileName}」的連結？\n原始檔案（${a.linkedPath}）不會被刪除。`
-                                            : `刪除附件「${a.fileName}」？檔案會一併刪除。`;
-                                        if (confirm(message)) {
-                                            run(() => drawerApi.deleteAttachment(a.id));
-                                        }
+                                    title={a.linked || a.mirrorOf !== null ? "移除" : "刪除附件"}
+                                    onClick={async () => {
+                                        // A 檔案庫 item is its file: removing the last one removes the item.
+                                        const lastFile = libraryOf(item.itemType) === "files" && item.attachments.length === 1;
+                                        const message =
+                                            (a.mirrorOf !== null
+                                                ? `從這個條目移除「${a.fileName}」？\n檔案仍保留在原本的文獻條目中。`
+                                                : (a.linked
+                                                      ? `移除「${a.fileName}」的連結？\n原始檔案（${a.linkedPath}）不會被刪除。`
+                                                      : `刪除附件「${a.fileName}」？檔案會一併刪除。`) +
+                                                  (a.mirrored ? "\n檔案庫中對應的檔案也會移除。" : "")) +
+                                            (lastFile ? "\n這是條目唯一的檔案，條目也會一併移除。" : "");
+                                        if (!(await ask({ ...splitAsk(message), confirm: a.mirrorOf !== null || a.linked ? "移除" : "刪除", danger: true }))) return;
+                                        drawerApi.deleteAttachment(a.id).then(
+                                            (removed) => {
+                                                if (removed) {
+                                                    onRemoved();
+                                                } else {
+                                                    void load();
+                                                    onChanged();
+                                                }
+                                            },
+                                            (e) => onError(errorMessage(e)),
+                                        );
                                     }}
-                                >{a.linked ? "移除" : "刪除"}</button>
+                                >{a.linked || a.mirrorOf !== null ? "移除" : "刪除"}</button>
                             </span>
                         </li>
                     ))}

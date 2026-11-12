@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BoardCard } from "../../whiteboard/api";
-import { CHART_TYPES, chartMarkdown, readChart, snapshotFromTable, type ChartData } from "../../whiteboard/chart";
+import { CHART_TYPES, chartText, readChart, snapshotFromTable, type ChartData } from "../../whiteboard/chart";
 import ChartView from "./ChartView";
 
 interface Props {
@@ -9,7 +9,7 @@ interface Props {
     active: boolean;
     /** Another card on this board, by id (the chart's table), when there is one. */
     findCard?: (id: number) => BoardCard | undefined;
-    /** Chart settings or numbers changed: new data, and the numbers as Markdown for `content`. */
+    /** Chart settings or numbers changed: new data, and the numbers as text for `content`. */
     onChange: (data: string, content: string) => void;
 }
 
@@ -34,14 +34,14 @@ function ChartObject({ card, active, findCard, onChange }: Props) {
     useEffect(() => {
         if (!live || liveKey === JSON.stringify(chart.snapshot)) return;
         const next: ChartData = { ...chart, snapshot: live };
-        onChange(JSON.stringify(next), chartMarkdown(live));
+        onChange(JSON.stringify(next), chartText(live));
     }, [liveKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const set = (patch: Partial<ChartData>) => {
         const next = { ...chart, ...patch };
         const snap =
             table && next.source ? snapshotFromTable(table.data, next.source.range, next.seriesBy) ?? next.snapshot : next.snapshot;
-        onChange(JSON.stringify({ ...next, snapshot: snap }), chartMarkdown(snap));
+        onChange(JSON.stringify({ ...next, snapshot: snap }), chartText(snap));
     };
 
     const [rangeDraft, setRangeDraft] = useState<string | null>(null);

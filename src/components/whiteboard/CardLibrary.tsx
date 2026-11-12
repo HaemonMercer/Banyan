@@ -6,6 +6,7 @@ import { KINDS, kindInfo, layoutMindMap, readMindMap } from "../../whiteboard/ob
 import { readTable, tableSize } from "../../whiteboard/table";
 import { whiteboardApi, type BoardCard, type CardQuery, type LibraryCard, type TagCount } from "../../whiteboard/api";
 import { CardFace } from "./BoardCanvas";
+import { ask } from "../Feedback";
 
 interface Props {
     /** Bumped when cards may have changed (edits in the side panel, deletes…). */
@@ -99,6 +100,7 @@ function Face({ card }: { card: LibraryCard }) {
             height: size.height,
             updatedAt: card.updatedAt,
             items: card.items,
+            annotations: card.annotations,
             tags: card.tags,
         }),
         [card, size],
@@ -420,7 +422,7 @@ function CardLibrary({ reloadKey, openCardId, onOpen, onCloseCard, onCreate, boa
         const ids = selection.ids;
         if (ids.length === 0) return;
         const name = ids.length > 1 ? `這 ${ids.length} 張卡片` : `卡片「${untitled(chosen[0]?.title ?? "")}」`;
-        if (!confirm(`完全刪除${name}？\n會從所有白板和卡片庫中消失，連結也會一併移除，無法復原。`)) return;
+        if (!(await ask({ title: `完全刪除${name}？`, message: "會從所有白板和卡片庫中消失，連結也會一併移除，無法復原。", confirm: "完全刪除", danger: true }))) return;
         try {
             await whiteboardApi.deleteCards(ids);
             select(NO_SELECTION);

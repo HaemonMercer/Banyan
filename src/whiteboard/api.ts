@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { AnnotationRef } from "../annotator/api";
+import { extractLinks } from "../markdown";
 import type { CardKind } from "./objects";
-import { extractWikiLinks } from "../markdown";
 
 export interface Whiteboard {
     id: number;
@@ -14,7 +15,7 @@ export interface Whiteboard {
 /** A card as placed on one board (position and size are in board coordinates). */
 export interface BoardCard {
     id: number;
-    /** What the object is: a Markdown note (default), sticky note, image, video, PDF or mind map. */
+    /** What the object is: a note (default), sticky note, image, video, PDF or mind map. */
     kind: CardKind;
     title: string;
     content: string;
@@ -27,6 +28,8 @@ export interface BoardCard {
     updatedAt: number;
     /** Drawer items this card refers to. */
     items: ItemRef[];
+    /** Annotations (Annotator) it cites. */
+    annotations: AnnotationRef[];
     tags: string[];
 }
 
@@ -68,6 +71,7 @@ export interface CardDetail {
     data: string;
     tags: string[];
     items: ItemRef[];
+    annotations: AnnotationRef[];
     boards: BoardRef[];
     createdAt: number;
     updatedAt: number;
@@ -100,6 +104,7 @@ export interface LibraryCard {
     sections: SectionRef[];
     /** Drawer items it cites (drawn on the card face). */
     items: ItemRef[];
+    annotations: AnnotationRef[];
     /** Size on its first board; null when it is on no board. */
     width: number | null;
     height: number | null;
@@ -145,6 +150,9 @@ export interface ItemCard {
  * A link between two cards; `cardA` is always the smaller id.
  * `direction`: 0 no arrow, 1 cardA → cardB, 2 cardB → cardA, 3 both ways.
  */
+/** Event fired when saving `[[…]]` created card links (detail: the new `CardLink`s). */
+export const LINKS_CREATED_EVENT = "banyan:links-created";
+
 export interface CardLink {
     id: number;
     cardA: number;
@@ -175,23 +183,6 @@ export interface BoardFolder {
     parentId: number | null;
 }
 
-export interface GraphNode {
-    id: number;
-    kind: CardKind;
-    title: string;
-    tags: string[];
-    boardIds: number[];
-}
-
-export interface Graph {
-    cards: GraphNode[];
-    /** Links between two of the cards. */
-    links: CardLink[];
-    /** Drawer items the cards refer to. */
-    items: ItemRef[];
-    refs: { cardId: number; itemId: number }[];
-}
-
 export interface BoardContents {
     board: Whiteboard;
     cards: BoardCard[];
@@ -219,7 +210,7 @@ export interface CardHit {
     cardId: number;
     kind: CardKind;
     title: string;
-    /** The card's Markdown (for previews). */
+    /** The card's text (for previews). */
     content: string;
     boardId: number | null;
     boards: string[];
@@ -238,9 +229,6 @@ export const whiteboardApi = {
     /** Deletes the folder and sub-folders; their boards move to the top level. */
     deleteFolder: (id: number) => invoke<void>("delete_whiteboard_folder", { id }),
     moveFolder: (id: number, parentId: number | null) => invoke<void>("move_whiteboard_folder", { id, parentId }),
-
-    /** Cards on these boards (all cards when null), their links and the Drawer items they cite. */
-    getGraph: (boardIds: number[] | null, tag: string | null = null) => invoke<Graph>("get_graph", { boardIds, tag }),
 
     createSection: (boardId: number, title: string, x: number, y: number, width: number, height: number) =>
         invoke<Section>("create_section", { boardId, title, x, y, width, height }),
@@ -272,6 +260,22 @@ export const whiteboardApi = {
     createCard: (boardId: number, x: number, y: number) => invoke<BoardCard>("create_card", { boardId, x, y }),
     updateCard: (id: number, title: string, content: string) =>
         invoke<void>("update_card", { id, title, content }),
+    /**
+     * After saving a card: two-way links for its `[[…]]` (and for other cards that already mention
+     * it). Returns only new links, and announces them (`banyan:links-created`) for open boards.
+     * Never fails: the card itself is already saved, so a problem here is only logged.
+     */
+    syncWikiLinks: async (cardId: number, content: string): Promise<CardLink[]> => {
+        try {
+            const targets = extractLinks(content).map((l) => l.target);
+            const created = await invoke<CardLink[]>("sync_wiki_links", { cardId, targets });
+            if (created.length > 0) window.dispatchEvent(new CustomEvent<CardLink[]>(LINKS_CREATED_EVENT, { detail: created }));
+            return created;
+        } catch (e) {
+            console.warn("sync_wiki_links failed", e);
+            return [];
+        }
+    },
     /** A board object of any kind at the rectangle (files are added afterwards). */
     createObject: (boardId: number, kind: CardKind, r: { x: number; y: number; width: number; height: number }, title = "", content = "", data = "") =>
         invoke<BoardCard>("create_board_object", { boardId, kind, ...r, title, content, data }),
@@ -300,12 +304,6 @@ export const whiteboardApi = {
     updateLink: (id: number, direction: LinkDirection, note: string) =>
         invoke<CardLink>("update_link", { id, direction, note }),
     unlinkCards: (a: number, b: number) => invoke<void>("unlink_cards", { a, b }),
-    /**
-     * After saving a card: links it to the cards its `[[titles]]` name, and to cards that already
-     * mention `[[its title]]`. Only adds links; returns the new ones.
-     */
-    syncWikiLinks: (cardId: number, content: string) =>
-        invoke<CardLink[]>("sync_wiki_links", { cardId, titles: extractWikiLinks(content) }),
     listCardLinks: (cardId: number) => invoke<LinkedCard[]>("list_card_links", { cardId }),
     /** Cards whose title or content matches; `exclude` is the card being linked from. */
     searchCards: (query: string, exclude: number | null) =>

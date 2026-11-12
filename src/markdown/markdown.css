@@ -1,22 +1,27 @@
-/* Rendered Banyan Markdown. Compact by default (fits cards); larger views can scale font-size. */
+/* Rendered Banyan Flavored Markdown. Compact by default (fits cards); larger views can scale font-size. */
 .md {
     line-height: var(--lh-body);
     overflow-wrap: anywhere;
 }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p, .md ul, .md ol, .md blockquote, .md pre, .md table, .md .md-callout, .md .md-directive-leaf,
-.md .md-directive-container { margin: 0 0 0.6em; }
-.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 0.8em 0 0.4em; line-height: 1.3; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md .md-table, .md .md-callout, .md .md-math-block {
+    margin: 0 0 0.6em;
+}
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 0.8em 0 0.4em; line-height: var(--lh-tight); font-weight: var(--fw-semibold); }
 .md h1 { font-size: 1.4em; }
 .md h2 { font-size: 1.25em; }
 .md h3 { font-size: 1.1em; }
 .md h4, .md h5, .md h6 { font-size: 1em; }
 .md ul, .md ol { padding-left: 1.4em; }
-.md li > p { margin: 0; }
-.md li.task-list-item { list-style: none; margin-left: -1.2em; }
-.md li.task-list-item input { margin: 0 0.4em 0 0; vertical-align: middle; }
-.md blockquote { border-left: 3px solid var(--border); padding-left: 0.8em; color: var(--muted); }
+.md li > p { margin: 0 0 0.3em; }
+.md li > ul, .md li > ol { margin: 0.2em 0 0; }
+.md .md-tight { display: block; }
+.md li.md-task { list-style: none; margin-left: -1.3em; display: flex; gap: 0.4em; align-items: baseline; flex-wrap: wrap; }
+.md li.md-task > input { margin: 0; flex: none; accent-color: var(--accent); pointer-events: none; }
+.md li.md-task > :not(input) { flex: 1 1 0; min-width: 0; }
+.md li.md-task > ul, .md li.md-task > ol { flex-basis: 100%; margin-left: 1.3em; }
+.md blockquote { border-left: 3px solid var(--border-strong); padding-left: 0.8em; color: var(--text-2); margin-left: 0; }
 .md code {
     font-family: var(--font-mono);
     font-size: 0.9em;
@@ -25,31 +30,76 @@
     border-radius: var(--r-sm);
 }
 .md pre { background: var(--hover); padding: 0.6em 0.8em; border-radius: var(--r-md); overflow-x: auto; }
-.md pre code { background: none; padding: 0; }
-.md table { border-collapse: collapse; display: block; overflow-x: auto; }
-.md th, .md td { border: 1px solid var(--border); padding: 0.2em 0.5em; }
-.md th { background: var(--hover); }
+.md pre code { background: none; padding: 0; font-size: 0.9em; }
+.md .md-table { overflow-x: auto; }
+.md table { border-collapse: collapse; }
+.md th, .md td { border: 1px solid var(--border); padding: 0.2em 0.5em; vertical-align: top; }
+.md th { background: var(--hover); font-weight: var(--fw-semibold); }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 0.8em 0; }
-.md img { max-width: 100%; }
+.md img { max-width: 100%; border-radius: var(--r-sm); }
 .md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-.md .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
+.md a.md-link-inert { color: var(--text-2); cursor: default; }
+.md .md-image-missing { color: var(--muted); }
+.md .md-html { color: var(--muted); font-family: var(--font-mono); font-size: 0.9em; white-space: pre-wrap; }
+.md pre.md-html { background: none; padding: 0; }
+
+/* ==highlight== — same five colours as Annotator highlights */
+.md .md-mark { color: inherit; border-radius: 2px; padding: 0 0.1em; background: rgba(var(--mark), 0.38); }
+.md .md-mark-yellow { --mark: 255, 210, 0; }
+.md .md-mark-green { --mark: 70, 200, 110; }
+.md .md-mark-blue { --mark: 70, 150, 255; }
+.md .md-mark-pink { --mark: 255, 100, 160; }
+.md .md-mark-purple { --mark: 160, 100, 255; }
 
 .md .md-wikilink {
     text-decoration: none;
+    color: var(--accent-text);
     background: var(--accent-soft);
     border-radius: var(--r-sm);
     padding: 0 0.25em;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2em;
 }
-.md .md-wikilink::before { content: "[["; opacity: 0.45; }
-.md .md-wikilink::after { content: "]]"; opacity: 0.45; }
 .md .md-wikilink.inert { cursor: default; }
+.md .md-tag { color: var(--accent); }
+.md .md-tag:not(.inert) { cursor: pointer; }
+.md .md-tag:not(.inert):hover { text-decoration: underline; }
 
-.md .md-callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 0.4em 0.7em; border-radius: var(--r-sm); }
+.md .md-math-display { display: block; text-align: center; }
+.md .md-math-block { overflow-x: auto; overflow-y: hidden; }
+.md .katex-display { margin: 0.2em 0; }
+
+.md .md-callout {
+    border-left: 3px solid var(--tone);
+    background: var(--tone-soft);
+    padding: 0.4em 0.7em;
+    border-radius: var(--r-sm);
+}
 .md .md-callout > :last-child { margin-bottom: 0; }
-.md .md-callout-warning { border-left-color: var(--warning); background: var(--warning-soft); }
-.md .md-callout-danger, .md .md-callout-caution { border-left-color: var(--danger); background: var(--danger-soft); }
-.md .md-callout-info { border-left-color: var(--info); background: var(--info-soft); }
-.md .md-callout-inline { background: var(--accent-soft); border-radius: var(--r-sm); padding: 0 0.25em; }
+.md .md-callout-title {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+    font-weight: var(--fw-semibold);
+    color: var(--tone);
+    margin-bottom: 0.2em;
+}
+.md details.md-callout > summary { cursor: pointer; list-style: none; }
+.md details.md-callout > summary::-webkit-details-marker { display: none; }
+.md details.md-callout:not([open]) > summary { margin-bottom: 0; }
+.md .md-tone-accent { --tone: var(--accent); --tone-soft: var(--accent-soft); }
+.md .md-tone-info { --tone: var(--info); --tone-soft: var(--info-soft); }
+.md .md-tone-warning { --tone: var(--warning); --tone-soft: var(--warning-soft); }
+.md .md-tone-danger { --tone: var(--danger); --tone-soft: var(--danger-soft); }
+.md .md-tone-muted { --tone: var(--muted); --tone-soft: var(--hover); }
 
-.md .md-directive-leaf, .md .md-directive-container { border: 1px dashed var(--border); border-radius: var(--r-sm); padding: 0.3em 0.6em; }
-.md .md-directive-name { font-size: 0.8em; color: var(--muted); }
+.md .md-footnote-ref { color: var(--accent); font-size: 0.75em; }
+.md .md-footnotes {
+    margin: 0.8em 0 0;
+    padding: 0.5em 0 0 1.4em;
+    border-top: 1px solid var(--border);
+    font-size: 0.9em;
+    color: var(--text-2);
+}
+.md .md-footnotes p { margin: 0; }

@@ -4,7 +4,7 @@
     height: 100%;
     overflow: hidden;
 }
-.whiteboard.with-panel { grid-template-columns: 200px minmax(0, 1fr) 300px; }
+.whiteboard.with-panel { grid-template-columns: 200px minmax(0, 1fr) calc(300px + var(--rail-w)); }
 
 /* ---------- board list ---------- */
 .wb-board-count { font-size: var(--fs-xs); flex-shrink: 0; }
@@ -217,23 +217,27 @@
 .wb-zoom button { display: inline-flex; align-items: center; justify-content: center; font-size: 15px; color: var(--text-2); }
 .wb-zoom-level { font-size: var(--fs-xs); min-width: 48px !important; color: var(--muted); }
 
-/* ---------- right pane: library (top) + selected card (bottom) ---------- */
+/* ---------- right pane: library (top) + selected card (bottom), tab rail on the right ---------- */
 .wb-panel {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     min-height: 0;
     background: var(--pane);
     border-right: none;
 }
+.wb-panel-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* The tabs: the app's module rail, on the right edge (its active bar on the outer side). */
+.wb-panel-rail { width: var(--rail-w); flex-shrink: 0; border-right: none; border-left: 1px solid var(--border); }
+.wb-panel-rail .rail-btn.active::before { left: auto; right: -4px; border-radius: 3px 0 0 3px; }
 .wb-panel .danger-btn { flex-shrink: 0; }
 
+/* The list fills the column; the selected card below takes what it needs, up to half. */
 .wb-library {
-    flex: 1 1 55%;
+    flex: 1 1 0;
     min-height: 140px;
     display: flex;
     flex-direction: column;
     padding: 8px 12px 6px;
-    border-bottom: 1px solid var(--border);
 }
 .wb-library .wb-search, .wb-library .wb-hint { flex-shrink: 0; }
 .wb-lib-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
@@ -249,9 +253,11 @@
 .wb-lib-row:hover { background: var(--hover); }
 .wb-lib-row.here .wb-link-title::after { content: " ✓"; color: var(--accent); }
 
-.wb-selected { flex: 1 1 45%; min-height: 120px; display: flex; flex-direction: column; }
-.wb-selected-empty { padding: 12px; }
-.wb-selected-empty p { margin: 0; font-size: var(--fs-sm); }
+.wb-selected { flex: 0 1 auto; max-height: 50%; min-height: 120px; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+/* 註解: the Annotator's list (search, filters, rows) edge to edge */
+.wb-annot-tab { padding: 0; }
+.wb-annot-tab .annot-list { min-height: 0; }
+.annot-row.draggable { cursor: grab; user-select: none; touch-action: none; }
 .wb-selected-header {
     display: flex;
     align-items: center;
@@ -392,12 +398,6 @@
     -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
     mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
-.wb-card-md.preview .md { font-size: var(--fs-sm); }
-.wb-card-md.preview .md h1 { font-size: 1.2em; }
-.wb-card-md.preview .md h2 { font-size: 1.1em; }
-.wb-card-md.preview .md h3, .wb-card-md.preview .md h4 { font-size: 1em; }
-.wb-card-md.preview .md pre { max-height: 6em; overflow: hidden; }
-.wb-card-md.preview .md img { max-height: 120px; object-fit: contain; }
 .wb-card-more {
     /* Sits just under the faded preview, above any item chips. */
     position: relative;
@@ -513,7 +513,7 @@
 .wb-section.color-yellow { --sec: #c99a14; }
 .wb-section.color-red { --sec: #d0533f; }
 .wb-section.color-purple { --sec: #8a5cc7; }
-.wb-section.selected { border-color: var(--sec); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sec) 20%, transparent); }
+.wb-section.selected { border-color: var(--sec); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sec) 20%, transparent); }
 /* A card being dragged will join this section when dropped. */
 .wb-section.join-target { border-style: solid; border-color: var(--sec); background: color-mix(in srgb, var(--sec) 16%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sec) 28%, transparent); }
 .wb-section-header {
@@ -676,7 +676,7 @@
     padding: 2px 0;
 }
 .wb-cp-content { min-height: 120px; font-size: 14px; line-height: 1.6; cursor: text; outline: none; }
-.wb-cp-content .md { font-size: 14px; }
+.wb-cp-content .plain-text, .wb-cp-content .md { font-size: 14px; }
 .wb-cp-section { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 4px; }
 .wb-cp-dates { font-size: 11px; margin-top: 18px; }
 .wb-cp-history { flex-shrink: 0; font-size: 12px; color: var(--text-2); }
@@ -910,9 +910,6 @@
 .cl-section { --sec: var(--muted); }
 .cl-section .bn-icon { color: var(--sec); }
 
-/* Graph module: tag filter in the left pane. */
-.graph-tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 12px 12px; }
-.graph-tags-title { width: 100%; font-size: 11px; font-weight: 600; color: var(--muted); }
 .wb-zoom .wb-zoom-level { font-size: var(--fs-xs); color: var(--muted); }
 
 /* Two ways to delete a card: off this board (×) or everywhere (trash). */
@@ -1551,9 +1548,6 @@
 .wb-tbl-menu-item:disabled { color: var(--faint); cursor: default; }
 .wb-tbl-menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
 
-.wb-cp-table table { border-collapse: collapse; font-size: var(--fs-sm); }
-.wb-cp-table th, .wb-cp-table td { border: 1px solid var(--border); padding: 3px 8px; }
-.wb-cp-table th { background: var(--hover); }
 
 /* Formula references while editing (Excel's coloured boxes) */
 .xl-refbox {
@@ -1688,3 +1682,9 @@ g.hot > .wb-chart-hit { fill: color-mix(in srgb, var(--text) 5%, transparent); }
 .xl-chart-btn { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--text); font-size: var(--fs-xs); cursor: pointer; }
 .xl-chart-btn:hover { background: var(--hover); border-color: #217346; }
 .wb-cp-chart { display: flex; flex-direction: column; gap: 10px; }
+
+/* ---------- annotations cited by cards ---------- */
+.wb-ref-annot { background: rgba(var(--annot), 0.16); border-color: rgba(var(--annot), 0.55); }
+.wb-ref-annot:hover { background: rgba(var(--annot), 0.3); border-color: rgb(var(--annot)); }
+.wb-ref-annot-mark { flex-shrink: 0; width: 8px; height: 8px; border-radius: 2px; background: rgb(var(--annot)); }
+.wb-annot-ref { border-left: 3px solid rgb(var(--annot)); padding-left: 4px; }

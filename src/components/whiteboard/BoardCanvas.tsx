@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { Icon, TypeIcon } from "../../icons/Icon";
-import { summarizeMarkdown } from "../../markdown";
-import Markdown from "../../markdown/Markdown";
-import CardEditor from "../../markdown/CardEditor";
+import { summarize } from "../../markdown";
+import Markdown, { sourceOffsetAt } from "../../markdown/Markdown";
+import MarkdownEditor from "../../markdown/MarkdownEditor";
 import {
     MIN_CARD_HEIGHT,
     MIN_CARD_WIDTH,
@@ -21,10 +21,12 @@ import {
     type StickyData,
 } from "../../whiteboard/objects";
 import { ImageBody, PdfBody, VideoBody } from "./BoardObjects";
+import { openAnnotation, parseLocation, placeLabel, refLabel } from "../../annotator/api";
 import MindMap from "./MindMap";
 import TableObject from "./TableObject";
 import ChartObject from "./ChartObject";
-import { tableMarkdown } from "../../whiteboard/table";
+import { tableText } from "../../whiteboard/table";
+import { isHomeActive } from "../../tabs";
 
 /** Screen = board * zoom + (x, y). */
 export interface Viewport {
@@ -82,8 +84,6 @@ interface Props {
     /** Double-click on a line: edit its direction and note. */
     onEditLink?: (id: number) => void;
     onOpenItem: (itemId: number) => void;
-    /** Clicked a `[[wiki link]]` in a card. */
-    onWikiLink: (target: string) => void;
     /** Live update while a section is moved or resized. */
     onSectionChange: (s: Section) => void;
     /** Section move/resize finished: its final rectangle and the cards it carried. */
@@ -269,7 +269,7 @@ function BoardCanvas(props: Props) {
             return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable);
         };
         const down = (e: KeyboardEvent) => {
-            if (e.key === " " && !typing()) {
+            if (e.key === " " && !typing() && isHomeActive()) {
                 e.preventDefault();
                 setSpaceDown(true);
             }
@@ -620,7 +620,6 @@ function BoardCanvas(props: Props) {
                             onRemove={props.onRemoveCard}
                             onOpen={props.onOpenCard}
                             onOpenItem={props.onOpenItem}
-                            onWikiLink={props.onWikiLink}
                             onEditData={props.onEditData}
                             overview={view.zoom < OVERVIEW_ZOOM}
                             zoom={view.zoom}
@@ -798,7 +797,6 @@ interface CardViewProps {
     onRemove: (id: number) => void;
     onOpen: (id: number) => void;
     onOpenItem: (itemId: number) => void;
-    onWikiLink: (target: string) => void;
     onEditData: (id: number, data: string) => void;
     /** Zoomed far out: show the title large and a short plain-text summary. */
     overview: boolean;
@@ -808,13 +806,13 @@ interface CardViewProps {
 /** Below this zoom, cards switch to the overview (title + summary in a readable size). */
 const OVERVIEW_ZOOM = 0.55;
 
-function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, onDelete, onRemove, onOpen, onOpenItem, onWikiLink, onEditData, overview, zoom }: CardViewProps) {
+function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, onDelete, onRemove, onOpen, onOpenItem, onEditData, overview, zoom }: CardViewProps) {
     // Sticky notes: a coloured square of text, no title.
     const sticky = card.kind === "sticky";
     const stickyColor = sticky ? parseData<StickyData>(card.data).color ?? "yellow" : null;
-    // Content shows as rendered Markdown; clicking it swaps in the WYSIWYG editor at that spot.
-    // `point` is where the caret goes (null = end of the text).
-    const [editing, setEditing] = useState<{ point: { x: number; y: number } | null } | null>(null);
+    // Content shows as text; clicking it swaps in the editor with the caret at that spot.
+    // `offset` is where the caret goes (null = end of the text).
+    const [editing, setEditing] = useState<{ offset: number | null } | null>(null);
     // The preview shows what fits; when more is hidden, it fades out and shows "⋯".
     const previewRef = useRef<HTMLDivElement>(null);
     const [clipped, setClipped] = useState(false);
@@ -831,7 +829,7 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
         if (el.firstElementChild) ro.observe(el.firstElementChild);
         return () => ro.disconnect();
     }, [editing, overview, card.content, card.height, card.width]);
-    const summary = useMemo(() => (overview ? summarizeMarkdown(card.content, 90) : ""), [overview, card.content]);
+    const summary = useMemo(() => (overview ? summarize(card.content, 90) : ""), [overview, card.content]);
     // Overview text grows as the board shrinks, so it stays readable on screen.
     const overviewScale = Math.min(2.6, 0.75 / zoom);
 
@@ -910,25 +908,24 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
                 title={editing ? undefined : "點一下編輯；按 ↗ 在側邊面板開啟"}
                 tabIndex={editing ? -1 : 0}
                 onFocus={(e) => {
-                    if (!editing && e.target === e.currentTarget) setEditing({ point: null });
+                    if (!editing && e.target === e.currentTarget) setEditing({ offset: null });
                 }}
                 onClick={(e) => {
                     if (editing || e.shiftKey || (e.target as HTMLElement).closest("a, input")) return;
-                    setEditing({ point: { x: e.clientX, y: e.clientY } });
+                    setEditing({ offset: sourceOffsetAt(e.currentTarget, e.clientX, e.clientY) });
                 }}
             >
                 {editing ? (
-                    <CardEditor
+                    <MarkdownEditor
                         value={card.content}
-                        excludeCardId={card.id}
-                        initialPoint={editing.point}
-                        placeholder={sticky ? "寫點什麼…" : "內容（支援 Markdown）"}
+                        cardId={card.id}
+                        initialOffset={editing.offset}
+                        placeholder={sticky ? "寫點什麼…" : "內容"}
                         onChange={(v) => onEdit(card.id, card.title, v)}
                         onBlur={() => {
                             setEditing(null);
                             onSave(card.id);
                         }}
-                        onWikiLink={onWikiLink}
                     />
                 ) : overview ? (
                     summary ? (
@@ -937,15 +934,15 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
                         </div>
                     ) : null
                 ) : card.content.trim() ? (
-                    <Markdown source={card.content} onWikiLink={onWikiLink} />
+                    <Markdown source={card.content} />
                 ) : (
-                    <div className="wb-card-placeholder">{sticky ? "寫點什麼…" : "內容（支援 Markdown）"}</div>
+                    <div className="wb-card-placeholder">{sticky ? "寫點什麼…" : "內容"}</div>
                 )}
             </div>
             {clipped && !editing && (
                 <div className="wb-card-more" title="還有更多內容：點一下內容編輯，或按 ↗ 在側邊面板查看全部">⋯</div>
             )}
-            {card.items.length > 0 && !(overview && !editing) && (
+            {(card.items.length > 0 || card.annotations.length > 0) && !(overview && !editing) && (
                 <div className="wb-card-refs">
                     {card.items.map((it) => (
                         <button
@@ -956,6 +953,17 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
                         >
                             <TypeIcon type={it.itemType} className="wb-ref-icon" />
                             <span className="wb-ref-title">{it.title || "（無標題）"}</span>
+                        </button>
+                    ))}
+                    {card.annotations.map((a) => (
+                        <button
+                            key={`a${a.annotationId}`}
+                            className={`wb-ref wb-ref-annot annot-bg-${a.color}`}
+                            title={`在 Annotator 中開啟：${a.quote || "書籤"}\n— ${a.itemTitle || a.fileName}，${placeLabel(parseLocation(a))}${a.note ? `\n筆記：${a.note}` : ""}`}
+                            onClick={() => openAnnotation(a.annotationId)}
+                        >
+                            <span className="wb-ref-annot-mark" />
+                            <span className="wb-ref-title">{refLabel(a)}</span>
                         </button>
                     ))}
                 </div>
@@ -1036,7 +1044,7 @@ function ObjectView({ card, selected, multi, opened, linkTarget, zoom, onDelete,
                 rect={card}
                 zoom={zoom}
                 active={active}
-                onChange={(t) => onEditData(card.id, JSON.stringify(t), undefined, tableMarkdown(t))}
+                onChange={(t) => onEditData(card.id, JSON.stringify(t), undefined, tableText(t))}
                 onFit={onFit}
                 onInsertChart={onInsertChart}
             />
@@ -1166,7 +1174,6 @@ export function CardFace({ card }: { card: BoardCard }) {
             onRemove={noop}
             onOpen={noop}
             onOpenItem={noop}
-            onWikiLink={noop}
             onEditData={noop}
             overview={false}
             zoom={1}

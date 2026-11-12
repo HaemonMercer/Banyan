@@ -1,0 +1,7 @@
+/* Plain text as written: line breaks kept, long words wrap. */
+.plain-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: var(--lh-body);
+}
+

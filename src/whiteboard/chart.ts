@@ -143,12 +143,11 @@ export function snapshotFromTable(tableData: string, range: string, seriesBy: "c
     return { labels, series };
 }
 
-/** The chart's numbers as a Markdown table (kept in `content` for search and history). */
-export function chartMarkdown(s: ChartSnapshot): string {
+/** The chart's numbers, one row per line, separated by tabs (kept in `content` for search and history). */
+export function chartText(s: ChartSnapshot): string {
     if (s.series.length === 0) return "";
-    const esc = (x: string) => x.replace(/\|/g, "\\|");
-    const lines = [`| | ${s.series.map((x) => esc(x.name)).join(" | ")} |`, `|---|${s.series.map(() => "---:").join("|")}|`];
-    s.labels.forEach((l, i) => lines.push(`| ${esc(l)} | ${s.series.map((x) => (x.values[i] ?? "")).join(" | ")} |`));
+    const lines = [["", ...s.series.map((x) => x.name)].join("\t")];
+    s.labels.forEach((l, i) => lines.push([l, ...s.series.map((x) => String(x.values[i] ?? ""))].join("\t")));
     return lines.join("\n");
 }
 

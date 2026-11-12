@@ -1,10 +1,13 @@
-import { Fragment, useEffect, useRef, useState } from "react";
-import { drawerApi, errorMessage, type Attachment, type CollectionView, type ItemSummary } from "../../drawer/api";
-import { GROUP_LABELS, formatSize, groupedTypes } from "../../drawer/itemTypes";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { drawerApi, errorMessage, type Attachment, type Collection, type CollectionView, type ItemSummary } from "../../drawer/api";
+import { GROUP_LABELS, formatSize, groupedTypes, type Library } from "../../drawer/itemTypes";
 import { NO_SELECTION, clickSelect, inOrder, range, single, type Selection } from "../../drawer/selection";
-import { COLUMNS, TITLE_MIN_WIDTH, useColumns } from "../../drawer/columns";
+import { TITLE_MIN_WIDTH, sortItems, useColumns } from "../../drawer/columns";
 import { Icon, TypeIcon } from "../../icons/Icon";
 import GalleryTile from "./GalleryTile";
+import { FileTile, FolderTile, displayName } from "./FileTiles";
+import { canRead, type ReaderFile } from "../reader/Reader";
+import { isHomeActive, isShown } from "../../tabs";
 
 interface Props {
     title: string;
@@ -25,7 +28,53 @@ interface Props {
     onModeChange?: (mode: CollectionView) => void;
     /** Types offered by "＋ 新條目" (a gallery offers image types only). */
     canCreate: (itemType: string) => boolean;
+    /** 文獻庫 or 檔案庫: decides the columns and how items are added. */
+    library: Library;
+    /** 檔案庫: "＋ 加入檔案" picks files, each becoming an item (instead of "＋ 新條目"). */
+    onAddFiles: () => void;
+    /** Opens files in the reader (pictures of a gallery, an item's attachments). */
+    onRead: (files: ReaderFile[], index: number) => void;
+    /** 檔案庫, like Windows Explorer: large icons or the details table. */
+    fileView: FileView;
+    onFileViewChange: (v: FileView) => void;
+    /** 檔案庫: sub-folders of the place shown, listed before the files. */
+    folders: Collection[];
+    /** 檔案庫's folders, to count each folder's sub-folders. */
+    allFolders: Collection[];
+    onOpenFolder: (id: number) => void;
+    /** 檔案庫: the path shown instead of the title; segments with onClick go there. */
+    crumbs: { label: string; onClick?: () => void }[];
+    /** 檔案庫: one level up (↑, Backspace, Alt+↑); absent at the top. */
+    onUp?: () => void;
+    /** 檔案庫: double-click / Enter on a file opens it. */
+    onOpenItem: (item: ItemSummary) => void;
+    /** Folder under dragged items (its tile is highlighted). */
+    dropFolderId: number | null;
 }
+
+export type FileView = "icons" | "details";
+
+/** The title with the searched words marked (case-insensitive). */
+function marked(text: string, query: string): ReactNode {
+    const words = query.trim().split(/\s+/).filter((w) => w.length > 0);
+    if (words.length === 0 || !text) return text;
+    const escaped = words.map((w) => w.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&"));
+    const re = new RegExp("(" + escaped.join("|") + ")", "gi");
+    const parts = text.split(re);
+    if (parts.length === 1) return text;
+    return parts.map((part, i) => (i % 2 === 1 ? <mark key={i} className="search-hit">{part}</mark> : part));
+}
+
+const ICON_KEY = "banyan.drawer.fileTile";
+const ICON_SIZES = { min: 72, max: 200, initial: 104 };
+const loadIconSize = () => {
+    try {
+        const v = Number(localStorage.getItem(ICON_KEY));
+        return v >= ICON_SIZES.min && v <= ICON_SIZES.max ? v : ICON_SIZES.initial;
+    } catch {
+        return ICON_SIZES.initial;
+    }
+};
 
 const MARQUEE_THRESHOLD = 4;
 const TILE_KEY = "banyan.drawer.galleryTile";
@@ -40,11 +89,63 @@ const loadTile = () => {
 };
 
 function ItemList({
-    title, items, selection, onSelectionChange, query, onQueryChange, onCreate, onDelete, onDragStart,
-    draggingIds, onError, mode, onModeChange, canCreate,
+    title, items: unsorted, selection, onSelectionChange, query, onQueryChange, onCreate, onDelete, onDragStart,
+    draggingIds, onError, mode, onModeChange, canCreate, library, onAddFiles, onRead,
+    fileView, onFileViewChange, folders, allFolders, onOpenFolder, crumbs, onUp, onOpenItem, dropFolderId,
 }: Props) {
     const gallery = mode === "gallery";
-    const cols = useColumns();
+    const files = library === "files";
+    /** 檔案庫's large icons (a gallery folder keeps showing pictures only). */
+    const icons = files && !gallery && fileView === "icons";
+    /** Items laid out in a grid rather than rows. */
+    const grid = gallery || icons;
+    const [iconSize, setIconSize] = useState(loadIconSize);
+    const changeIconSize = (v: number) => {
+        setIconSize(v);
+        try {
+            localStorage.setItem(ICON_KEY, String(v));
+        } catch {
+            /* this session only */
+        }
+    };
+    /** A folder clicked once (highlighted; Enter opens it). */
+    const [folderFocus, setFolderFocus] = useState<number | null>(null);
+    const folderKey = folders.map((f) => f.id).join(",");
+    useEffect(() => setFolderFocus(null), [folderKey]);
+    const cols = useColumns(library);
+    const items = useMemo(
+        () => sortItems(unsorted, cols.sort, cols.all, (it) => (files ? displayName(it) : it.title)),
+        [unsorted, cols.sort, cols.all, files],
+    );
+    const sortLabel = (key: string) => (key === "title" ? (files ? "名稱" : "標題") : (cols.all.find((c) => c.id === key)?.label ?? ""));
+    /** A column header that sorts by it (▲ / ▼ shows the current order). */
+    const sortHeader = (key: string, content: ReactNode) => {
+        const on = cols.sort?.key === key ? cols.sort.dir : null;
+        return (
+            <button
+                className={`col-sort${on ? " on" : ""}`}
+                title={on ? `依「${sortLabel(key)}」${on === "asc" ? "遞增" : "遞減"}排序，再按一次${on === (cols.all.find((c) => c.id === key)?.sortValue ? "desc" : "asc") ? "反向" : "恢復預設（最近修改的在前）"}` : `依「${sortLabel(key)}」排序`}
+                aria-sort={on === "asc" ? "ascending" : on === "desc" ? "descending" : undefined}
+                onClick={() => cols.cycleSort(key)}
+            >
+                {content}
+                {on && <Icon name={on === "asc" ? "arrowUp" : "arrowDown"} className="col-sort-arrow" />}
+            </button>
+        );
+    };
+    const searchRef = useRef<HTMLInputElement>(null);
+    // Ctrl+F searches the list (unless the reader, which has its own search, is open).
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "f" || e.shiftKey || e.altKey) return;
+            if (!isHomeActive() || !isShown(searchRef.current) || document.querySelector(".reader, .modal-backdrop")) return;
+            e.preventDefault();
+            searchRef.current?.focus();
+            searchRef.current?.select();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
     const [colMenu, setColMenu] = useState<{ x: number; y: number; atPointer?: boolean } | null>(null);
     const [tile, setTile] = useState(loadTile);
     const changeTile = (v: number) => {
@@ -126,11 +227,25 @@ function ItemList({
 
     /** Tiles per row in the gallery (those level with the first). */
     const galleryColumns = () => {
-        const tiles = [...(tableRef.current?.querySelectorAll<HTMLElement>(".gallery-tile") ?? [])];
+        const tiles = [...(tableRef.current?.querySelectorAll<HTMLElement>(".gallery-tile, .file-tile[data-item-id]") ?? [])];
         return Math.max(1, tiles.filter((t) => t.offsetTop === tiles[0]?.offsetTop).length);
     };
 
     const onKeyDown = (e: React.KeyboardEvent) => {
+        if (files && onUp && (e.key === "Backspace" || (e.altKey && e.key === "ArrowUp"))) {
+            e.preventDefault();
+            onUp();
+            return;
+        }
+        if (files && e.key === "Enter") {
+            e.preventDefault();
+            if (folderFocus !== null) onOpenFolder(folderFocus);
+            else {
+                const it = items.find((i) => i.id === focusId);
+                if (it) onOpenItem(it);
+            }
+            return;
+        }
         if (items.length === 0) return;
         const idx = focusId === null ? -1 : order.indexOf(focusId);
         const moveTo = (next: number) => {
@@ -143,8 +258,8 @@ function ItemList({
                     : single(id),
             );
         };
-        const step = gallery ? galleryColumns() : 1;
-        if (gallery && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        const step = grid ? galleryColumns() : 1;
+        if (grid && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
             moveTo(e.key === "ArrowLeft" ? Math.max(0, idx - 1) : idx + 1);
         } else if (e.key === "ArrowDown") moveTo(idx + step);
         else if (e.key === "ArrowUp") moveTo(idx < 0 ? 0 : Math.max(0, idx - step));
@@ -194,7 +309,7 @@ function ItemList({
             setBox({ top, left, width: right - left, height: bottom - top });
             const hit = [...table.querySelectorAll<HTMLElement>("[data-item-id]")]
                 .filter((el) => el.offsetTop < bottom && el.offsetTop + el.offsetHeight > top)
-                .filter((el) => !gallery || (el.offsetLeft < right && el.offsetLeft + el.offsetWidth > left))
+                .filter((el) => !grid || (el.offsetLeft < right && el.offsetLeft + el.offsetWidth > left))
                 .map((el) => Number(el.dataset.itemId));
             onSelectionChange({
                 ids: inOrder(order, [...base, ...hit]),
@@ -249,20 +364,60 @@ function ItemList({
 
     const onRowClick = (e: React.MouseEvent, id: number) => {
         if (suppressClick.current) return;
+        setFolderFocus(null);
         onSelectionChange(clickSelect(selection, order, id, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey }));
     };
 
-    const open = (a: Attachment) => drawerApi.openAttachment(a.id).catch((e) => onError(errorMessage(e)));
+    /** Readable files open in the reader (with the item's other attachments); others in their program. */
+    const open = (a: Attachment) => {
+        const files = attachments.get(a.itemId) ?? [a];
+        if (canRead(a)) onRead(files.filter(canRead), files.filter(canRead).findIndex((f) => f.id === a.id));
+        else drawerApi.openAttachment(a.id).catch((e) => onError(errorMessage(e)));
+    };
     const allOpen = withAttachments.length > 0 && withAttachments.every((id) => expanded.has(id));
 
     return (
         <section className="drawer-pane drawer-list">
             <div className="pane-header">
-                <span className="pane-title" title={title}>{title}</span>
+                {files ? (
+                    <>
+                        <button className="icon-btn" title="上一層（Backspace）" disabled={!onUp} onClick={onUp}>
+                            <Icon name="arrowUp" />
+                        </button>
+                        <nav className="crumbs" aria-label="位置" title={title}>
+                            {crumbs.map((c, i) => (
+                                <Fragment key={i}>
+                                    {i > 0 && <Icon name="chevronRight" className="crumb-sep" />}
+                                    {c.onClick && i < crumbs.length - 1 ? (
+                                        <button className="crumb" onClick={c.onClick}>{c.label}</button>
+                                    ) : (
+                                        <span className="crumb current">{c.label}</span>
+                                    )}
+                                </Fragment>
+                            ))}
+                        </nav>
+                    </>
+                ) : (
+                    <span className="pane-title" title={title}>{title}</span>
+                )}
                 <span className="pane-count">
-                    {selection.ids.length > 1 ? `已選 ${selection.ids.length} / ${items.length}` : `${items.length} 個條目`}
+                    {selection.ids.length > 1
+                        ? `已選 ${selection.ids.length} / ${items.length}`
+                        : files
+                          ? [folders.length > 0 && `${folders.length} 個資料夾`, `${items.length} 個檔案`].filter(Boolean).join("、")
+                          : `${items.length} 個條目`}
                 </span>
-                {onModeChange && (
+                {files && !gallery && (
+                    <div className="view-switch" role="group" aria-label="檢視">
+                        <button className={icons ? "active" : ""} title="大圖示" onClick={() => onFileViewChange("icons")}>
+                            <Icon name="cards" />
+                        </button>
+                        <button className={!icons ? "active" : ""} title="詳細資料" onClick={() => onFileViewChange("details")}>
+                            <Icon name="table" />
+                        </button>
+                    </div>
+                )}
+                {onModeChange && !files && (
                     <div className="view-switch" role="group">
                         <button className={mode === "list" ? "active" : ""} title="清單" onClick={() => onModeChange("list")}>
                             <Icon name="table" />
@@ -272,7 +427,39 @@ function ItemList({
                         </button>
                     </div>
                 )}
-                {gallery ? (
+                {grid && (
+                    <select
+                        className="sort-select"
+                        title="排序"
+                        aria-label="排序"
+                        value={cols.sort ? `${cols.sort.key}:${cols.sort.dir}` : ""}
+                        onChange={(e) => {
+                            const [key, dir] = e.target.value.split(":");
+                            cols.setSort(key ? { key, dir: dir as "asc" | "desc" } : null);
+                        }}
+                    >
+                        <option value="">最近修改的在前</option>
+                        <option value="title:asc">{files ? "名稱" : "標題"}（A → Z）</option>
+                        <option value="title:desc">{files ? "名稱" : "標題"}（Z → A）</option>
+                        {cols.all
+                            .filter((c) => c.sortValue || c.id === "date" || c.id === "itemType")
+                            .flatMap((c) => [
+                                <option key={`${c.id}d`} value={`${c.id}:desc`}>{c.label}（{c.sortValue ? "新／大的在前" : "Z → A"}）</option>,
+                                <option key={`${c.id}a`} value={`${c.id}:asc`}>{c.label}（{c.sortValue ? "舊／小的在前" : "A → Z"}）</option>,
+                            ])}
+                    </select>
+                )}
+                {icons ? (
+                    <input
+                        className="tile-size"
+                        type="range"
+                        min={ICON_SIZES.min}
+                        max={ICON_SIZES.max}
+                        value={iconSize}
+                        title="圖示大小"
+                        onChange={(e) => changeIconSize(Number(e.target.value))}
+                    />
+                ) : gallery ? (
                     <input
                         className="tile-size"
                         type="range"
@@ -294,13 +481,16 @@ function ItemList({
                         <Icon name="settings" />
                     </button>
                 )}
+                {files ? (
+                    <button className="primary-btn" onClick={onAddFiles} title="選擇檔案，每個檔案成為一個條目">＋ 加入檔案</button>
+                ) : (
                 <div className="new-item">
                     <button className="primary-btn" onClick={() => setMenuOpen((o) => !o)}>＋ 新條目</button>
                     {menuOpen && (
                         <>
                             <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
                             <ul className="menu">
-                                {groupedTypes()
+                                {groupedTypes(library)
                                     .map(([group, types]) => [group, types.filter((t) => canCreate(t.id))] as const)
                                     .filter(([, types]) => types.length > 0)
                                     .map(([group, types]) => (
@@ -326,13 +516,26 @@ function ItemList({
                         </>
                     )}
                 </div>
+                )}
             </div>
             <div className="search">
                 <input
+                    ref={searchRef}
                     type="search"
-                    placeholder="搜尋標題、作者、標籤、筆記卡片、附件…"
+                    placeholder="搜尋標題、作者、標籤、筆記卡片、附件…（Ctrl＋F）"
                     value={query}
                     onChange={(e) => onQueryChange(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                            e.preventDefault();
+                            if (query) onQueryChange("");
+                            else tableRef.current?.focus();
+                        } else if (e.key === "ArrowDown" || (e.key === "Enter" && items.length > 0)) {
+                            e.preventDefault();
+                            if (items.length > 0 && !items.some((it) => selected.has(it.id))) onSelectionChange(single(items[0].id));
+                            tableRef.current?.focus();
+                        }
+                    }}
                 />
             </div>
             {colMenu && (
@@ -349,7 +552,7 @@ function ItemList({
                         <li className="menu-item disabled">
                             <span className="col-check"><Icon name="check" /></span>標題
                         </li>
-                        {COLUMNS.map((c) => (
+                        {cols.all.map((c) => (
                             <li key={c.id} className="menu-item" onClick={() => cols.toggle(c.id)}>
                                 <span className="col-check">{cols.visible.includes(c.id) && <Icon name="check" />}</span>
                                 {c.label}
@@ -369,10 +572,10 @@ function ItemList({
                 </>
             )}
             <div
-                className={`item-table${gallery ? " gallery" : ""}`}
+                className={`item-table${gallery ? " gallery" : ""}${icons ? " icons" : ""}`}
                 style={
-                    gallery
-                        ? ({ "--tile": `${tile}px` } as React.CSSProperties)
+                    grid
+                        ? ({ "--tile": `${icons ? iconSize : tile}px` } as React.CSSProperties)
                         : ({ "--cols": gridColumns, "--row-min": `${rowMinWidth}px` } as React.CSSProperties)
                 }
                 ref={tableRef}
@@ -381,13 +584,14 @@ function ItemList({
                 onPointerDown={(e) => {
                     // Empty space below the rows (or the empty-list message) starts a selection box.
                     const t = e.target as HTMLElement;
-                    if (t === e.currentTarget || t.classList.contains("empty") || t.classList.contains("gallery-grid")) {
+                    if (t === e.currentTarget || t.classList.contains("empty") || t.classList.contains("gallery-grid") || t.classList.contains("file-grid")) {
+                        setFolderFocus(null);
                         startMarquee(e, true);
                     }
                 }}
             >
                 {box && <div className="marquee" style={box} />}
-                {!gallery && (
+                {!grid && (
                     <div
                         className="item-row item-head"
                         onContextMenu={(e) => {
@@ -404,7 +608,7 @@ function ItemList({
                             >
                                 <Icon name={allOpen ? "chevronDown" : "chevronRight"} />
                             </button>
-                            標題
+                            {sortHeader("title", files ? "名稱" : "標題")}
                         </span>
                         {cols.columns.map((c) => (
                             <span key={c.id} className={`col-cell col-${c.id}`}>
@@ -413,15 +617,62 @@ function ItemList({
                                     title="拖曳調整欄寬"
                                     onPointerDown={(e) => startResize(e, c.id, c.width, c.minWidth)}
                                 />
-                                {c.id === "attachments" ? <span title="附件"><Icon name="attachment" /></span> : c.label}
+                                {sortHeader(c.id, c.id === "attachments" ? <Icon name="attachment" /> : c.label)}
                             </span>
                         ))}
                     </div>
                 )}
-                {items.length === 0 && (
-                    <div className="empty">{query ? "沒有符合的條目" : "沒有條目"}</div>
+                {items.length === 0 && folders.length === 0 && (
+                    <div className="empty">
+                        {query ? (
+                            <>
+                                <p>沒有符合「{query.trim()}」的{files ? "檔案" : "條目"}</p>
+                                <button className="secondary-btn" onClick={() => { onQueryChange(""); searchRef.current?.focus(); }}>清除搜尋</button>
+                            </>
+                        ) : files ? (
+                            <>
+                                <p>沒有檔案。把檔案拖進視窗，或</p>
+                                <button className="secondary-btn" onClick={onAddFiles}>＋ 加入檔案</button>
+                            </>
+                        ) : (
+                            <>
+                                <p>{gallery ? "這個畫廊還沒有圖片" : "這裡還沒有條目"}</p>
+                                <button className="secondary-btn" onClick={() => setMenuOpen(true)}>＋ 新條目</button>
+                            </>
+                        )}
+                    </div>
                 )}
-                {gallery ? (
+                {icons ? (
+                    <div className="file-grid">
+                        {folders.map((f) => (
+                            <FolderTile
+                                key={`f${f.id}`}
+                                folder={f}
+                                subfolders={allFolders.filter((c) => c.parentId === f.id).length}
+                                highlighted={folderFocus === f.id}
+                                dropTarget={dropFolderId === f.id}
+                                onClick={() => {
+                                    setFolderFocus(f.id);
+                                    onSelectionChange(NO_SELECTION);
+                                    tableRef.current?.focus();
+                                }}
+                                onOpen={() => onOpenFolder(f.id)}
+                            />
+                        ))}
+                        {items.map((it) => (
+                            <FileTile
+                                key={it.id}
+                                item={it}
+                                selected={selected.has(it.id)}
+                                focused={it.id === focusId && selection.ids.length > 1}
+                                dragSource={draggingIds.includes(it.id)}
+                                onClick={(e) => onRowClick(e, it.id)}
+                                onPointerDown={(e) => onDragStart(e, it)}
+                                onOpen={() => onOpenItem(it)}
+                            />
+                        ))}
+                    </div>
+                ) : gallery ? (
                     <div className="gallery-grid">
                         {items.map((it) => (
                             <GalleryTile
@@ -433,12 +684,38 @@ function ItemList({
                                 onClick={(e) => onRowClick(e, it.id)}
                                 onPointerDown={(e) => onDragStart(e, it)}
                                 onOpen={() => {
-                                    if (it.imageId !== null) drawerApi.openAttachment(it.imageId).catch((e) => onError(errorMessage(e)));
+                                    // Through the gallery's pictures, starting at this one.
+                                    const pictures = items.filter((i) => i.imageId !== null);
+                                    const files = pictures.map((i): ReaderFile => ({ id: i.imageId!, fileName: i.title || "圖片", kind: "image" }));
+                                    if (it.imageId !== null) onRead(files, pictures.indexOf(it));
                                 }}
                             />
                         ))}
                     </div>
-                ) : items.map((it) => {
+                ) : [
+                    ...(files ? folders : []).map((f) => (
+                        <div
+                            key={`f${f.id}`}
+                            className={`item-row folder-row${folderFocus === f.id ? " selected" : ""}${dropFolderId === f.id ? " drop-target" : ""}`}
+                            data-drop-collection={f.id}
+                            title={`${f.name}\n雙擊開啟資料夾`}
+                            onClick={() => {
+                                setFolderFocus(f.id);
+                                onSelectionChange(NO_SELECTION);
+                            }}
+                            onDoubleClick={() => onOpenFolder(f.id)}
+                        >
+                            <span className="col-title">
+                                <span className="twisty" />
+                                <Icon name={f.view === "gallery" ? "image" : "folder"} className="type-icon folder-icon" />
+                                {f.name}
+                            </span>
+                            {cols.columns.map((c) => (
+                                <span key={c.id} className={`col-cell col-${c.id} secondary`}>{c.id === "itemType" ? "資料夾" : ""}</span>
+                            ))}
+                        </div>
+                    )),
+                    ...items.map((it) => {
                     const isOpen = expanded.has(it.id) && it.attachmentCount > 0;
                     const children = attachments.get(it.id) ?? [];
                     return (
@@ -448,6 +725,7 @@ function ItemList({
                                 className={`item-row${selected.has(it.id) ? " selected" : ""}${it.id === focusId && selection.ids.length > 1 ? " focused" : ""}${draggingIds.includes(it.id) ? " drag-source" : ""}`}
                                 onClick={(e) => onRowClick(e, it.id)}
                                 onPointerDown={(e) => onRowPointerDown(e, it)}
+                                onDoubleClick={files ? (e) => !(e.target as HTMLElement).closest(".twisty") && onOpenItem(it) : undefined}
                             >
                                 <span className="col-title">
                                     {it.attachmentCount > 0 ? (
@@ -466,7 +744,7 @@ function ItemList({
                                         <span className="twisty" />
                                     )}
                                     <TypeIcon type={it.itemType} className="type-icon" />
-                                    {it.title || <em className="muted">（無標題）</em>}
+                                    {files ? marked(displayName(it), query) : it.title ? marked(it.title, query) : <em className="muted">（無標題）</em>}
                                 </span>
                                 {cols.columns.map((c) => (
                                     <span key={c.id} className={`col-cell col-${c.id}${c.secondary ? " secondary" : ""}`}>
@@ -493,7 +771,8 @@ function ItemList({
                                 ))}
                         </Fragment>
                     );
-                })}
+                }),
+                ]}
             </div>
         </section>
     );

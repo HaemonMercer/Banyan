@@ -4,6 +4,7 @@ import { collectionPath } from "../../drawer/collections";
 import type { DropTarget } from "../../drawer/useItemDrag";
 import { usePersistentSet } from "../../drawer/usePersistentSet";
 import { Icon } from "../../icons/Icon";
+import { LIBRARY_LABELS, type Library } from "../../drawer/itemTypes";
 
 export type LibraryView =
     | { kind: "all" }
@@ -11,7 +12,13 @@ export type LibraryView =
     | { kind: "collection"; id: number }
     | { kind: "tag"; id: number };
 
+/** Name of a library's "everything" row. */
+export const allLabel = (library: Library) => (library === "files" ? "所有檔案" : "全部文獻");
+
 interface Props {
+    /** The library shown (文獻庫 or 檔案庫); `collections` and `tags` are already that library's. */
+    library: Library;
+    onLibraryChange: (library: Library) => void;
     collections: Collection[];
     view: LibraryView;
     onSelect: (view: LibraryView) => void;
@@ -47,7 +54,7 @@ function NameInput({ initial, onDone }: { initial: string; onDone: (name: string
 }
 
 function CollectionTree({
-    collections, view, onSelect, onCreate, onRename, onDelete, onOpenSettings,
+    library, onLibraryChange, collections, view, onSelect, onCreate, onRename, onDelete, onOpenSettings,
     tags, onRenameTag, onDeleteTag, dropTarget,
 }: Props) {
     const dropTargetId = dropTarget?.kind === "collection" ? dropTarget.id : null;
@@ -181,8 +188,19 @@ function CollectionTree({
 
     return (
         <nav className="drawer-pane drawer-tree">
-            <div className="pane-header">
-                <span>Drawer</span>
+            <div className="pane-header library-switch" role="tablist" aria-label="Drawer">
+                {(["literature", "files"] as const).map((l) => (
+                    <button
+                        key={l}
+                        role="tab"
+                        aria-selected={library === l}
+                        className={library === l ? "active" : ""}
+                        onClick={() => library !== l && onLibraryChange(l)}
+                        title={l === "files" ? "個人檔案：拖進來的每個檔案都是一個條目" : "文獻與收藏：書目資料"}
+                    >
+                        <Icon name={l === "files" ? "folder" : "library"} /> {LIBRARY_LABELS[l]}
+                    </button>
+                ))}
             </div>
             <ul className="tree">
                 <li>
@@ -191,8 +209,8 @@ function CollectionTree({
                         onClick={() => onSelect({ kind: "all" })}
                     >
                         <span className="tree-twisty" />
-                        <Icon name="library" className="tree-icon" />
-                        <span className="tree-label">我的 Drawer</span>
+                        <Icon name={library === "files" ? "database" : "library"} className="tree-icon" />
+                        <span className="tree-label">{allLabel(library)}</span>
                     </div>
                 </li>
                 <li>

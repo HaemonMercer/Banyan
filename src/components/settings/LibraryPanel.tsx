@@ -59,6 +59,7 @@ function LibraryPanel() {
                 {info?.isDefault && <span className="badge">預設</span>}
             </div>
             {info?.warning && <p className="notice err">{info.warning}</p>}
+            {info?.notice && <p className="notice ok">{info.notice}</p>}
 
             <div className="settings-actions">
                 <button className="secondary-btn" onClick={() => drawerApi.revealLibraryDir().catch((e) => setError(errorMessage(e)))}>
@@ -72,6 +73,20 @@ function LibraryPanel() {
                 <button className="primary-btn" disabled={!!busy} onClick={async () => choose(await drawerApi.pickLibraryDir())}>
                     變更位置…
                 </button>
+            </div>
+
+            <h3 className="settings-subhead">更新時的資料庫保護</h3>
+            <p className="muted">
+                Banyan 更新後若需要升級資料庫，會先檢查檔案是否完整，並把原本的資料庫備份到 backups
+                資料夾（保留最近 5 份），{""}再一次完成升級；升級失敗會全部還原。由較新版 Banyan 建立的資料庫不會被開啟，以免損壞。
+            </p>
+            <div className="settings-actions">
+                <span className="muted">{info ? (info.backupCount > 0 ? `目前有 ${info.backupCount} 份升級前的備份` : "目前沒有升級前的備份") : ""}</span>
+                {info && info.backupCount > 0 && (
+                    <button className="secondary-btn" onClick={() => drawerApi.revealBackups().catch((e) => setError(errorMessage(e)))}>
+                        開啟備份資料夾
+                    </button>
+                )}
             </div>
 
             {target && (

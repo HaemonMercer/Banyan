@@ -22,7 +22,7 @@ interface Props {
 function InsertToolbar({ onCard, onSticky, onSection, onImage, onVideo, onPdf, onMindMap, onTable, onChart }: Props) {
     const [videoOpen, setVideoOpen] = useState(false);
     const tools: { icon: IconName; label: string; hint: string; run: () => void; active?: boolean }[] = [
-        { icon: "note", label: "卡片", hint: "新卡片（Markdown）；也可以在空白處雙擊", run: onCard },
+        { icon: "note", label: "卡片", hint: "新卡片；也可以在空白處雙擊", run: onCard },
         { icon: "sticky", label: "便利貼", hint: "便利貼", run: onSticky },
         { icon: "section", label: "區塊", hint: "區塊（選取卡片時會包住它們）", run: onSection },
         { icon: "mindmap", label: "心智圖", hint: "心智圖：Tab 新增子主題、Enter 新增同層主題", run: onMindMap },

@@ -76,44 +76,20 @@ export function diffInline(before: string, after: string): DiffPart[] {
     return merge(diffSeq(before.match(TOKEN) ?? [], after.match(TOKEN) ?? []));
 }
 
-/**
- * Splits Markdown into blocks at blank lines, keeping fenced code and `$$` math blocks whole so
- * each block still renders on its own.
- */
-export function markdownBlocks(text: string): string[] {
-    const blocks: string[] = [];
-    let cur: string[] = [];
-    let fence: string | null = null;
-    for (const line of text.split("\n")) {
-        const t = line.trim();
-        if (fence) {
-            cur.push(line);
-            if (t.startsWith(fence)) fence = null;
-            continue;
-        }
-        const open = /^(`{3,}|~{3,}|\$\$)/.exec(t);
-        if (open && !(open[1] === "$$" && t.length > 2 && t.endsWith("$$"))) {
-            fence = open[1];
-            cur.push(line);
-            continue;
-        }
-        if (t === "") {
-            if (cur.length > 0) blocks.push(cur.join("\n"));
-            cur = [];
-        } else {
-            cur.push(line);
-        }
-    }
-    if (cur.length > 0) blocks.push(cur.join("\n"));
-    return blocks;
+/** Splits text into paragraphs at blank lines. */
+export function textBlocks(text: string): string[] {
+    return text
+        .split(/\n[ \t]*\n/)
+        .map((b) => b.replace(/^\n+|\n+$/g, ""))
+        .filter((b) => b.trim() !== "");
 }
 
-/** A block of the compared document: unchanged (rendered as Markdown) or changed (inline diff). */
+/** A block of the compared document: unchanged or changed (inline diff). */
 export type DocBlock = { kind: "same"; text: string } | { kind: "changed"; parts: DiffPart[] };
 
-/** Compares two Markdown texts block by block; changed blocks carry an inline diff. */
+/** Compares two texts paragraph by paragraph; changed paragraphs carry an inline diff. */
 export function diffDocument(before: string, after: string): DocBlock[] {
-    const parts = diffSeq(markdownBlocks(before), markdownBlocks(after));
+    const parts = diffSeq(textBlocks(before), textBlocks(after));
     const out: DocBlock[] = [];
     let i = 0;
     while (i < parts.length) {

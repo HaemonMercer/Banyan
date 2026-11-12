@@ -4,6 +4,7 @@ import { errorMessage } from "../../drawer/api";
 import Markdown from "../../markdown/Markdown";
 import { whiteboardApi, type CardDetail, type CardVersion } from "../../whiteboard/api";
 import { changeStats, diffDocument, diffInline, type DiffPart } from "../../whiteboard/diff";
+import { ask } from "../Feedback";
 
 interface Props {
     card: CardDetail;
@@ -140,7 +141,7 @@ function VersionHistory({ card, onRestored, onClose, onError }: Props) {
 
     const restore = async (v: CardVersion) => {
         setMenuFor(null);
-        if (!confirm(`把卡片還原到 ${longDate(v.updatedAt)} 的版本？目前的內容會保留在版本記錄中。`)) return;
+        if (!(await ask({ title: `把卡片還原到 ${longDate(v.updatedAt)} 的版本？`, message: "目前的內容會保留在版本記錄中。", confirm: "還原" }))) return;
         try {
             onRestored(await whiteboardApi.restoreCardVersion(v.id));
         } catch (e) {
@@ -150,7 +151,7 @@ function VersionHistory({ card, onRestored, onClose, onError }: Props) {
 
     const remove = async (v: CardVersion) => {
         setMenuFor(null);
-        if (!confirm(`刪除 ${longDate(v.updatedAt)} 的版本${v.name ? `「${v.name}」` : ""}？此動作無法復原。`)) return;
+        if (!(await ask({ title: `刪除 ${longDate(v.updatedAt)} 的版本${v.name ? `「${v.name}」` : ""}？`, message: "此動作無法復原。", confirm: "刪除", danger: true }))) return;
         try {
             await whiteboardApi.deleteCardVersion(v.id);
             await load();

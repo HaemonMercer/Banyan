@@ -1,0 +1,324 @@
+/* ---------- Reader: full-window viewer for PDFs, books, pictures, video, text ---------- */
+.reader {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    display: flex;
+    flex-direction: column;
+    background: var(--pane);
+    animation: reader-in var(--dur-fast, 120ms) var(--ease, ease-out);
+}
+@keyframes reader-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .reader { animation: none; } }
+
+.reader-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-height: var(--header-h);
+    padding: 0 var(--sp-3);
+    border-bottom: 1px solid var(--border);
+    background: var(--pane);
+    flex-shrink: 0;
+}
+.reader-files { display: inline-flex; align-items: center; gap: 2px; }
+.reader-title {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--fw-semibold);
+}
+.reader-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+.reader-tools .small-btn.active { background: var(--accent-soft); color: var(--accent); }
+.reader-tools .small-btn { display: inline-flex; align-items: center; gap: 4px; }
+.reader-count, .reader-zoom { font-size: var(--fs-sm); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.reader-zoom { min-width: 3.2em; text-align: center; }
+.reader-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.reader-page-input {
+    width: 3.5em;
+    padding: 2px 4px;
+    text-align: center;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+}
+.reader-close { font-size: 16px; }
+
+.reader-body { position: relative; flex: 1; min-height: 0; display: flex; }
+.reader-message {
+    margin: auto;
+    padding: var(--sp-4);
+    text-align: center;
+    color: var(--text-2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--sp-3);
+}
+.reader-scroll { flex: 1; overflow: auto; outline: none; }
+
+/* PDF */
+.reader-pdf { background: var(--hover); }
+.reader-pdf-page {
+    position: absolute;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+.reader-pdf-page canvas { display: block; }
+
+/* pictures */
+.reader-image {
+    flex: 1;
+    overflow: auto;
+    display: grid;
+    place-items: center;
+    cursor: grab;
+    background: var(--hover);
+}
+.reader-image:active { cursor: grabbing; }
+.reader-image.fit { cursor: zoom-in; overflow: hidden; }
+.reader-image.fit img { max-width: calc(100% - 32px); max-height: calc(100% - 32px); object-fit: contain; }
+.reader-image img { display: block; user-select: none; }
+
+/* video and audio */
+.reader-media { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; }
+.reader-media video { max-width: 100%; max-height: 100%; }
+.reader-media.audio { background: var(--hover); }
+.reader-media.audio audio { width: min(640px, 90%); }
+
+/* text */
+.reader-page { max-width: 46em; margin: 0 auto; padding: 32px 28px 64px; }
+.reader-text pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: var(--fs-md); }
+
+/* books */
+.reader-epub { flex: 1; display: flex; min-width: 0; }
+.reader-epub-frame { flex: 1; border: none; background: var(--pane); }
+.reader-toc {
+    width: 280px;
+    flex-shrink: 0;
+    overflow: auto;
+    border-right: 1px solid var(--border);
+    padding: var(--sp-2) 0;
+}
+.reader-toc-title { padding: var(--sp-2) var(--sp-3); font-weight: var(--fw-semibold); }
+.reader-toc ul { list-style: none; margin: 0; padding: 0; }
+.reader-toc button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+.reader-toc button:hover:not(:disabled) { background: var(--hover); }
+.reader-toc button.active { background: var(--accent-soft); color: var(--accent); }
+.reader-toc button:disabled { color: var(--muted); cursor: default; }
+
+@media (max-width: 700px) {
+    .reader-toc { position: absolute; inset: 0 auto 0 0; z-index: 1; background: var(--bg); }
+}
+
+/* ---------- PDF: bookmarks + search + pages ---------- */
+.reader-pdf-wrap { flex: 1; display: flex; min-width: 0; }
+.reader-pdf-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.reader-pdf-main > .reader-scroll, .reader-pdf-main > .reader-epub-frame { flex: 1; min-height: 0; }
+.reader-zoom-select {
+    padding: 2px 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--input-bg);
+    color: inherit;
+    font: inherit;
+    font-size: var(--fs-sm);
+}
+.reader-toc button { display: flex; gap: 8px; align-items: baseline; }
+.reader-toc-label { flex: 1; min-width: 0; }
+.reader-toc-page { color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.reader-toc-note { padding: var(--sp-2) var(--sp-3); }
+
+/* Selectable text over each PDF page (pdf.js text layer; only the rules the reader needs). */
+.reader-pdf-page .textLayer {
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    line-height: 1;
+    text-align: initial;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-size-adjust: none;
+    forced-color-adjust: none;
+    transform-origin: 0 0;
+    z-index: 0;
+    --min-font-size: 1;
+    --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.reader-pdf-page .textLayer :is(span, br) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+    user-select: text;
+}
+.reader-pdf-page .textLayer > :not(.markedContent),
+.reader-pdf-page .textLayer .markedContent span:not(.markedContent) {
+    z-index: 1;
+    --font-height: 0;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    --scale-x: 1;
+    --rotate: 0deg;
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.reader-pdf-page .textLayer .markedContent { display: contents; }
+.reader-pdf-page .textLayer ::selection { background: rgba(0, 100, 255, 0.28); }
+.reader-pdf-page .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+.reader-pdf-page .textLayer mark.reader-hit { color: transparent; background: rgba(255, 200, 0, 0.45); border-radius: 2px; }
+.reader-pdf-page .textLayer mark.reader-hit.current { background: rgba(255, 120, 0, 0.6); }
+
+/* find bar */
+.reader-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px var(--sp-3);
+    border-bottom: 1px solid var(--border);
+    background: var(--pane);
+    color: var(--text-2);
+    flex-shrink: 0;
+}
+.reader-search input {
+    flex: 0 1 320px;
+    min-width: 120px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--input-bg);
+    color: var(--text);
+    font: inherit;
+}
+.reader-search-status { font-size: var(--fs-sm); color: var(--muted); min-width: 5em; font-variant-numeric: tabular-nums; }
+
+.reader-note {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 6px var(--sp-3);
+    background: var(--info-soft);
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+    flex-shrink: 0;
+}
+.reader-note .icon-btn { margin-left: auto; }
+
+/* ---------- comics ---------- */
+.reader-comic { flex: 1; display: flex; min-width: 0; background: #111; overflow: auto; }
+.reader-comic-pages { flex: 1; display: flex; justify-content: center; align-items: center; gap: 0; min-height: 100%; cursor: pointer; user-select: none; }
+.reader-comic.fit-page .reader-comic-pages img { max-height: calc(100vh - var(--header-h)); max-width: 100%; object-fit: contain; }
+.reader-comic.fit-page.spread .reader-comic-pages img { max-width: 50%; }
+.reader-comic.fit-width .reader-comic-pages { align-items: flex-start; }
+.reader-comic.fit-width .reader-comic-pages img { width: 100%; height: auto; }
+.reader-comic.fit-width.spread .reader-comic-pages img { width: 50%; }
+.reader-comic-loading { width: 40%; aspect-ratio: 0.7; background: #222; }
+
+/* ---------- annotations (Annotator) ---------- */
+/* Highlight colors (--annot) are defined in Annotator.css, which the app always loads. */
+
+/* PDF highlights sit between the page picture and its (invisible) text. */
+.reader-pdf-page .annot-layer { position: absolute; inset: 0; pointer-events: none; }
+.annot-rect { position: absolute; background: rgba(var(--annot), 0.38); mix-blend-mode: multiply; border-radius: 1px; }
+.annot-rect.flash, .annot-page-mark.flash { animation: annot-flash 1.6s ease-out; }
+.annot-rect.active { box-shadow: 0 0 0 2px rgba(255, 120, 0, 0.75); }
+/* a highlight with a note: a small dot after its last line */
+.annot-rect.noted::after {
+    content: "";
+    position: absolute;
+    top: -3px;
+    right: -4px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgb(var(--annot));
+    border: 1px solid rgba(0, 0, 0, 0.35);
+}
+/* over a highlight: clicking opens it */
+.reader-pdf.over-annot .textLayer :is(span, br) { cursor: pointer; }
+@keyframes annot-flash { 0%, 40% { box-shadow: 0 0 0 3px rgba(255, 120, 0, 0.9); } 100% { box-shadow: 0 0 0 3px transparent; } }
+.annot-page-mark {
+    position: absolute;
+    top: 0;
+    right: 18px;
+    width: 14px;
+    height: 22px;
+    background: var(--accent);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%);
+    pointer-events: none;
+}
+
+.annot-menu {
+    position: fixed;
+    z-index: var(--z-popover);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.annot-colors { display: inline-flex; gap: 4px; }
+.annot-dot {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    background: rgb(var(--annot));
+    cursor: pointer;
+}
+.annot-dot:hover { transform: scale(1.12); }
+.annot-dot.current { box-shadow: 0 0 0 2px var(--raised), 0 0 0 4px rgb(var(--annot)); }
+.annot-dot.recent { box-shadow: 0 0 0 2px var(--raised), 0 0 0 3px var(--muted); }
+.annot-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.annot-popover { flex-direction: column; align-items: stretch; width: 320px; padding: 8px 10px 10px; gap: 8px; border-top: 4px solid rgb(var(--annot)); }
+.annot-popover-head { display: flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--text-2); }
+.annot-popover-cited { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; color: var(--accent); }
+.annot-popover-close { margin-left: auto; width: 22px; height: 22px; }
+.annot-popover-row { display: flex; align-items: center; gap: 6px; }
+.annot-popover-actions { margin-left: auto; display: inline-flex; gap: 2px; }
+.annot-popover .small-btn { display: inline-flex; align-items: center; gap: 4px; }
+.annot-popover .small-btn.danger:hover { color: var(--danger); }
+.annot-popover-quote {
+    margin: 0;
+    padding: 2px 8px;
+    border-left: 3px solid rgb(var(--annot));
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+    max-height: 6.5em;
+    overflow: auto;
+}
+.annot-note-input {
+    width: 100%;
+    resize: vertical;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--input-bg);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-md);
+}

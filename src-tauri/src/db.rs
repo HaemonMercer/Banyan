@@ -1,26 +1,239 @@
-use std::path::Path;
+//! The SQLite file: opening it, and upgrading its schema safely when a new Banyan version starts.
+//!
+//! An upgrade (1) refuses databases made by a newer Banyan, (2) checks the file's integrity,
+//! (3) writes a backup copy into `backups/` next to the database, and (4) runs every step in one
+//! transaction, so a failing step leaves the file exactly as it was.
+
+use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
 /// Bump this and append a migration step whenever the schema changes.
-const SCHEMA_VERSION: i32 = 14;
+pub const SCHEMA_VERSION: i32 = 18;
+/// Folder next to the database file that holds the copies made before upgrades.
+pub const BACKUP_DIR: &str = "backups";
+/// How many pre-upgrade copies are kept (the oldest are removed).
+pub const KEEP_BACKUPS: usize = 5;
 
-pub fn open(path: &Path) -> rusqlite::Result<Connection> {
+/// Why a database couldn't be opened. Apart from `Sqlite`, the file is left untouched.
+#[derive(Debug)]
+pub enum DbError {
+    /// Made by a newer Banyan: an older version could misread or damage what it doesn't know.
+    TooNew { found: i32, supported: i32 },
+    /// The integrity check before an upgrade failed, so the upgrade wasn't attempted.
+    Damaged(String),
+    /// The copy made before an upgrade couldn't be written, so the upgrade wasn't attempted.
+    Backup(String),
+    /// An upgrade step failed; everything was rolled back.
+    UpgradeFailed { from: i32, error: String, backup: Option<PathBuf> },
+    Sqlite(rusqlite::Error),
+}
+
+impl From<rusqlite::Error> for DbError {
+    fn from(e: rusqlite::Error) -> Self {
+        DbError::Sqlite(e)
+    }
+}
+
+impl fmt::Display for DbError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DbError::TooNew { found, supported } => write!(
+                f,
+                "這個資料庫是由較新版的 Banyan 建立的（資料庫第 {found} 版，這個版本只支援到第 {supported} 版）。\
+                 為了避免損壞資料，沒有開啟它。請把 Banyan 更新到最新版本。"
+            ),
+            DbError::Damaged(detail) => write!(
+                f,
+                "資料庫檔案可能已經損壞（完整性檢查未通過：{detail}），沒有進行升級，檔案沒有變動。"
+            ),
+            DbError::Backup(detail) => write!(
+                f,
+                "升級資料庫前無法建立備份（{detail}），沒有進行升級，檔案沒有變動。請確認磁碟空間與資料夾權限。"
+            ),
+            DbError::UpgradeFailed { from, error, backup } => {
+                write!(f, "資料庫從第 {from} 版升級到第 {SCHEMA_VERSION} 版時失敗（{error}），已全部還原，檔案沒有變動。")?;
+                if let Some(b) = backup {
+                    write!(f, "升級前的備份在 {}。", b.display())?;
+                }
+                Ok(())
+            }
+            DbError::Sqlite(e) => write!(f, "資料庫錯誤：{e}"),
+        }
+    }
+}
+
+/// A schema upgrade that happened while opening.
+#[derive(Debug, Clone)]
+pub struct Upgrade {
+    pub from: i32,
+    pub to: i32,
+    /// The copy made before upgrading.
+    pub backup: PathBuf,
+}
+
+pub fn open(path: &Path) -> Result<Connection, DbError> {
+    open_with_report(path).map(|(conn, _)| conn)
+}
+
+/// Creates the current schema in an empty database (e.g. in memory).
+pub fn create_schema(conn: &Connection) -> Result<(), DbError> {
+    upgrade(conn, 0).map_err(|error| DbError::UpgradeFailed { from: 0, error, backup: None })
+}
+
+/// Opens the database, upgrading it if it comes from an older Banyan. Reports the upgrade.
+pub fn open_with_report(path: &Path) -> Result<(Connection, Option<Upgrade>), DbError> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
          PRAGMA journal_mode = WAL;",
     )?;
-    migrate(&conn)?;
-    Ok(conn)
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version > SCHEMA_VERSION {
+        return Err(DbError::TooNew { found: version, supported: SCHEMA_VERSION });
+    }
+    if version == SCHEMA_VERSION {
+        return Ok((conn, None));
+    }
+    if version == 0 {
+        // A new, empty database: nothing to protect.
+        upgrade(&conn, 0).map_err(|error| DbError::UpgradeFailed { from: 0, error, backup: None })?;
+        return Ok((conn, None));
+    }
+    check_integrity(&conn)?;
+    let backup = backup(&conn, path, version)?;
+    upgrade(&conn, version).map_err(|error| DbError::UpgradeFailed {
+        from: version,
+        error,
+        backup: Some(backup.clone()),
+    })?;
+    Ok((conn, Some(Upgrade { from: version, to: SCHEMA_VERSION, backup })))
 }
 
-fn migrate(conn: &Connection) -> rusqlite::Result<()> {
-    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+fn check_integrity(conn: &Connection) -> Result<(), DbError> {
+    let problems: Vec<String> = conn
+        .prepare("PRAGMA quick_check")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if problems.len() == 1 && problems[0] == "ok" {
+        Ok(())
+    } else {
+        Err(DbError::Damaged(problems.into_iter().take(3).collect::<Vec<_>>().join("；")))
+    }
+}
+
+/// Number of foreign-key violations in the database.
+fn foreign_key_problems(conn: &Connection) -> rusqlite::Result<usize> {
+    let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+    let mut rows = stmt.query([])?;
+    let mut n = 0;
+    while rows.next()?.is_some() {
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// Runs the steps from `version` and records the new version, all in one transaction. The
+/// upgrade must not leave more broken references than there were before.
+fn upgrade(conn: &Connection, version: i32) -> Result<(), String> {
+    let before = foreign_key_problems(conn).map_err(|e| e.to_string())?;
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), String> {
+        migrate_steps(conn, version).map_err(|e| e.to_string())?;
+        let after = foreign_key_problems(conn).map_err(|e| e.to_string())?;
+        if after > before {
+            return Err(format!("升級後有 {} 筆資料的關聯不一致", after - before));
+        }
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION).map_err(|e| e.to_string())
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(|e| e.to_string()),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+
+/// Writes a consistent copy of the database to `backups/banyan-v<version>-<UTC time>.db`
+/// and removes the oldest copies beyond `KEEP_BACKUPS`.
+fn backup(conn: &Connection, db_path: &Path, version: i32) -> Result<PathBuf, DbError> {
+    let dir = db_path.parent().unwrap_or(Path::new(".")).join(BACKUP_DIR);
+    fs::create_dir_all(&dir).map_err(|e| DbError::Backup(e.to_string()))?;
+    let stamp = utc_stamp(SystemTime::now());
+    let mut target = dir.join(format!("banyan-v{version}-{stamp}.db"));
+    let mut n = 2;
+    while target.exists() {
+        target = dir.join(format!("banyan-v{version}-{stamp}-{n}.db"));
+        n += 1;
+    }
+    conn.execute("VACUUM INTO ?1", [target.to_string_lossy()])
+        .map_err(|e| DbError::Backup(e.to_string()))?;
+    prune_backups(&dir, KEEP_BACKUPS);
+    Ok(target)
+}
+
+/// Pre-upgrade copies in `dir`, newest first.
+pub fn list_backups(dir: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<(SystemTime, PathBuf)> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.starts_with("banyan-v") && name.ends_with(".db")
+        })
+        .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH), e.path()))
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    found.into_iter().map(|(_, p)| p).collect()
+}
+
+fn prune_backups(dir: &Path, keep: usize) {
+    for old in list_backups(dir).into_iter().skip(keep) {
+        let _ = fs::remove_file(old);
+    }
+}
+
+/// "20261112-085300" (UTC), for backup file names.
+fn utc_stamp(t: SystemTime) -> String {
+    let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (m <= 2) as i64;
+    format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn stamps_are_utc_dates() {
+        assert_eq!(utc_stamp(UNIX_EPOCH), "19700101-000000");
+        // 2024-02-29 12:34:56 UTC (leap day)
+        assert_eq!(utc_stamp(UNIX_EPOCH + Duration::from_secs(1_709_210_096)), "20240229-123456");
+    }
+}
+
+/// The schema changes from `version` up to `SCHEMA_VERSION`. Runs inside the transaction opened
+/// by `upgrade`, so a step must never begin or commit one itself.
+fn migrate_steps(conn: &Connection, version: i32) -> rusqlite::Result<()> {
     if version < 1 {
         conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE collections (
+            "CREATE TABLE collections (
                  id         INTEGER PRIMARY KEY,
                  name       TEXT    NOT NULL,
                  parent_id  INTEGER REFERENCES collections(id) ON DELETE CASCADE,
@@ -70,20 +283,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              CREATE INDEX idx_collections_parent ON collections(parent_id);
              CREATE INDEX idx_item_collections_collection ON item_collections(collection_id);
              CREATE INDEX idx_item_tags_tag ON item_tags(tag_id);
-             CREATE INDEX idx_attachments_item ON attachments(item_id);
-             COMMIT;",
+             CREATE INDEX idx_attachments_item ON attachments(item_id);",
         )?;
     }
     if version < 2 {
         // Fields for music, films, artworks and other non-text collectibles.
         conn.execute_batch(
-            "BEGIN;
-             ALTER TABLE items ADD COLUMN running_time   TEXT NOT NULL DEFAULT '';
+            "ALTER TABLE items ADD COLUMN running_time   TEXT NOT NULL DEFAULT '';
              ALTER TABLE items ADD COLUMN medium         TEXT NOT NULL DEFAULT '';
              ALTER TABLE items ADD COLUMN dimensions     TEXT NOT NULL DEFAULT '';
              ALTER TABLE items ADD COLUMN place          TEXT NOT NULL DEFAULT '';
-             ALTER TABLE items ADD COLUMN catalog_number TEXT NOT NULL DEFAULT '';
-             COMMIT;",
+             ALTER TABLE items ADD COLUMN catalog_number TEXT NOT NULL DEFAULT '';",
         )?;
     }
     if version < 3 {
@@ -96,7 +306,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if version < 4 {
         // Creators with roles (author, editor, translator, director…) replace the free-text
         // `authors` column, which stays as a display/search summary kept in sync by the app.
-        let tx = conn.unchecked_transaction()?;
+        let tx = conn;
         tx.execute_batch(
             "CREATE TABLE item_creators (
                  id       INTEGER PRIMARY KEY,
@@ -120,14 +330,12 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 )?;
             }
         }
-        tx.commit()?;
     }
     if version < 5 {
         // Whiteboard: cards placed on boards, and undirected (two-way) links between cards.
         // Cards live apart from boards so one card can later appear on several boards.
         conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE whiteboards (
+            "CREATE TABLE whiteboards (
                  id         INTEGER PRIMARY KEY,
                  name       TEXT    NOT NULL,
                  created_at INTEGER NOT NULL,
@@ -159,14 +367,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                  UNIQUE (card_a, card_b)
              );
              CREATE INDEX idx_board_cards_card ON board_cards(card_id);
-             CREATE INDEX idx_card_links_b ON card_links(card_b);
-             COMMIT;",
+             CREATE INDEX idx_card_links_b ON card_links(card_b);",
         )?;
     }
     if version < 6 {
         // Cards can reference Drawer items (Heptabase-style). Item notes become cards linked
         // to their item, and the `notes` column goes away.
-        let tx = conn.unchecked_transaction()?;
+        let tx = conn;
         tx.execute_batch(
             "CREATE TABLE card_items (
                  card_id    INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
@@ -191,14 +398,12 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             )?;
         }
         tx.execute_batch("ALTER TABLE items DROP COLUMN notes;")?;
-        tx.commit()?;
     }
     if version < 7 {
         // Whiteboard folders (nested, like Drawer collections); links get a direction and a note.
         // direction: 0 none, 1 card_a → card_b, 2 card_b → card_a, 3 both.
         conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE whiteboard_folders (
+            "CREATE TABLE whiteboard_folders (
                  id         INTEGER PRIMARY KEY,
                  name       TEXT    NOT NULL,
                  parent_id  INTEGER REFERENCES whiteboard_folders(id) ON DELETE CASCADE,
@@ -208,30 +413,26 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              ALTER TABLE whiteboards ADD COLUMN folder_id INTEGER
                  REFERENCES whiteboard_folders(id) ON DELETE SET NULL;
              ALTER TABLE card_links ADD COLUMN direction INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE card_links ADD COLUMN note TEXT NOT NULL DEFAULT '';
-             COMMIT;",
+             ALTER TABLE card_links ADD COLUMN note TEXT NOT NULL DEFAULT '';",
         )?;
     }
     if version < 8 {
         // Related items (Zotero's "Related"): undirected, stored once per pair with item_a < item_b.
         conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE item_relations (
+            "CREATE TABLE item_relations (
                  item_a     INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
                  item_b     INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
                  created_at INTEGER NOT NULL,
                  CHECK (item_a < item_b),
                  PRIMARY KEY (item_a, item_b)
              );
-             CREATE INDEX idx_item_relations_b ON item_relations(item_b);
-             COMMIT;",
+             CREATE INDEX idx_item_relations_b ON item_relations(item_b);",
         )?;
     }
     if version < 9 {
         // Heptabase-style whiteboards: sections (named regions on a board) and card tags.
         conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE board_sections (
+            "CREATE TABLE board_sections (
                  id         INTEGER PRIMARY KEY,
                  board_id   INTEGER NOT NULL REFERENCES whiteboards(id) ON DELETE CASCADE,
                  title      TEXT    NOT NULL DEFAULT '',
@@ -248,17 +449,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                  name    TEXT    NOT NULL COLLATE NOCASE,
                  PRIMARY KEY (card_id, name)
              );
-             CREATE INDEX idx_card_tags_name ON card_tags(name);
-             COMMIT;",
+             CREATE INDEX idx_card_tags_name ON card_tags(name);",
         )?;
     }
     if version < 10 {
         // Series (叢書／系列) and the item's number within it, as in Zotero.
         conn.execute_batch(
-            "BEGIN;
-             ALTER TABLE items ADD COLUMN series        TEXT NOT NULL DEFAULT '';
-             ALTER TABLE items ADD COLUMN series_number TEXT NOT NULL DEFAULT '';
-             COMMIT;",
+            "ALTER TABLE items ADD COLUMN series        TEXT NOT NULL DEFAULT '';
+             ALTER TABLE items ADD COLUMN series_number TEXT NOT NULL DEFAULT '';",
         )?;
     }
     if version < 11 {
@@ -266,8 +464,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // Automatic versions (name = '') absorb edits made shortly after them; named versions
         // are made by the user and never change or get pruned.
         conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE card_versions (
+            "CREATE TABLE card_versions (
                  id         INTEGER PRIMARY KEY,
                  card_id    INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
                  title      TEXT    NOT NULL,
@@ -276,20 +473,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                  created_at INTEGER NOT NULL,
                  updated_at INTEGER NOT NULL
              );
-             CREATE INDEX idx_card_versions_card ON card_versions(card_id, id);
-             COMMIT;",
+             CREATE INDEX idx_card_versions_card ON card_versions(card_id, id);",
         )?;
     }
     if version < 12 {
-        // Whiteboard object types: a card is a note (Markdown) by default, or a sticky note,
+        // Whiteboard object types: a card is a note (text) by default, or a sticky note,
         // image, YouTube video, PDF or mind map. `data` holds the type's JSON (file name, video
         // id, the mind map's tree…); `content` stays searchable text. Versions keep `data` too.
         conn.execute_batch(
-            "BEGIN;
-             ALTER TABLE cards ADD COLUMN kind TEXT NOT NULL DEFAULT 'note';
+            "ALTER TABLE cards ADD COLUMN kind TEXT NOT NULL DEFAULT 'note';
              ALTER TABLE cards ADD COLUMN data TEXT NOT NULL DEFAULT '';
-             ALTER TABLE card_versions ADD COLUMN data TEXT NOT NULL DEFAULT '';
-             COMMIT;",
+             ALTER TABLE card_versions ADD COLUMN data TEXT NOT NULL DEFAULT '';",
         )?;
     }
     if version < 13 {
@@ -303,7 +497,56 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // Full text of an item pasted as-is, e.g. a news article (原文).
         conn.execute_batch("ALTER TABLE items ADD COLUMN full_text TEXT NOT NULL DEFAULT '';")?;
     }
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    if version < 15 {
+        // Drawer holds two libraries: 'literature' (文獻庫, the bibliographic types) and 'files'
+        // (檔案庫, items that are a file). Each library has its own folder tree.
+        conn.execute_batch(
+            "ALTER TABLE collections ADD COLUMN library TEXT NOT NULL DEFAULT 'literature';",
+        )?;
+    }
+    if version < 16 {
+        // Attachments of 文獻庫 items show up in 檔案庫: each gets a file item whose attachment
+        // row shares the same file (`mirror_of` = the literature attachment's id).
+        let tx = conn;
+        tx.execute_batch("ALTER TABLE attachments ADD COLUMN mirror_of INTEGER;")?;
+        crate::drawer::mirror_all_literature_attachments(&tx)?;
+    }
+    if version < 17 {
+        // Annotator: highlights and bookmarks in PDFs and books, kept against the file's original
+        // attachment (shared with its 檔案庫 copy). See annotations.rs for `location`.
+        conn.execute_batch(
+            "CREATE TABLE annotations (
+                 id            INTEGER PRIMARY KEY,
+                 attachment_id INTEGER NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+                 kind          TEXT    NOT NULL,
+                 color         TEXT    NOT NULL DEFAULT 'yellow',
+                 quote         TEXT    NOT NULL DEFAULT '',
+                 note          TEXT    NOT NULL DEFAULT '',
+                 location      TEXT    NOT NULL,
+                 sort_key      REAL    NOT NULL DEFAULT 0,
+                 card_id       INTEGER REFERENCES cards(id) ON DELETE SET NULL,
+                 created_at    INTEGER NOT NULL,
+                 updated_at    INTEGER NOT NULL
+             );
+             CREATE INDEX idx_annotations_attachment ON annotations(attachment_id, sort_key);",
+        )?;
+    }
+    if version < 18 {
+        // Cards cite annotations (like they cite Drawer items). Cards made from an annotation
+        // cite it from the start.
+        conn.execute_batch(
+            "CREATE TABLE card_annotations (
+                 card_id       INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+                 annotation_id INTEGER NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+                 created_at    INTEGER NOT NULL,
+                 PRIMARY KEY (card_id, annotation_id)
+             );
+             CREATE INDEX idx_card_annotations_annotation ON card_annotations(annotation_id);
+             INSERT OR IGNORE INTO card_annotations (card_id, annotation_id, created_at)
+                 SELECT n.card_id, n.id, n.updated_at FROM annotations n
+                 WHERE n.card_id IS NOT NULL AND EXISTS (SELECT 1 FROM cards c WHERE c.id = n.card_id);",
+        )?;
+    }
     Ok(())
 }
 

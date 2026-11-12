@@ -23,8 +23,6 @@ const MODULE = {
     drawer: '<rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M4 12h16M10 7.75h4M10 16.25h4"/>',
     whiteboard:
         '<rect x="3" y="3.5" width="8.5" height="6.5" rx="1.5"/><rect x="12.5" y="14" width="8.5" height="6.5" rx="1.5"/><path d="M7.25 10v3a2 2 0 0 0 2 2h3.25"/>',
-    graph:
-        '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8.5" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.45 6.5l7.1 1.5M6.7 8.4l2.6 7.2M16.4 10.5l-4.8 5.5"/>',
     cardHub: '<rect x="7.5" y="3.5" width="13" height="11.5" rx="2"/><path d="M4 8v10a2.5 2.5 0 0 0 2.5 2.5H16M11 7.5h6M11 11h4"/>',
     writer: '<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/><path d="M8.5 16.5l1-3 4.5-4.5 2 2-4.5 4.5z"/>',
     slides: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8.5 20h7M7 12.5l3-3 2.5 2 4-4"/>',
@@ -33,6 +31,8 @@ const MODULE = {
     layout: '<rect x="3.5" y="3.5" width="17" height="5" rx="1.2"/><rect x="3.5" y="11" width="8" height="9.5" rx="1.2"/><rect x="14" y="11" width="6.5" height="9.5" rx="1.2"/>',
     base: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 9h17M3.5 14.5h17M9.5 9v11"/>',
     versions: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4.5v4h4"/><path d="M12 7.5V12l3 2"/>',
+    /** A highlighter over a line of text. */
+    annotator: '<path d="M4 20.5h9"/><path d="M14.5 3.5l6 6-7.5 7.5H7v-6z"/><path d="M11.5 6.5l6 6M7 17l-2.5 2.5"/>',
 };
 
 /* ---------- interface ---------- */
@@ -107,6 +107,8 @@ const UI = {
 
 /* ---------- Drawer item types (one per type in src/drawer/itemTypes.ts) ---------- */
 const BOOK = '<path d="M5 19V5.5a2 2 0 0 1 2-2h12V17H7a2 2 0 0 0-2 2zm0 0a2 2 0 0 0 2 1.5h12"/>';
+/** A sheet with a folded corner; the file types draw what's inside on it. */
+const FILE = '<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/>';
 const STAGE = '<path d="M3.5 3.5h17M4.5 3.5v17M19.5 3.5v17"/><path d="M4.5 3.5c.4 4.2 2 7 4.8 8M19.5 3.5c-.4 4.2-2 7-4.8 8"/>';
 
 const TYPE = {
@@ -149,6 +151,18 @@ const TYPE = {
     webpage: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.5 3.5 5.3 3.5 8.5s-1.1 6-3.5 8.5c-2.4-2.5-3.5-5.3-3.5-8.5s1.1-6 3.5-8.5z"/>',
     software: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 8.5h18M9.5 12l-2.5 2.5 2.5 2.5M14.5 12l2.5 2.5-2.5 2.5"/>',
     document: '<path d="M6.5 3.5h11A1.5 1.5 0 0 1 19 5v14.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M8.5 8h7M8.5 11.5h7M8.5 15h4"/>',
+    // 檔案（檔案庫）：每個都是折角的檔案，裡面畫出種類
+    fileDocument: FILE + '<path d="M8.5 12.5h7M8.5 15.5h7M8.5 18h4"/>',
+    fileEbook: FILE + '<path d="M8 11.5c1.3-.7 2.7-.7 4 0v6.5c-1.3-.7-2.7-.7-4 0zM12 11.5c1.3-.7 2.7-.7 4 0v6.5c-1.3-.7-2.7-.7-4 0z"/>',
+    fileImage: FILE + '<circle cx="9.5" cy="12" r="1.3"/><path d="M5 18.5l4-3.5 3 2.5 2.5-2 4.5 3.5"/>',
+    fileVideo: FILE + '<path d="M10 11.5v6l5-3z"/>',
+    fileAudio: FILE + '<circle cx="10" cy="17" r="1.7"/><path d="M11.7 17v-5.5l3.3-1v2"/>',
+    fileText: FILE + '<path d="M8.5 11h4M8.5 14h7M8.5 17h7"/>',
+    fileSpreadsheet: FILE + '<rect x="7.5" y="11" width="9" height="7" rx=".5"/><path d="M7.5 14.5h9M11 11v7"/>',
+    filePresentation: FILE + '<rect x="7.5" y="11" width="9" height="5.5" rx=".5"/><path d="M12 16.5V19M10 19h4"/>',
+    fileCode: FILE + '<path d="M10 12l-2.2 2.5L10 17M14 12l2.2 2.5L14 17"/>',
+    fileArchive: FILE + '<path d="M11 3.5v2h2v2h-2v2h2v2h-2"/><rect x="10.3" y="13" width="3.4" height="4" rx=".8"/>',
+    fileOther: FILE + '<path d="M12 18.5h.01M10.2 12.6a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.7-.8 1.2v.4"/>',
 };
 
 export const ICONS = { ...MODULE, ...UI, logo: LOGO } as const;

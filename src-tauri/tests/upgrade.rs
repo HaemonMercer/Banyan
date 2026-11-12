@@ -1,0 +1,152 @@
+//! Opening databases after a Banyan update: backups, rollback of failed upgrades, newer files.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use banyan_lib::db::{self, DbError, SCHEMA_VERSION};
+use banyan_lib::library::Library;
+use rusqlite::Connection;
+
+fn temp_root() -> PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("banyan-upgrade-{stamp}"));
+    fs::create_dir_all(&root).unwrap();
+    root
+}
+
+fn version(path: &Path) -> i32 {
+    Connection::open(path).unwrap().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap()
+}
+
+fn has_column(path: &Path, table: &str, column: &str) -> bool {
+    Connection::open(path)
+        .unwrap()
+        .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))
+        .unwrap()
+        .exists([column])
+        .unwrap()
+}
+
+/// A current library with one item, turned back into a v15 database (as an older Banyan left it).
+fn v15_library(dir: &Path) {
+    drop(Library::open(dir).unwrap());
+    let conn = Connection::open(dir.join("banyan.db")).unwrap();
+    conn.execute_batch(
+        "INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('book', 'SICP', 1, 1);
+         DROP TABLE card_annotations;
+         DROP TABLE annotations;
+         ALTER TABLE attachments DROP COLUMN mirror_of;
+         PRAGMA user_version = 15;",
+    )
+    .unwrap();
+}
+
+#[test]
+fn upgrade_makes_a_backup_and_says_so() {
+    let root = temp_root();
+    v15_library(&root);
+    let mut lib = Library::open(&root).unwrap();
+    let notice = lib.notice.take().expect("upgrade is reported");
+    assert!(notice.contains("第 15 版升級到第 18 版"), "{notice}");
+
+    let backups = db::list_backups(&lib.backup_dir());
+    assert_eq!(backups.len(), 1);
+    let name = backups[0].file_name().unwrap().to_string_lossy().to_string();
+    assert!(name.starts_with("banyan-v15-") && name.ends_with(".db"), "{name}");
+    assert!(notice.contains(&backups[0].display().to_string()));
+    // The backup is the database as it was before the upgrade.
+    assert_eq!(version(&backups[0]), 15);
+    assert!(!has_column(&backups[0], "attachments", "mirror_of"));
+    let title: String = Connection::open(&backups[0])
+        .unwrap()
+        .query_row("SELECT title FROM items", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(title, "SICP");
+    // The database itself is current.
+    assert_eq!(version(&root.join("banyan.db")), SCHEMA_VERSION);
+    drop(lib);
+
+    // Opening an up-to-date database neither reports nor backs up anything.
+    let lib = Library::open(&root).unwrap();
+    assert!(lib.notice.is_none());
+    assert_eq!(db::list_backups(&lib.backup_dir()).len(), 1);
+    drop(lib);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn new_database_needs_no_backup() {
+    let root = temp_root();
+    let lib = Library::open(&root).unwrap();
+    assert!(lib.notice.is_none());
+    assert!(!lib.backup_dir().exists());
+    drop(lib);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn only_the_newest_backups_are_kept() {
+    let root = temp_root();
+    for _ in 0..db::KEEP_BACKUPS + 2 {
+        v15_library(&root);
+        drop(Library::open(&root).unwrap());
+    }
+    assert_eq!(db::list_backups(&root.join("backups")).len(), db::KEEP_BACKUPS);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_upgrade_is_rolled_back() {
+    let root = temp_root();
+    let path = root.join("banyan.db");
+    drop(Library::open(&root).unwrap());
+    // A v14 database where the v16 step will fail (mirror_of already exists),
+    // after the v15 step has already added collections.library.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('book', 'SICP', 1, 1);
+             ALTER TABLE collections DROP COLUMN library;
+             PRAGMA user_version = 14;",
+        )
+        .unwrap();
+
+    let err = db::open(&path).unwrap_err();
+    assert!(matches!(err, DbError::UpgradeFailed { from: 14, backup: Some(_), .. }), "{err:?}");
+    let message = err.to_string();
+    assert!(message.contains("已全部還原") && message.contains("banyan-v14-"), "{message}");
+
+    // Nothing changed: still v14, and the v15 column added before the failure is gone again.
+    assert_eq!(version(&path), 14);
+    assert!(!has_column(&path, "collections", "library"));
+    let n: i64 = Connection::open(&path).unwrap().query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+    // Through Library::open the same message comes back as the error.
+    assert_eq!(Library::open(&root).err().unwrap().0.contains("已全部還原"), true);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn newer_database_is_not_opened() {
+    let root = temp_root();
+    let path = root.join("banyan.db");
+    drop(Library::open(&root).unwrap());
+    Connection::open(&path).unwrap().execute_batch("PRAGMA user_version = 99;").unwrap();
+
+    let err = db::open(&path).unwrap_err();
+    assert!(matches!(err, DbError::TooNew { found: 99, supported: SCHEMA_VERSION }));
+    assert!(err.to_string().contains("請把 Banyan 更新到最新版本"));
+    assert_eq!(version(&path), 99, "left untouched");
+    assert!(!root.join("backups").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn stand_in_library_has_the_schema() {
+    let lib = Library::in_memory().unwrap();
+    let n: i64 = lib.conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+}

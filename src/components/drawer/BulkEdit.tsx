@@ -2,17 +2,20 @@ import { useEffect, useState } from "react";
 import { drawerApi, errorMessage, type BulkInfo, type Collection, type ItemSummary } from "../../drawer/api";
 import { collectionPath } from "../../drawer/collections";
 import {
-    FIELD_LABELS, GROUP_LABELS, ROLE_LABELS, creatorRoles, groupedTypes, itemType, roleLabel, type FieldKey,
+    FIELD_LABELS, GROUP_LABELS, ROLE_LABELS, creatorRoles, groupedTypes, itemType, roleLabel, type FieldKey, type Library,
 } from "../../drawer/itemTypes";
 import { usePersistentSet } from "../../drawer/usePersistentSet";
 import SectionHeader from "./SectionHeader";
 import { Icon, TypeIcon } from "../../icons/Icon";
+import { ask } from "../Feedback";
 
 interface Props {
     itemIds: number[];
     /** Current list rows, for showing the selected titles. */
     items: ItemSummary[];
     collections: Collection[];
+    /** Types can only change within the library. */
+    library: Library;
     /** Bumped by the parent after changes made elsewhere (e.g. dragging the selection to a folder). */
     reloadKey: number;
     onChanged: () => void;
@@ -29,13 +32,15 @@ const BULK_FIELDS: { key: FieldKey | "abstractNote"; label: string }[] = [
     { key: "abstractNote", label: "摘要" },
 ];
 
+const FILE_BULK_FIELDS: string[] = ["date", "url", "abstractNote"];
+
 /** "catalogNumber" -> "catalog_number" (database column name). */
 const column = (key: string) => key.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase());
 
 const PREVIEW = 6;
 
 /** Right-pane panel shown when several items are selected: edit them all at once. */
-function BulkEdit({ itemIds, items, collections, reloadKey, onChanged, onDelete, onClear, onError, onInfo }: Props) {
+function BulkEdit({ itemIds, items, collections, library, reloadKey, onChanged, onDelete, onClear, onError, onInfo }: Props) {
     const [info, setInfo] = useState<BulkInfo | null>(null);
     const [folded, toggleFolded] = usePersistentSet("banyan.drawer.bulkFolded");
     const [tagInput, setTagInput] = useState("");
@@ -89,6 +94,8 @@ function BulkEdit({ itemIds, items, collections, reloadKey, onChanged, onDelete,
         .filter((c) => !memberOf.some((m) => m.value === c.id && m.count === n))
         .map((c) => ({ id: c.id, path: collectionPath(collections, c.id) }))
         .sort((a, b) => a.path.localeCompare(b.path));
+    /** 檔案庫 items only have a date, a source URL and a description. */
+    const bulkFields = library === "files" ? BULK_FIELDS.filter((f) => FILE_BULK_FIELDS.includes(f.key)) : BULK_FIELDS;
     const fieldLabel = BULK_FIELDS.find((f) => f.key === field)?.label ?? field;
 
     const addTag = () => {
@@ -199,14 +206,14 @@ function BulkEdit({ itemIds, items, collections, reloadKey, onChanged, onDelete,
                     <select
                         className="folder-add"
                         value=""
-                        onChange={(e) => {
+                        onChange={async (e) => {
                             const t = e.target.value;
-                            if (!t || !confirm(`把 ${n} 個條目的類型都改為「${itemType(t).label}」？各欄位的內容會保留。`)) return;
+                            if (!t || !(await ask({ title: `把 ${n} 個條目的類型都改為「${itemType(t).label}」？`, message: "各欄位的內容會保留。", confirm: "改類型" }))) return;
                             run(() => drawerApi.bulkSetType(itemIds, t), `已把 ${n} 個條目改為「${itemType(t).label}」`);
                         }}
                     >
                         <option value="">全部改為…</option>
-                        {groupedTypes().map(([group, types]) => (
+                        {groupedTypes(library).map(([group, types]) => (
                             <optgroup key={group} label={GROUP_LABELS[group]}>
                                 {types.map((t) => (
                                     <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
@@ -220,7 +227,7 @@ function BulkEdit({ itemIds, items, collections, reloadKey, onChanged, onDelete,
             {section("field", "設定欄位", undefined, (
                 <div className="bulk-form">
                     <select value={field} onChange={(e) => setField(e.target.value)}>
-                        {BULK_FIELDS.map((f) => (
+                        {bulkFields.map((f) => (
                             <option key={f.key} value={f.key}>{f.label}</option>
                         ))}
                     </select>
@@ -231,12 +238,12 @@ function BulkEdit({ itemIds, items, collections, reloadKey, onChanged, onDelete,
                     />
                     <button
                         className="primary-btn"
-                        onClick={() => {
+                        onClick={async () => {
                             const v = value.trim();
                             const q = v
-                                ? `把 ${n} 個條目的「${fieldLabel}」都設為「${v}」？原本的內容會被取代。`
-                                : `清空 ${n} 個條目的「${fieldLabel}」？`;
-                            if (!confirm(q)) return;
+                                ? { title: `把 ${n} 個條目的「${fieldLabel}」都設為「${v}」？`, message: "原本的內容會被取代。", confirm: "套用" }
+                                : { title: `清空 ${n} 個條目的「${fieldLabel}」？`, confirm: "清空", danger: true };
+                            if (!(await ask(q))) return;
                             run(() => drawerApi.bulkSetField(itemIds, column(field), v), `已更新 ${n} 個條目的「${fieldLabel}」`);
                             setValue("");
                         }}
@@ -258,7 +265,7 @@ function BulkEdit({ itemIds, items, collections, reloadKey, onChanged, onDelete,
                 </div>
             ))}
 
-            {section("creators", "加入人員", undefined, (
+            {library === "literature" && section("creators", "加入人員", undefined, (
                 <div className="bulk-form">
                     <select value={roles.includes(role) ? role : roles[0]} onChange={(e) => setRole(e.target.value)}>
                         {roles.map((r) => (

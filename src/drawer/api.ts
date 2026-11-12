@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import type { Library } from "./itemTypes";
 
 /** How a folder shows its items: the table, or pictures only (image items only). */
 export type CollectionView = "list" | "gallery";
@@ -8,6 +9,8 @@ export interface Collection {
     name: string;
     parentId: number | null;
     view: CollectionView;
+    /** Which library the folder belongs to (文獻庫 or 檔案庫). */
+    library: Library;
 }
 
 export interface ItemSummary {
@@ -23,6 +26,10 @@ export interface ItemSummary {
     attachmentCount: number;
     /** First attachment that is a picture (shown in galleries). */
     imageId: number | null;
+    /** Name of the first attachment: the file of a 檔案庫 item. */
+    fileName: string | null;
+    /** Total size of the attachments in bytes. */
+    fileSize: number;
     createdAt: number;
     updatedAt: number;
 }
@@ -64,14 +71,32 @@ export interface Attachment {
     /** Too large to copy (> 5 GB): only the original location is recorded. */
     linked: boolean;
     linkedPath: string | null;
+    /** 檔案庫 copy of a 文獻庫 attachment: the id of the attachment whose file it shares. */
+    mirrorOf: number | null;
+    /** 文獻庫 attachment that also shows up in 檔案庫 as a file item. */
+    mirrored: boolean;
 }
 
-/** Message telling the user which added files were linked instead of copied, or null. */
-export function linkedNotice(added: Attachment[]): string | null {
+/**
+ * Message after files were attached: which ones were linked instead of copied, and how many
+ * also showed up in 檔案庫. Null when there's nothing to say.
+ */
+export function attachNotice(added: Attachment[]): string | null {
+    const parts: string[] = [];
+    const mirrored = added.filter((a) => a.mirrored).length;
+    if (mirrored > 0) {
+        parts.push(
+            mirrored === added.length
+                ? `已加入 ${added.length} 個附件，也出現在檔案庫中`
+                : `已加入 ${added.length} 個附件，其中 ${mirrored} 個也出現在檔案庫中`,
+        );
+    }
     const linked = added.filter((a) => a.linked);
-    if (linked.length === 0) return null;
-    const names = linked.map((a) => `「${a.fileName}」`).join("、");
-    return `${names}超過 5 GB，未複製進資料庫，只記錄了檔案位置。請勿移動或刪除原始檔案。`;
+    if (linked.length > 0) {
+        const names = linked.map((a) => `「${a.fileName}」`).join("、");
+        parts.push(`${names}超過 5 GB，未複製進資料庫，只記錄了檔案位置。請勿移動或刪除原始檔案。`);
+    }
+    return parts.length > 0 ? parts.join("。") : null;
 }
 
 /** A person credited on an item; `role` is an id from `ROLE_LABELS` ("author", "translator"…). */
@@ -127,17 +152,32 @@ export interface ItemFilter {
     tagId?: number | null;
     unfiled?: boolean;
     query?: string;
+    /** Only this library's items; every item when absent. */
+    library?: Library;
+}
+
+/** Files added to 檔案庫. */
+export interface ImportResult {
+    itemIds: number[];
+    /** Folders, and non-pictures dropped onto a gallery. */
+    skipped: number;
+    /** Names of files too large to copy (only their location was recorded). */
+    linked: string[];
+    /** Files that couldn't be added ("name：reason"); the others still were. */
+    failed: string[];
 }
 
 export const drawerApi = {
     listCollections: () => invoke<Collection[]>("list_collections"),
-    createCollection: (name: string, parentId: number | null, view: CollectionView = "list") =>
-        invoke<Collection>("create_collection", { name, parentId, view }),
+    /** A sub-folder always goes into its parent's library. */
+    createCollection: (name: string, parentId: number | null, view: CollectionView, library: Library) =>
+        invoke<Collection>("create_collection", { name, parentId, view, library }),
     setCollectionView: (id: number, view: CollectionView) => invoke<void>("set_collection_view", { id, view }),
     renameCollection: (id: number, name: string) => invoke<void>("rename_collection", { id, name }),
     deleteCollection: (id: number) => invoke<void>("delete_collection", { id }),
 
-    listTags: () => invoke<TagInfo[]>("list_tags"),
+    /** With a library: only its items are counted, and tags none of them use are left out. */
+    listTags: (library?: Library) => invoke<TagInfo[]>("list_tags", { library: library ?? null }),
     /** Returns the resulting tag id (different when the rename merged into an existing tag). */
     renameTag: (id: number, name: string) => invoke<number>("rename_tag", { id, name }),
     deleteTag: (id: number) => invoke<void>("delete_tag", { id }),
@@ -186,11 +226,21 @@ export const drawerApi = {
         invoke<Attachment[]>("add_attachments", { itemId, paths }),
     openAttachment: (id: number) => invoke<void>("open_attachment", { id }),
     readAttachment: (id: number) => invoke<ArrayBuffer>("read_attachment", { id }),
+    /**
+     * URL the page streams the file from (the `attachment:` protocol, by id): videos play while
+     * loading, and pdf.js reads only the parts it needs. See src-tauri/src/file_protocol.rs.
+     */
+    attachmentUrl: (id: number) => convertFileSrc(String(id), "attachment"),
     /** Picture files dropped onto a gallery become 照片 items there; returns their ids. */
     importImages: (collectionId: number, paths: string[]) =>
         invoke<number[]>("import_images", { collectionId, paths }),
+    /** Each file becomes a 檔案庫 item (typed by extension) in the folder, or unfiled. */
+    importFiles: (collectionId: number | null, paths: string[]) =>
+        invoke<ImportResult>("import_files", { collectionId, paths }),
+    pickImportFiles: (collectionId: number | null) => invoke<ImportResult>("pick_import_files", { collectionId }),
     revealAttachment: (id: number) => invoke<void>("reveal_attachment", { id }),
-    deleteAttachment: (id: number) => invoke<void>("delete_attachment", { id }),
+    /** True when the item went too (a 檔案庫 item left without any file). */
+    deleteAttachment: (id: number) => invoke<boolean>("delete_attachment", { id }),
 
     getLibraryInfo: () => invoke<LibraryInfo>("get_library_info"),
     pickLibraryDir: () => invoke<string | null>("pick_library_dir"),
@@ -198,6 +248,8 @@ export const drawerApi = {
     changeLibraryDir: (path: string, mode: ChangeMode) =>
         invoke<LibraryInfo>("change_library_dir", { path, mode }),
     revealLibraryDir: () => invoke<void>("reveal_library_dir"),
+    /** Opens the folder with the copies made before database upgrades. */
+    revealBackups: () => invoke<void>("reveal_backups"),
 };
 
 export interface LibraryInfo {
@@ -206,6 +258,10 @@ export interface LibraryInfo {
     isDefault: boolean;
     /** Shown once, e.g. when the saved location was missing at startup. */
     warning: string | null;
+    /** Shown once: the database was upgraded after a Banyan update (a backup was made first). */
+    notice: string | null;
+    /** Copies made before database upgrades (the newest few are kept). */
+    backupCount: number;
 }
 
 export interface FolderCheck {

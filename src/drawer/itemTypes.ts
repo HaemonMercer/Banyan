@@ -3,7 +3,7 @@ import type { ItemFields } from "./api";
 /** Metadata fields that types can choose from (title, creators and abstract are always shown). */
 export type FieldKey = Exclude<keyof ItemFields, "itemType" | "title" | "abstractNote" | "fullText">;
 
-export type ItemGroup = "literature" | "media" | "performance" | "art" | "other";
+export type ItemGroup = "literature" | "media" | "performance" | "art" | "other" | "file";
 
 export const GROUP_LABELS: Record<ItemGroup, string> = {
     literature: "文獻",
@@ -11,7 +11,22 @@ export const GROUP_LABELS: Record<ItemGroup, string> = {
     performance: "現場表演",
     art: "藝術與圖像",
     other: "其他",
+    file: "檔案",
 };
+
+/**
+ * Drawer holds two libraries in one item table: 文獻庫 (the bibliographic types) and 檔案庫
+ * (items that are a file, typed by extension). Each has its own folders; types can't cross over.
+ */
+export type Library = "literature" | "files";
+
+export const LIBRARY_LABELS: Record<Library, string> = {
+    literature: "文獻庫",
+    files: "檔案庫",
+};
+
+/** Must match `is_file_type` in `src-tauri/src/drawer.rs`: file types start with "file". */
+export const libraryOf = (typeId: string): Library => (typeId.startsWith("file") ? "files" : "literature");
 
 export interface ItemTypeDef {
     id: string;
@@ -151,6 +166,25 @@ export const ITEM_TYPES: ItemTypeDef[] = [
       fields: ["issue", "publisher", "medium", "date", "series", "seriesNumber", "url"] },
     { id: "document", label: "文件", icon: "🗒️", group: "other",
       fields: ["publisher", "date", "series", "seriesNumber", "url"] },
+
+    // ---- 檔案（檔案庫；類型依副檔名決定，見 drawer.rs 的 file_type_for） ----
+    ...([
+        ["fileDocument", "文件", "📄"],
+        ["fileEbook", "電子書", "📚"],
+        ["fileImage", "圖片", "🖼️"],
+        ["fileVideo", "影片", "🎞️"],
+        ["fileAudio", "音訊", "🔊"],
+        ["fileText", "文字", "📝"],
+        ["fileSpreadsheet", "試算表", "📊"],
+        ["filePresentation", "簡報", "📽️"],
+        ["fileCode", "程式碼", "⌨️"],
+        ["fileArchive", "壓縮檔", "🗜️"],
+        ["fileOther", "其他檔案", "📦"],
+    ] as const).map(([id, label, icon]): ItemTypeDef => ({
+        id, label, icon, group: "file", titleLabel: "名稱",
+        labels: { date: "日期", url: "來源網址" },
+        fields: ["date", "url"],
+    })),
 ];
 
 /** Creator roles. Ids are stored in the database; labels are only for display. */
@@ -253,7 +287,7 @@ export const FIELD_LABELS: Record<FieldKey, string> = {
 };
 
 /** Types a gallery folder accepts (must match IMAGE_TYPES in drawer.rs). */
-export const IMAGE_TYPES = ["painting", "artwork", "photo", "map"];
+export const IMAGE_TYPES = ["painting", "artwork", "photo", "map", "fileImage"];
 export const isImageType = (id: string) => IMAGE_TYPES.includes(id);
 
 export function itemType(id: string): ItemTypeDef {
@@ -264,9 +298,11 @@ export function fieldLabel(type: ItemTypeDef, key: FieldKey): string {
     return type.labels?.[key] ?? FIELD_LABELS[key];
 }
 
-/** Item types grouped for menus, in display order. */
-export function groupedTypes(): [ItemGroup, ItemTypeDef[]][] {
-    return (Object.keys(GROUP_LABELS) as ItemGroup[]).map((g) => [g, ITEM_TYPES.filter((t) => t.group === g)]);
+/** Item types grouped for menus, in display order; only those of `library` when given. */
+export function groupedTypes(library?: Library): [ItemGroup, ItemTypeDef[]][] {
+    return (Object.keys(GROUP_LABELS) as ItemGroup[])
+        .filter((g) => !library || (g === "file") === (library === "files"))
+        .map((g) => [g, ITEM_TYPES.filter((t) => t.group === g)]);
 }
 
 /** "王小明\nJane Doe\nJohn Roe" -> "王小明 等" */

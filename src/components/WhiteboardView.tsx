@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { annotationApi, openAnnotation, parseLocation, placeLabel, refreshAnnotations } from "../annotator/api";
 import { Icon } from "../icons/Icon";
 import { errorMessage } from "../drawer/api";
 import {
@@ -10,6 +11,7 @@ import {
     type LinkDirection,
     type Section,
     type Whiteboard,
+    LINKS_CREATED_EVENT,
 } from "../whiteboard/api";
 import { AUTOSAVE_MS, serial } from "../whiteboard/autosave";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -26,8 +28,8 @@ import {
     type CardKind,
 } from "../whiteboard/objects";
 import { loadPdf } from "../whiteboard/pdf";
-import { newTable, readTable as readTableSafe, tableMarkdown, tableSize } from "../whiteboard/table";
-import { chartMarkdown, snapshotFromTable, usedRange } from "../whiteboard/chart";
+import { newTable, readTable as readTableSafe, tableText, tableSize } from "../whiteboard/table";
+import { chartText, snapshotFromTable, usedRange } from "../whiteboard/chart";
 import InsertToolbar from "./whiteboard/InsertToolbar";
 import BoardCanvas, { sectionAt, type BoardCanvasHandle, type Rect } from "./whiteboard/BoardCanvas";
 import BoardTree, { folderSubtree } from "./whiteboard/BoardTree";
@@ -36,6 +38,9 @@ import CardPanel from "./whiteboard/CardPanel";
 import LinkEditor from "./whiteboard/LinkEditor";
 import WhiteboardSidebar, { type DragPayload } from "./whiteboard/WhiteboardSidebar";
 import "./whiteboard/Whiteboard.css";
+import { ask, Toast, useToast } from "./Feedback";
+import { isHomeActive } from "../tabs";
+import { resolveWikiTarget, WikiLinkProvider } from "../markdown/links";
 
 const untitled = (t: string) => t || "（無標題）";
 const samePair = (l: CardLink, a: number, b: number) =>
@@ -43,6 +48,7 @@ const samePair = (l: CardLink, a: number, b: number) =>
 
 interface Props {
     /** Card to open when the view mounts (e.g. coming from a Drawer item). */
+    /** Card to show when the view opens; `boardId: 0` opens it in the side panel (a card on no board). */
     initialCard?: { cardId: number; boardId: number } | null;
     /** Opens a Drawer item. */
     onOpenItem: (itemId: number) => void;
@@ -67,7 +73,18 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     const [folders, setFolders] = useState<BoardFolder[]>([]);
     /** Bumped to focus the note box of the selected link. */
     const [noteFocus, setNoteFocus] = useState(0);
-    const [toast, setToast] = useState<{ text: string; kind: "error" | "info" } | null>(null);
+    const { toast, showError, showInfo, close: closeToast } = useToast();
+
+    // Saving `[[…]]` (here, in the side panel or in Drawer) made new card links: draw them.
+    useEffect(() => {
+        const onCreated = (e: Event) => {
+            const created = (e as CustomEvent<CardLink[]>).detail;
+            setLinks((list) => [...list, ...created.filter((c) => !list.some((l) => l.id === c.id))]);
+            showInfo(`已依 [[ ]] 建立 ${created.length} 條卡片連結`);
+        };
+        window.addEventListener(LINKS_CREATED_EVENT, onCreated);
+        return () => window.removeEventListener(LINKS_CREATED_EVENT, onCreated);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const canvas = useRef<BoardCanvasHandle>(null);
     const cardsRef = useRef(cards);
@@ -76,8 +93,6 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     sectionsRef.current = sections;
     /** Cards whose title or content changed since the last save. */
     const dirty = useRef(new Set<number>());
-    /** Cards whose saved text has not had its `[[ ]]` links synced yet. */
-    const unsynced = useRef(new Set<number>());
     const autosaveTimers = useRef(new Map<number, number>());
     const queueSave = useRef(serial()).current;
     /** Card to select and scroll to once the next board has loaded. */
@@ -86,17 +101,10 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     const selectedCardId = selection.length === 1 ? selection[0] : null;
     const selectOne = (id: number | null) => setSelection(id === null ? [] : [id]);
 
-    const showError = useCallback((text: string) => setToast({ text, kind: "error" }), []);
-    const showInfo = useCallback((text: string) => setToast({ text, kind: "info" }), []);
     const bumpLinks = () => setLinksVersion((n) => n + 1);
     /** Bumped to load the open board again (e.g. a card placed from elsewhere). */
     const [boardLoad, setBoardLoad] = useState(0);
 
-    useEffect(() => {
-        if (toast?.kind !== "info") return;
-        const t = setTimeout(() => setToast(null), 2500);
-        return () => clearTimeout(t);
-    }, [toast]);
 
     const refreshBoards = useCallback(async () => {
         try {
@@ -196,7 +204,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     };
 
     const deleteBoard = async (b: Whiteboard) => {
-        if (!confirm(`刪除白板「${b.name}」？上面的 ${b.cardCount} 張卡片和它們的連結也會一併刪除，無法復原。`)) return;
+        if (!(await ask({ title: `刪除白板「${b.name}」？`, message: `上面的 ${b.cardCount} 張卡片和它們的連結也會一併刪除，無法復原。`, confirm: "刪除", danger: true }))) return;
         try {
             await whiteboardApi.deleteWhiteboard(b.id);
             const list = await refreshBoards();
@@ -218,8 +226,8 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         }
     };
 
-    const deleteFolder = (f: BoardFolder) => {
-        if (!confirm(`刪除資料夾「${f.name}」和它的子資料夾？裡面的白板會保留，移到最上層。`)) return;
+    const deleteFolder = async (f: BoardFolder) => {
+        if (!(await ask({ title: `刪除資料夾「${f.name}」和它的子資料夾？`, message: "裡面的白板會保留，移到最上層。", confirm: "刪除", danger: true }))) return;
         void folderAction(() => whiteboardApi.deleteFolder(f.id));
     };
 
@@ -301,7 +309,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         );
     };
 
-    /** Writes a card's title and content (autosave); its `[[ ]]` links wait for `saveCard`. */
+    /** Writes a card's title and content (autosave). */
     const persistCard = (id: number) =>
         queueSave(async () => {
             if (!dirty.current.has(id)) return;
@@ -312,7 +320,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 // Objects other than notes keep their kind's data (mind map tree, sticky colour…) too.
                 if (c.kind && c.kind !== "note") await whiteboardApi.updateCardData(id, c.title, c.content, c.data);
                 else await whiteboardApi.updateCard(id, c.title, c.content);
-                unsynced.current.add(id);
+                if (!c.kind || c.kind === "note" || c.kind === "sticky") await whiteboardApi.syncWikiLinks(id, c.content);
                 bumpLinks(); // titles and previews in the right-hand list and the card library
             } catch (e) {
                 dirty.current.add(id);
@@ -399,7 +407,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     const createTable = async () => {
         try {
             const t = newTable();
-            await addObject("table", placeFor("table", tableSize(t)), "表格", tableMarkdown(t), JSON.stringify(t));
+            await addObject("table", placeFor("table", tableSize(t)), "表格", tableText(t), JSON.stringify(t));
         } catch (e) {
             showError(errorMessage(e));
         }
@@ -421,7 +429,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 "chart",
                 rect,
                 `${t.title || "表格"} 圖表`,
-                chartMarkdown(snapshot),
+                chartText(snapshot),
                 JSON.stringify(data),
             );
         } catch (e) {
@@ -443,7 +451,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
             const size = tableSize(t);
             // The pair (table, then its chart) is centred in the view.
             const pair = placeFor("table", { width: size.width + KINDS.chart.width + 40, height: Math.max(size.height, KINDS.chart.height) });
-            const table = await addObject("table", { x: pair.x, y: pair.y, ...size }, "範例資料", tableMarkdown(t), JSON.stringify(t));
+            const table = await addObject("table", { x: pair.x, y: pair.y, ...size }, "範例資料", tableText(t), JSON.stringify(t));
             if (table) await createChart(table.id, usedRange(t));
         } catch (e) {
             showError(errorMessage(e));
@@ -616,30 +624,11 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         };
     }, []);
 
-    /** Adds `[[ ]]` links that were just created to the board, if both ends are on it. */
-    const showCreatedLinks = (created: CardLink[]) => {
-        if (created.length === 0) return;
-        const onBoard = (n: number) => cardsRef.current.some((x) => x.id === n);
-        const shown = created.filter((l) => onBoard(l.cardA) && onBoard(l.cardB));
-        setLinks((list) => [...list, ...shown.filter((l) => !list.some((x) => x.id === l.id))]);
-        showInfo(`依 [[ ]] 建立了 ${created.length} 條連結`);
-    };
-
-    /** The editor closed: save what is left and make the `[[ ]]` links. */
+    /** The editor closed: save what is left. */
     const saveCard = async (id: number) => {
         window.clearTimeout(autosaveTimers.current.get(id));
         autosaveTimers.current.delete(id);
         await persistCard(id);
-        if (!unsynced.current.has(id)) return;
-        unsynced.current.delete(id);
-        const c = cardsRef.current.find((c) => c.id === id);
-        if (!c) return;
-        try {
-            showCreatedLinks(await whiteboardApi.syncWikiLinks(id, c.content));
-            bumpLinks(); // titles shown in lists and the side panel
-        } catch (e) {
-            showError(errorMessage(e));
-        }
     };
 
     /** Deletes cards (on this board or not) after confirming. */
@@ -653,9 +642,12 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 ? `這 ${ids.length} 張卡片`
                 : `卡片「${untitled(title ?? cardsRef.current.find((c) => c.id === ids[0])?.title ?? "")}」`;
         if (
-            !confirm(
-                `完全刪除${name}？\n${ids.length > 1 ? "它們" : "它"}會從所有白板和卡片庫中消失，${extra}無法復原。\n\n只想從這個白板拿掉的話，請改用「從白板移除」（×、Delete）。`,
-            )
+            !(await ask({
+                title: `完全刪除${name}？`,
+                message: `${ids.length > 1 ? "它們" : "它"}會從所有白板和卡片庫中消失，${extra}無法復原。\n\n只想從這個白板拿掉的話，請改用「從白板移除」（×、Delete）。`,
+                confirm: "完全刪除",
+                danger: true,
+            }))
         )
             return;
         try {
@@ -697,10 +689,11 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     };
 
     /** Reloads the Drawer items a card refers to. */
+    /** Reloads what a card cites (Drawer items and annotations). */
     const refreshCardItems = async (cardId: number) => {
         try {
-            const items = await whiteboardApi.listCardItems(cardId);
-            setCards((list) => list.map((c) => (c.id === cardId ? { ...c, items } : c)));
+            const { items, annotations } = await whiteboardApi.getCard(cardId);
+            setCards((list) => list.map((c) => (c.id === cardId ? { ...c, items, annotations } : c)));
             bumpLinks();
         } catch (e) {
             showError(errorMessage(e));
@@ -856,6 +849,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
+            if (!isHomeActive()) return; // a file tab is shown
             const el = document.activeElement;
             const typing =
                 el instanceof HTMLInputElement ||
@@ -974,6 +968,15 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                     }
                     await link(payload.id, target.cardId);
                     showInfo(`已連結「${payload.title}」與「${titleOf(target.cardId)}」`);
+                } else if (payload.kind === "annotation") {
+                    if (!(await annotationApi.linkCard(target.cardId, payload.id))) {
+                        showInfo("這張卡片已經引用了這段註解");
+                        return;
+                    }
+                    await refreshCardItems(target.cardId);
+                    refreshAnnotations();
+                    selectOne(target.cardId);
+                    showInfo(`「${titleOf(target.cardId)}」已引用「${payload.title}」`);
                 } else {
                     const card = cardsRef.current.find((c) => c.id === target.cardId);
                     if (card?.items.some((i) => i.itemId === payload.id)) {
@@ -1001,6 +1004,21 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 await reloadBoard(payload.id);
                 const placed = cardsRef.current.find((c) => c.id === payload.id);
                 if (placed) await joinSections(new Map([[placed.id, placed]]));
+            } else if (payload.kind === "annotation") {
+                // The card made from the annotation (made now, or the one made before).
+                const a = await annotationApi.get(payload.id);
+                const cardId = await annotationApi.toCard(a.id, placeLabel(parseLocation(a)));
+                refreshAnnotations();
+                if (cardsRef.current.some((c) => c.id === cardId)) {
+                    locateCard(cardId, boardId);
+                    showInfo("這段註解的卡片已經在這個白板上");
+                    return;
+                }
+                await whiteboardApi.addCardToBoard(boardId, cardId, x, y);
+                await reloadBoard(cardId);
+                const placed = cardsRef.current.find((c) => c.id === cardId);
+                if (placed) await joinSections(new Map([[placed.id, placed]]));
+                showInfo(`已放上註解的卡片「${payload.title}」`);
             } else {
                 const note = await whiteboardApi.createItemCard(payload.id);
                 await whiteboardApi.addCardToBoard(boardId, note.cardId, x, y);
@@ -1020,6 +1038,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         if (!dropAt) return "放開以取消（Esc 取消）";
         if (dropAt.kind === "board") {
             if (p.kind === "item") return "放開：建立引用它的筆記卡片";
+            if (p.kind === "annotation") return "放開：放上這段註解的卡片";
             return cards.some((c) => c.id === p.id) ? "已在這個白板上" : "放開：放到白板上";
         }
         const target = untitled(cards.find((c) => c.id === dropAt.cardId)?.title ?? "");
@@ -1027,9 +1046,11 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
             if (p.id === dropAt.cardId) return "就是這張卡片";
             return links.some((l) => samePair(l, p.id, dropAt.cardId)) ? "已經連結了" : `連結到「${target}」`;
         }
-        return cards.find((c) => c.id === dropAt.cardId)?.items.some((i) => i.itemId === p.id)
-            ? "已經引用了"
-            : `讓「${target}」引用`;
+        const cited =
+            p.kind === "annotation"
+                ? cards.find((c) => c.id === dropAt.cardId)?.annotations.some((a) => a.annotationId === p.id)
+                : cards.find((c) => c.id === dropAt.cardId)?.items.some((i) => i.itemId === p.id);
+        return cited ? "已經引用了" : `讓「${target}」引用`;
     })();
 
     // ---------- opening and locating cards ----------
@@ -1051,6 +1072,11 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         }
     };
 
+    // A card from elsewhere that isn't on a board (e.g. made from an annotation): the side panel.
+    useEffect(() => {
+        if (initialCard && initialCard.boardId === 0) setOpenCardId(initialCard.cardId);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     /** Opens the card in the side panel; on the open board it is also selected and scrolled to. */
     const openPanel = (cardId: number) => {
         setOpenCardId(cardId);
@@ -1061,31 +1087,23 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         }
     };
 
-    /** The side panel saved a card: mirror it on the board. */
-    const panelSaved = (c: CardDetail, created: CardLink[]) => {
-        setCards((list) =>
-            list.map((x) => (x.id === c.id ? { ...x, title: c.title, content: c.content, data: c.data ?? x.data, tags: c.tags } : x)),
-        );
-        showCreatedLinks(created);
-        bumpLinks();
-    };
-
-    /** `[[title]]` in a card: open the card with that title (this board first, then anywhere). */
+    /** `[[link]]` in a card: open the linked card in the side panel. */
     const openWikiLink = async (target: string) => {
-        const key = target.trim().toLowerCase();
-        const here = cardsRef.current.find((c) => c.title.trim().toLowerCase() === key);
-        if (here) {
-            openPanel(here.id);
-            return;
-        }
         try {
-            const hits = await whiteboardApi.searchCards(target, null);
-            const hit = hits.find((h) => h.title.trim().toLowerCase() === key);
-            if (hit) setOpenCardId(hit.cardId);
-            else showInfo(`找不到標題為「${target}」的卡片`);
+            const r = await resolveWikiTarget(target);
+            if ("error" in r) showInfo(r.error);
+            else openPanel(r.cardId);
         } catch (e) {
             showError(errorMessage(e));
         }
+    };
+
+    /** The side panel saved a card: mirror it on the board. */
+    const panelSaved = (c: CardDetail) => {
+        setCards((list) =>
+            list.map((x) => (x.id === c.id ? { ...x, title: c.title, content: c.content, data: c.data ?? x.data, tags: c.tags } : x)),
+        );
+        bumpLinks();
     };
 
     const createLooseCard = async () => {
@@ -1125,6 +1143,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     ) : undefined;
 
     return (
+        <WikiLinkProvider onWikiLink={(t) => void openWikiLink(t)}>
         <div className={`whiteboard${showSidebar ? " with-panel" : ""}${drag ? " dragging" : ""}`}>
             <BoardTree
                 folders={folders}
@@ -1227,7 +1246,6 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                                 setNoteFocus((n) => n + 1);
                             }}
                             onOpenItem={onOpenItem}
-                            onWikiLink={(t) => void openWikiLink(t)}
                             onSectionChange={sectionChange}
                             onSectionCommit={(s, moved) => void sectionCommit(s, moved)}
                             onSectionEdit={(s) => void sectionEdit(s)}
@@ -1274,7 +1292,6 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                         onLocate={locateCard}
                         onOpenCard={openPanel}
                         onOpenItem={onOpenItem}
-                        onWikiLink={(t) => void openWikiLink(t)}
                         onDelete={(id) => void deleteCards([id])}
                         onRemoveFromBoard={
                             mode === "board" && boardId !== null ? (id) => void removeFromBoard([id]) : undefined
@@ -1296,6 +1313,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                     onDelete={deleteCard}
                     onRemove={(id) => void removeFromBoard([id])}
                     onOpenItem={(id) => !justDropped.current && onOpenItem(id)}
+                    onOpenAnnotation={(id) => !justDropped.current && openAnnotation(id)}
                     onItemsChanged={() => selectedCard && refreshCardItems(selectedCard.id)}
                     onError={showError}
                     bottom={sidebarBottom}
@@ -1311,13 +1329,9 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 </div>
             )}
 
-            {toast && (
-                <div className={`toast${toast.kind === "info" ? " info" : ""}`} onClick={() => setToast(null)}>
-                    {toast.text}
-                    <span className="toast-close">×</span>
-                </div>
-            )}
+            <Toast toast={toast} onClose={closeToast} />
         </div>
+        </WikiLinkProvider>
     );
 }
 

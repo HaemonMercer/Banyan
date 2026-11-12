@@ -591,17 +591,13 @@ export function parseBlock(text: string): string[][] {
     return lines.map((l) => l.split("\t"));
 }
 
-/** The table as a Markdown table of what the cells show (kept in `content` for search and history). */
-export function tableMarkdown(t: TableData): string {
+/** What the cells show, one row per line, cells separated by tabs (kept in `content` for search and history). */
+export function tableText(t: TableData): string {
     const values = evaluateTable(t);
-    const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
-    const line = (r: number) => `| ${t.cols.map((col, c) => esc(displayValue(t.rows[r].cells[col.id] ?? "", values[r][c]))).join(" | ")} |`;
-    const out: string[] = [];
-    if (t.headerRows > 0) out.push(line(0));
-    else out.push(`| ${t.cols.map((_, c) => colName(c)).join(" | ")} |`);
-    out.push(`|${t.cols.map((col) => (col.align === "right" ? " ---: " : col.align === "center" ? " :---: " : " --- ")).join("|")}|`);
-    for (let r = t.headerRows > 0 ? 1 : 0; r < t.rows.length; r++) out.push(line(r));
-    return out.join("\n");
+    const clean = (s: string) => s.replace(/[\t\n]/g, " ");
+    return t.rows
+        .map((row, r) => t.cols.map((col, c) => clean(displayValue(row.cells[col.id] ?? "", values[r][c]))).join("\t"))
+        .join("\n");
 }
 
 export const tableSize = (t: TableData) => ({

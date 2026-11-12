@@ -15,7 +15,7 @@ pub const DEFAULT_CARD_HEIGHT: f64 = 160.0;
 const MIN_CARD_WIDTH: f64 = 120.0;
 const MIN_CARD_HEIGHT: f64 = 60.0;
 
-/// What a card is on the board. `note` is a Markdown card; the others keep their own JSON in
+/// What a card is on the board. `note` is a text card; the others keep their own JSON in
 /// `data` (see `src/whiteboard/objects.ts`).
 pub const CARD_KINDS: &[&str] = &["note", "sticky", "image", "video", "pdf", "mindmap", "table", "chart"];
 
@@ -55,6 +55,8 @@ pub struct BoardCard {
     updated_at: i64,
     /// Drawer items this card refers to.
     items: Vec<ItemRef>,
+    /// Annotations (Annotator) this card cites.
+    annotations: Vec<crate::annotations::AnnotationRef>,
     tags: Vec<String>,
 }
 
@@ -246,11 +248,24 @@ pub fn get_whiteboard(state: State<'_, DrawerState>, id: i64) -> Result<BoardCon
                 height: r.get(6)?,
                 updated_at: r.get(7)?,
                 items: Vec::new(),
+                annotations: Vec::new(),
                 tags: Vec::new(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut cards = cards;
+    let cited = conn
+        .prepare(&format!(
+            "{} JOIN board_cards bc ON bc.card_id = ca.card_id AND bc.board_id = ?1 ORDER BY ca.created_at, n.id",
+            crate::annotations::REF_SELECT
+        ))?
+        .query_map([id], crate::annotations::annotation_ref)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (card_id, a) in cited {
+        if let Some(c) = cards.iter_mut().find(|c| c.id == card_id) {
+            c.annotations.push(a);
+        }
+    }
     let refs = conn
         .prepare(
             "SELECT ci.card_id, i.id, i.item_type, i.title, i.authors, i.date
@@ -314,6 +329,7 @@ pub fn create_card(state: State<'_, DrawerState>, board_id: i64, x: f64, y: f64)
         height: DEFAULT_CARD_HEIGHT,
         updated_at: now,
         items: Vec::new(),
+        annotations: Vec::new(),
         tags: Vec::new(),
     })
 }
@@ -365,6 +381,7 @@ pub fn create_board_object(
         height,
         updated_at: now,
         items: Vec::new(),
+        annotations: Vec::new(),
         tags: Vec::new(),
     })
 }
@@ -487,20 +504,19 @@ pub fn unlink_cards(state: State<'_, DrawerState>, a: i64, b: i64) -> Result<()>
     Ok(())
 }
 
-/// Turns `[[wiki links]]` into two-way links, after `card_id` was saved:
+/// Turns `[[wiki links]]` into two-way card links after `card_id` was saved.
 ///
-/// 1. Forward: links `card_id` to the cards named by its own `[[...]]` (`titles`, parsed by the
-///    frontend). A title matches a card with the same title (trimmed, ASCII case-insensitive);
-///    when several cards share it, one on a board with `card_id` wins, then the most recently
-///    edited. Titles that match nothing, or only the card itself, are skipped.
-/// 2. Backward: links `card_id` to other cards whose text already contains `[[its title]]` or
-///    `[[its title|...]]` (so writing `[[X]]` before card X exists still links them later).
+/// 1. Forward: `targets` are the card's own `[[…]]` targets (parsed by the frontend's Markdown
+///    engine). `card:42` names a card by id; anything else is a title, matched trimmed and
+///    case-insensitively (when several cards share it, one on a board with `card_id` wins, then
+///    the most recently edited). Other kinds (`@key`, `board:3`…) and the card itself are skipped.
+/// 2. Backward: links other cards whose text already contains `[[its title]]`, `[[its title|…]]`,
+///    `[[card:<id>]]` or `[[card:<id>|…]]` (so writing `[[X]]` before X exists links them later).
 ///
-/// New links point from the card that mentions to the card mentioned.
-/// Links are only added, never removed: deleting `[[...]]` from the text leaves the link (it may
-/// also have been made by hand). Returns only the links that did not exist before.
+/// New links point from the card that mentions to the card mentioned. Links are only added,
+/// never removed (a link may also have been made by hand). Returns only the new links.
 #[tauri::command]
-pub fn sync_wiki_links(state: State<'_, DrawerState>, card_id: i64, titles: Vec<String>) -> Result<Vec<CardLink>> {
+pub fn sync_wiki_links(state: State<'_, DrawerState>, card_id: i64, targets: Vec<String>) -> Result<Vec<CardLink>> {
     let lib = state.lock();
     let conn = &lib.conn;
     let own_title: String = conn
@@ -520,7 +536,7 @@ pub fn sync_wiki_links(state: State<'_, DrawerState>, card_id: i64, titles: Vec<
         }
         Ok(())
     };
-    let mut find = conn.prepare(
+    let mut by_title = conn.prepare(
         "SELECT c.id FROM cards c
          WHERE c.title = ?1 COLLATE NOCASE AND c.id <> ?2
          ORDER BY EXISTS (SELECT 1 FROM board_cards x JOIN board_cards y ON x.board_id = y.board_id
@@ -528,33 +544,44 @@ pub fn sync_wiki_links(state: State<'_, DrawerState>, card_id: i64, titles: Vec<
                   c.updated_at DESC, c.id DESC
          LIMIT 1",
     )?;
+    let mut by_id = conn.prepare("SELECT id FROM cards WHERE id = ?1 AND id <> ?2")?;
     let mut seen = std::collections::HashSet::new();
-    for title in &titles {
-        let title = title.trim();
-        if title.is_empty() {
+    for target in &targets {
+        let target = target.trim();
+        if target.is_empty() || target.starts_with('@') {
             continue;
         }
-        let Some(other) = find.query_row(params![title, card_id], |r| r.get::<_, i64>(0)).optional()? else {
-            continue;
+        let other = if let Some(id) = target.strip_prefix("card:") {
+            match id.parse::<i64>() {
+                Ok(id) => by_id.query_row(params![id, card_id], |r| r.get::<_, i64>(0)).optional()?,
+                Err(_) => None,
+            }
+        } else if target.split_once(':').is_some_and(|(k, v)| {
+            !k.is_empty() && k.chars().all(|c| c.is_ascii_lowercase()) && v.chars().all(|c| c.is_ascii_digit())
+        }) {
+            None // board:3 and other kinds
+        } else {
+            by_title.query_row(params![target, card_id], |r| r.get::<_, i64>(0)).optional()?
         };
-        if seen.insert(other) {
-            add(card_id, other)?;
+        if let Some(other) = other {
+            if seen.insert(other) {
+                add(card_id, other)?;
+            }
         }
     }
 
     let own_title = own_title.trim();
+    let mut patterns = vec![format!("[[card:{card_id}]]"), format!("[[card:{card_id}|")];
     if !own_title.is_empty() {
-        let mentions = conn
-            .prepare(
-                r"SELECT id FROM cards
-                  WHERE id <> ?1 AND (content LIKE ?2 ESCAPE '\' OR content LIKE ?3 ESCAPE '\')",
-            )?
-            .query_map(
-                params![card_id, like_pattern(&format!("[[{own_title}]]")), like_pattern(&format!("[[{own_title}|"))],
-                |r| r.get::<_, i64>(0),
-            )?
+        patterns.push(format!("[[{own_title}]]"));
+        patterns.push(format!("[[{own_title}|"));
+    }
+    let mut mention = conn.prepare(r"SELECT id FROM cards WHERE id <> ?1 AND content LIKE ?2 ESCAPE '\'")?;
+    for p in &patterns {
+        let others = mention
+            .query_map(params![card_id, like_pattern(p)], |r| r.get::<_, i64>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for other in mentions {
+        for other in others {
             if seen.insert(other) {
                 add(other, card_id)?;
             }
@@ -622,7 +649,7 @@ pub struct CardHit {
     card_id: i64,
     kind: String,
     title: String,
-    /// The card's Markdown, for showing a preview in lists.
+    /// The card's text, for showing a preview in lists.
     content: String,
     board_id: Option<i64>,
     boards: Vec<String>,
@@ -975,99 +1002,6 @@ pub fn move_whiteboard(state: State<'_, DrawerState>, id: i64, folder_id: Option
     Ok(())
 }
 
-// ---------- graph ----------
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphNode {
-    id: i64,
-    kind: String,
-    title: String,
-    tags: Vec<String>,
-    /// Boards the card is on.
-    board_ids: Vec<i64>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphRef {
-    card_id: i64,
-    item_id: i64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Graph {
-    cards: Vec<GraphNode>,
-    /// Links between two of the cards.
-    links: Vec<CardLink>,
-    /// Drawer items the cards refer to.
-    items: Vec<ItemRef>,
-    refs: Vec<GraphRef>,
-}
-
-/// The relationship graph: cards on the given boards (all cards when `board_ids` is `None`),
-/// the links among them, and the Drawer items they refer to.
-#[tauri::command]
-pub fn get_graph(state: State<'_, DrawerState>, board_ids: Option<Vec<i64>>, tag: Option<String>) -> Result<Graph> {
-    let lib = state.lock();
-    let conn = &lib.conn;
-    let mut placements = std::collections::HashMap::<i64, Vec<i64>>::new();
-    for row in conn
-        .prepare("SELECT card_id, board_id FROM board_cards ORDER BY board_id")?
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
-    {
-        let (card, board) = row?;
-        placements.entry(card).or_default().push(board);
-    }
-    let wanted: Option<std::collections::HashSet<i64>> = board_ids.map(|v| v.into_iter().collect());
-    let cards: Vec<GraphNode> = conn
-        .prepare("SELECT id, title, kind FROM cards ORDER BY id")?
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .into_iter()
-        .map(|(id, title, kind)| GraphNode { id, kind, title, tags: Vec::new(), board_ids: placements.remove(&id).unwrap_or_default() })
-        .filter(|n| wanted.as_ref().is_none_or(|w| n.board_ids.iter().any(|b| w.contains(b))))
-        .collect();
-    let mut cards = cards;
-    for c in cards.iter_mut() {
-        c.tags = card_tags(conn, c.id)?;
-    }
-    // Only cards with the tag (case-insensitive), when one is given.
-    if let Some(tag) = tag.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        let tag = tag.to_lowercase();
-        cards.retain(|c| c.tags.iter().any(|t| t.to_lowercase() == tag));
-    }
-    let ids: std::collections::HashSet<i64> = cards.iter().map(|c| c.id).collect();
-    let links = conn
-        .prepare(&format!("SELECT {LINK_COLUMNS} FROM card_links ORDER BY id"))?
-        .query_map([], link_row)?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|l| ids.contains(&l.card_a) && ids.contains(&l.card_b))
-        .collect();
-    let mut items = Vec::new();
-    let mut refs = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for row in conn
-        .prepare(
-            "SELECT ci.card_id, i.id, i.item_type, i.title, i.authors, i.date
-             FROM card_items ci JOIN items i ON i.id = ci.item_id ORDER BY i.id",
-        )?
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, item_ref(r, 1)?)))?
-    {
-        let (card_id, item) = row?;
-        if !ids.contains(&card_id) {
-            continue;
-        }
-        refs.push(GraphRef { card_id, item_id: item.item_id });
-        if seen.insert(item.item_id) {
-            items.push(item);
-        }
-    }
-    Ok(Graph { cards, links, items, refs })
-}
-
 // ---------- sections ----------
 
 /// A named region on a board that groups the cards inside it.
@@ -1328,6 +1262,8 @@ pub struct CardDetail {
     data: String,
     tags: Vec<String>,
     items: Vec<ItemRef>,
+    /// Annotations it cites.
+    annotations: Vec<crate::annotations::AnnotationRef>,
     boards: Vec<BoardRef>,
     created_at: i64,
     updated_at: i64,
@@ -1372,6 +1308,7 @@ pub(crate) fn load_card_detail(conn: &Connection, id: i64) -> Result<CardDetail>
         data,
         tags: card_tags(conn, id)?,
         items,
+        annotations: crate::annotations::card_annotation_refs(conn, id)?,
         boards: card_boards(conn, id)?,
         created_at,
         updated_at,
@@ -1420,6 +1357,8 @@ pub struct LibraryCard {
     sections: Vec<SectionRef>,
     /// Drawer items it cites (shown on the card face).
     items: Vec<ItemRef>,
+    /// Annotations it cites (shown on the card face).
+    annotations: Vec<crate::annotations::AnnotationRef>,
     /// Size on its first board (by name), so the library can draw it as it looks there;
     /// `None` when it is on no board.
     width: Option<f64>,
@@ -1525,6 +1464,7 @@ pub fn list_cards(state: State<'_, DrawerState>, filter: CardQuery) -> Result<Ve
             boards: card_boards(conn, id)?,
             sections: card_sections(conn, id)?,
             items,
+            annotations: crate::annotations::card_annotation_refs(conn, id)?,
             width: size.map(|s| s.0),
             height: size.map(|s| s.1),
             link_count,

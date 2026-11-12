@@ -34,7 +34,7 @@ export function Icon({ name, size, className, title }: IconProps) {
     return <Svg markup={ICONS[name]} size={size} className={`bn-icon${className ? ` ${className}` : ""}`} title={title} />;
 }
 
-/** The icon of a Drawer item type, tinted by its group (文獻、影音、現場表演、藝術與圖像、其他). */
+/** The icon of a Drawer item type, tinted by its group (文獻、影音、現場表演、藝術與圖像、其他、檔案). */
 export function TypeIcon({ type, size, className }: { type: string; size?: number; className?: string }) {
     const t = itemType(type);
     const markup = TYPE_ICONS[t.id] ?? TYPE_ICONS.document;

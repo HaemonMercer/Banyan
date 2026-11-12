@@ -1,4 +1,5 @@
 import SectionHeader from "./SectionHeader";
+import { ask } from "../Feedback";
 
 interface Props {
     value: string;
@@ -24,7 +25,7 @@ function ItemFullText({ value, onChange, onSave, onError, collapsed, onToggle }:
         try {
             const text = await navigator.clipboard.readText();
             if (!text) return onError("剪貼簿裡沒有文字");
-            if (value.trim() && !confirm("用剪貼簿的內容取代目前的原文？")) return;
+            if (value.trim() && !(await ask({ title: "用剪貼簿的內容取代目前的原文？", confirm: "取代" }))) return;
             onChange(text);
             setTimeout(onSave, 0);
         } catch {

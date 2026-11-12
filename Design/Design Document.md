@@ -6,14 +6,13 @@
 |核心框架 |Tauri |
 |前端框架 |Typescript 的 React |
 |資料儲存 |SQLite |
-|Markdown 語法 |unified / remark（GFM、KaTeX、directive），自訂語法一律用 directive，只有 `[[wikilink]]` 另做簡寫；卡片編輯器：Milkdown（ProseMirror ＋ remark，所見即所得，與解析共用同一套 remark 外掛） |
 |圖表 |自研 |
 |畫布 |HTML 的 Canvas |
 
 # 核心功能
 |功能 |概括 |參考 |
 |---|---|---|
-|Drawer | |Zotero |
+|Drawer |個人資料庫，分兩部分：文獻庫管理書目資料（文獻、影音、表演、藝術品）；檔案庫管理個人檔案，拖進來的檔案依類型整理、預覽。 |Zotero, DEVONthink, Eagle |
 |Writer | |Scrivener, Microsoft Word, LibreOffice Writer,<br>Pages |
 |Slides | |Microsoft PowerPoint, LibreOffice Impress, iA Presenter,<br>Keynote |
 |Publisher | |Affinity 的 Layout, InDesign |
@@ -21,6 +20,7 @@
 |Layout |Notion Style 的排版，且是 WYSIWYG 的 Markdown 編輯器。<br>頁面由區塊組成，可以拖曳重排、分欄，並嵌入其他模組的內容。 |Notion |
 |Whiteboard |無限白板：把筆記、文獻、圖片以卡片的形式擺放並連線，用來整理想法和知識之間的關係。 |Heptabase, Miro, FigJam |
 |Base |資料庫：使用者可以自訂欄位，用表格、看板、日曆、圖庫等視圖瀏覽。<br>支援篩選、排序、分組與公式欄位。 |Notion Database |
+|Annotator |閱讀 PDF 與電子書時畫重點、寫筆記、加書籤；重點可以變成白板上的卡片，卡片能回到原文。 |Zotero 的 PDF 閱讀器, Readwise, Heptabase |
 |Version Machine |版本控制：自動記錄每一次修改，也能手動建立有名稱的版本。<br>可以比較兩個版本的差異，並還原到任何一個時間點。 |Obsidian 的 Version Control, JetBrains 的 Local History |
 
 # 核心頁面

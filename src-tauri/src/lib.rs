@@ -1,6 +1,8 @@
+pub mod annotations;
 pub mod card_files;
 pub mod db;
 pub mod drawer;
+pub mod file_protocol;
 pub mod history;
 pub mod library;
 pub mod whiteboard;
@@ -25,7 +27,7 @@ fn update_endpoints(app: tauri::AppHandle) -> Vec<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    file_protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -37,8 +39,28 @@ pub fn run() {
             let default_dir = app.path().app_data_dir()?;
             let config_path = app.path().app_config_dir()?.join("config.json");
             let config = library::load_config(&config_path);
-            let (lib, warning) = library::open_startup_library(&config, &default_dir)
-                .map_err(|e| e.0)?;
+            let (lib, warning) = match library::open_startup_library(&config, &default_dir) {
+                Ok(opened) => opened,
+                Err(e) => {
+                    // The library can't be opened safely (e.g. made by a newer Banyan, or an
+                    // upgrade failed and was rolled back). Say why and quit instead of running
+                    // on a stand-in database where new work could get lost.
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    // Nothing can be done in the window meanwhile: work done on the stand-in
+                    // database would be thrown away when the app quits.
+                    for window in app.webview_windows().values() {
+                        let _ = window.hide();
+                    }
+                    let handle = app.handle().clone();
+                    app.dialog()
+                        .message(format!("{}\n\n資料庫位置：{}", e.0, default_dir.display()))
+                        .title("Banyan 無法開啟資料庫")
+                        .kind(MessageDialogKind::Error)
+                        .show(move |_| handle.exit(1));
+                    // Placeholder so the app's state exists while the message is up; nothing is saved.
+                    (library::Library::in_memory().map_err(|e| e.0)?, None)
+                }
+            };
             app.manage(drawer::DrawerState {
                 lib: Mutex::new(lib),
                 default_dir,
@@ -77,6 +99,8 @@ pub fn run() {
             drawer::set_collection_view,
             drawer::read_attachment,
             drawer::import_images,
+            drawer::import_files,
+            drawer::pick_import_files,
             drawer::add_items_to_collection,
             drawer::field_values,
             drawer::add_related_items,
@@ -87,6 +111,18 @@ pub fn run() {
             drawer::add_attachments,
             drawer::open_attachment,
             drawer::reveal_attachment,
+            library::reveal_backups,
+            annotations::list_annotations,
+            annotations::create_annotation,
+            annotations::update_annotation,
+            annotations::delete_annotation,
+            annotations::list_annotatable_files,
+            annotations::search_annotations,
+            annotations::get_annotation,
+            annotations::annotation_to_card,
+            annotations::link_card_annotation,
+            annotations::unlink_card_annotation,
+            annotations::list_annotation_cards,
             drawer::delete_attachment,
             library::get_library_info,
             library::inspect_library_dir,
@@ -122,7 +158,6 @@ pub fn run() {
             whiteboard::delete_whiteboard_folder,
             whiteboard::move_whiteboard_folder,
             whiteboard::move_whiteboard,
-            whiteboard::get_graph,
             whiteboard::create_section,
             whiteboard::update_section,
             whiteboard::delete_section,

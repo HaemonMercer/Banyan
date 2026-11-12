@@ -108,3 +108,11 @@
 .update-detail { margin-top: var(--sp-1); font-size: var(--fs-sm); }
 .update-detail summary { cursor: pointer; }
 .update-source { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Sub-heading inside a section (e.g. 更新時的資料庫保護 under 資料儲存位置) */
+.settings-section h3.settings-subhead {
+    margin: var(--sp-4) 0 0;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semibold);
+}
+.settings-actions .muted { align-self: center; }

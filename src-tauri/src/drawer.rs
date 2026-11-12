@@ -1,4 +1,5 @@
-//! Drawer: a Zotero-style reference library — collections, items, tags and file attachments.
+//! Drawer: two libraries sharing one item table — 文獻庫, a Zotero-style reference library, and
+//! 檔案庫, where every item is a file typed by its extension — with folders, tags and attachments.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,6 +75,8 @@ pub struct Collection {
     parent_id: Option<i64>,
     /// "list" or "gallery".
     view: String,
+    /// "literature" (文獻庫) or "files" (檔案庫).
+    library: String,
 }
 
 #[derive(Serialize)]
@@ -91,13 +94,17 @@ pub struct ItemSummary {
     attachment_count: i64,
     /// First attachment that is a picture (shown in galleries).
     image_id: Option<i64>,
+    /// Name of the first attachment (the file of a file-library item).
+    file_name: Option<String>,
+    /// Total size of the attachments in bytes.
+    file_size: i64,
     created_at: i64,
     updated_at: i64,
 }
 
-/// Item types a gallery folder accepts (藝術與圖像).
-pub const IMAGE_TYPES: [&str; 4] = ["painting", "artwork", "photo", "map"];
-const GALLERY_ONLY: &str = "畫廊只能放圖片類的條目（繪畫、藝術品、照片、地圖）";
+/// Item types a gallery folder accepts (藝術與圖像, and 圖片 in the file library).
+pub const IMAGE_TYPES: [&str; 5] = ["painting", "artwork", "photo", "map", "fileImage"];
+const GALLERY_ONLY: &str = "畫廊只能放圖片類的條目（繪畫、藝術品、照片、地圖、圖片檔）";
 /// Attachments with these extensions count as pictures.
 const IMAGE_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg"];
 
@@ -108,6 +115,86 @@ fn is_image_file(name: &str) -> bool {
         .is_some_and(|e| IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+// ---------- the two libraries: 文獻庫 and 檔案庫 ----------
+
+/// The bibliographic library (Zotero-style records).
+pub const LITERATURE: &str = "literature";
+/// The file library: every item is a file, typed by its extension.
+pub const FILES: &str = "files";
+
+/// File-library item types all start with "file" (fileDocument, fileImage…); no literature type does.
+/// Keep in sync with the 檔案 group in `src/drawer/itemTypes.ts`.
+pub fn is_file_type(item_type: &str) -> bool {
+    item_type.starts_with("file")
+}
+
+/// Which library an item type belongs to.
+pub fn library_of(item_type: &str) -> &'static str {
+    if is_file_type(item_type) { FILES } else { LITERATURE }
+}
+
+fn check_library(library: &str) -> Result<()> {
+    match library {
+        LITERATURE | FILES => Ok(()),
+        _ => Err(Error(format!("未知的資料庫：{library}"))),
+    }
+}
+
+fn library_label(library: &str) -> &'static str {
+    if library == FILES { "檔案庫" } else { "文獻庫" }
+}
+
+/// File-library type for a file name, from its extension.
+pub fn file_type_for(name: &str) -> &'static str {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "pdf" | "doc" | "docx" | "odt" | "rtf" | "pages" | "djvu" | "xps" => "fileDocument",
+        "epub" | "mobi" | "azw" | "azw3" | "kfx" | "prc" | "fb2" | "fbz" | "cbz" | "cbr" | "cb7" => "fileEbook",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "avif" | "svg" | "heic" | "heif" | "tif"
+        | "tiff" | "ico" | "psd" | "raw" | "cr2" | "nef" | "arw" | "dng" => "fileImage",
+        "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" | "wmv" | "flv" | "mpg" | "mpeg" | "3gp" => "fileVideo",
+        "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "wma" | "aiff" | "aif" | "mid"
+        | "midi" => "fileAudio",
+        "txt" | "md" | "markdown" | "log" | "rst" | "org" | "tex" | "bib" => "fileText",
+        "xls" | "xlsx" | "xlsm" | "csv" | "tsv" | "ods" | "numbers" => "fileSpreadsheet",
+        "ppt" | "pptx" | "odp" | "key" => "filePresentation",
+        "js" | "mjs" | "ts" | "tsx" | "jsx" | "py" | "rs" | "c" | "h" | "cpp" | "hpp" | "cc" | "cs" | "java"
+        | "kt" | "go" | "rb" | "php" | "swift" | "sh" | "bash" | "ps1" | "bat" | "html" | "htm" | "css"
+        | "scss" | "json" | "yaml" | "yml" | "toml" | "xml" | "sql" | "lua" | "r" | "ipynb" => "fileCode",
+        "zip" | "rar" | "7z" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" => "fileArchive",
+        _ => "fileOther",
+    }
+}
+
+/// The library a folder belongs to, or None when the folder doesn't exist.
+fn collection_library(conn: &Connection, collection_id: i64) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT library FROM collections WHERE id = ?1", [collection_id], |r| r.get(0))
+        .optional()?)
+}
+
+/// Errors when an item of `item_type` may not go into the folder: the folder is in the other
+/// library, or it is a gallery and the type isn't a picture type.
+fn check_type_fits(conn: &Connection, item_type: &str, collection_id: i64) -> Result<()> {
+    if let Some(lib) = collection_library(conn, collection_id)? {
+        if lib != library_of(item_type) {
+            return Err(Error(format!(
+                "{}的條目只能放進{}的資料夾",
+                library_label(library_of(item_type)),
+                library_label(library_of(item_type))
+            )));
+        }
+    }
+    if is_gallery(conn, collection_id)? && !IMAGE_TYPES.contains(&item_type) {
+        return Err(Error(GALLERY_ONLY.into()));
+    }
+    Ok(())
+}
+
 fn is_gallery(conn: &Connection, collection_id: i64) -> Result<bool> {
     Ok(conn
         .query_row("SELECT view = 'gallery' FROM collections WHERE id = ?1", [collection_id], |r| r.get(0))
@@ -115,22 +202,29 @@ fn is_gallery(conn: &Connection, collection_id: i64) -> Result<bool> {
         .unwrap_or(false))
 }
 
-/// Errors when the item may not go into the collection (a gallery takes image items only).
+/// Errors when the item may not go into the collection (the other library's folder, or a
+/// gallery for a non-picture item).
 fn check_fits(conn: &Connection, item_id: i64, collection_id: i64) -> Result<()> {
-    if !is_gallery(conn, collection_id)? {
-        return Ok(());
-    }
     let item_type: Option<String> = conn
         .query_row("SELECT item_type FROM items WHERE id = ?1", [item_id], |r| r.get(0))
         .optional()?;
     match item_type {
-        Some(t) if !IMAGE_TYPES.contains(&t.as_str()) => Err(Error(GALLERY_ONLY.into())),
-        _ => Ok(()),
+        Some(t) => check_type_fits(conn, &t, collection_id),
+        None => Ok(()),
     }
 }
 
-/// Errors when an item that is in a gallery would get a type that isn't an image type.
+/// Errors when the new type would move the item to the other library, or when an item that is
+/// in a gallery would get a type that isn't an image type.
 fn check_type_change(conn: &Connection, item_id: i64, item_type: &str) -> Result<()> {
+    let current: Option<String> = conn
+        .query_row("SELECT item_type FROM items WHERE id = ?1", [item_id], |r| r.get(0))
+        .optional()?;
+    if let Some(current) = current {
+        if library_of(&current) != library_of(item_type) {
+            return Err(Error("不能把條目改成另一個資料庫的類型（文獻庫與檔案庫的類型不能互換）".into()));
+        }
+    }
     if IMAGE_TYPES.contains(&item_type) {
         return Ok(());
     }
@@ -143,7 +237,7 @@ fn check_type_change(conn: &Connection, item_id: i64, item_type: &str) -> Result
         )
         .optional()?;
     match gallery {
-        Some(name) => Err(Error(format!("條目在畫廊「{name}」裡，只能是圖片類的類型（繪畫、藝術品、照片、地圖）"))),
+        Some(name) => Err(Error(format!("條目在畫廊「{name}」裡，只能是圖片類的類型（繪畫、藝術品、照片、地圖、圖片檔）"))),
         None => Ok(()),
     }
 }
@@ -223,10 +317,14 @@ pub struct Attachment {
     linked: bool,
     /// Original location, for linked attachments.
     linked_path: Option<String>,
+    /// 檔案庫 copy of a 文獻庫 attachment: the literature attachment whose file it shares.
+    mirror_of: Option<i64>,
+    /// 文獻庫 attachment that also shows up in 檔案庫 (some file item shares its file).
+    mirrored: bool,
 }
 
 impl Attachment {
-    /// Expects columns: id, item_id, file_name, size, created_at, linked, stored_path.
+    /// Expects the columns of `ATTACHMENT_COLUMNS`.
     fn from_row(r: &rusqlite::Row) -> rusqlite::Result<Self> {
         let linked: bool = r.get(5)?;
         Ok(Attachment {
@@ -237,6 +335,8 @@ impl Attachment {
             created_at: r.get(4)?,
             linked,
             linked_path: if linked { Some(r.get(6)?) } else { None },
+            mirror_of: r.get(7)?,
+            mirrored: r.get(8)?,
         })
     }
 }
@@ -249,7 +349,9 @@ pub struct Creator {
     pub name: String,
 }
 
-const ATTACHMENT_COLUMNS: &str = "id, item_id, file_name, size, created_at, linked, stored_path";
+/// Selected `FROM attachments` (unaliased: the last column looks for rows mirroring this one).
+const ATTACHMENT_COLUMNS: &str = "id, item_id, file_name, size, created_at, linked, stored_path, mirror_of,
+     EXISTS (SELECT 1 FROM attachments m WHERE m.mirror_of = attachments.id)";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -289,6 +391,9 @@ pub struct ItemFilter {
     unfiled: bool,
     #[serde(default)]
     query: String,
+    /// Only items of this library ("literature" or "files"); all items when absent.
+    #[serde(default)]
+    library: Option<String>,
 }
 
 // ---------- collections ----------
@@ -298,13 +403,14 @@ pub fn list_collections(state: State<'_, DrawerState>) -> Result<Vec<Collection>
     let lib = state.lock();
     let conn = &lib.conn;
     let mut stmt =
-        conn.prepare("SELECT id, name, parent_id, view FROM collections ORDER BY name COLLATE NOCASE")?;
+        conn.prepare("SELECT id, name, parent_id, view, library FROM collections ORDER BY name COLLATE NOCASE")?;
     let rows = stmt.query_map([], |r| {
         Ok(Collection {
             id: r.get(0)?,
             name: r.get(1)?,
             parent_id: r.get(2)?,
             view: r.get(3)?,
+            library: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -316,6 +422,7 @@ pub fn create_collection(
     name: String,
     parent_id: Option<i64>,
     view: Option<String>,
+    library: Option<String>,
 ) -> Result<Collection> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -325,15 +432,22 @@ pub fn create_collection(
     check_view(&view)?;
     let lib = state.lock();
     let conn = &lib.conn;
+    // A sub-folder lives in its parent's library.
+    let library = match parent_id {
+        Some(pid) => collection_library(conn, pid)?.ok_or_else(|| Error("找不到上層資料夾".into()))?,
+        None => library.unwrap_or_else(|| LITERATURE.into()),
+    };
+    check_library(&library)?;
     conn.execute(
-        "INSERT INTO collections (name, parent_id, created_at, view) VALUES (?1, ?2, ?3, ?4)",
-        params![name, parent_id, now_ms(), view],
+        "INSERT INTO collections (name, parent_id, created_at, view, library) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![name, parent_id, now_ms(), view, library],
     )?;
     Ok(Collection {
         id: conn.last_insert_rowid(),
         name,
         parent_id,
         view,
+        library,
     })
 }
 
@@ -363,7 +477,7 @@ pub fn set_collection_view(state: State<'_, DrawerState>, id: i64, view: String)
         )?;
         if others > 0 {
             return Err(Error(format!(
-                "資料夾裡有 {others} 個不是圖片類的條目，不能改成畫廊。畫廊只能放繪畫、藝術品、照片、地圖。"
+                "資料夾裡有 {others} 個不是圖片類的條目，不能改成畫廊。畫廊只能放繪畫、藝術品、照片、地圖、圖片檔。"
             )));
         }
     }
@@ -428,9 +542,12 @@ pub fn list_items(state: State<'_, DrawerState>, filter: ItemFilter) -> Result<V
                  (SELECT COUNT(*) FROM attachments a WHERE a.item_id = i.id),
                  i.publication, i.publisher, i.series, i.place, i.created_at,
                  (SELECT a.id FROM attachments a WHERE a.item_id = i.id AND ({image_match})
-                  ORDER BY a.created_at, a.id LIMIT 1)
+                  ORDER BY a.created_at, a.id LIMIT 1),
+                 (SELECT a.file_name FROM attachments a WHERE a.item_id = i.id ORDER BY a.created_at, a.id LIMIT 1),
+                 (SELECT COALESCE(SUM(a.size), 0) FROM attachments a WHERE a.item_id = i.id)
           FROM items i
-          WHERE (?1 IS NULL OR EXISTS (SELECT 1 FROM item_collections ic
+          WHERE (?5 IS NULL OR (substr(i.item_type, 1, 4) = 'file') = (?5 = 'files'))
+            AND (?1 IS NULL OR EXISTS (SELECT 1 FROM item_collections ic
                                        WHERE ic.item_id = i.id AND ic.collection_id = ?1))
             AND (?2 = 0 OR NOT EXISTS (SELECT 1 FROM item_collections ic WHERE ic.item_id = i.id))
             AND (?4 IS NULL OR EXISTS (SELECT 1 FROM item_tags it WHERE it.item_id = i.id AND it.tag_id = ?4))
@@ -447,7 +564,10 @@ pub fn list_items(state: State<'_, DrawerState>, filter: ItemFilter) -> Result<V
           ORDER BY i.updated_at DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![filter.collection_id, filter.unfiled, pattern, filter.tag_id], |r| {
+    if let Some(l) = &filter.library {
+        check_library(l)?;
+    }
+    let rows = stmt.query_map(params![filter.collection_id, filter.unfiled, pattern, filter.tag_id, filter.library], |r| {
         Ok(ItemSummary {
             id: r.get(0)?,
             item_type: r.get(1)?,
@@ -462,6 +582,8 @@ pub fn list_items(state: State<'_, DrawerState>, filter: ItemFilter) -> Result<V
             place: r.get(10)?,
             created_at: r.get(11)?,
             image_id: r.get(12)?,
+            file_name: r.get(13)?,
+            file_size: r.get(14)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -554,9 +676,7 @@ pub fn create_item(
     let mut lib = state.lock();
     let conn = &mut lib.conn;
     if let Some(cid) = collection_id {
-        if is_gallery(conn, cid)? && !IMAGE_TYPES.contains(&item_type.as_str()) {
-            return Err(Error(GALLERY_ONLY.into()));
-        }
+        check_type_fits(conn, &item_type, cid)?;
     }
     let tx = conn.transaction()?;
     let now = now_ms();
@@ -647,20 +767,48 @@ pub fn delete_item(state: State<'_, DrawerState>, id: i64) -> Result<()> {
     delete_item_in(&lib, id)
 }
 
+/// All or nothing: the database changes are made in one savepoint (so this also works inside
+/// another operation's), and files handed over to 檔案庫 are moved back if anything fails. The
+/// item's own folder is only removed once the database changes went through.
 fn delete_item_in(lib: &crate::library::Library, id: i64) -> Result<()> {
     let conn = &lib.conn;
-    // Note cards that belong only to this item (no board, no other item) go with it,
-    // as the old free-text notes did. Cards on a board or shared with other items stay.
-    conn.execute(
-        "DELETE FROM cards WHERE id IN (SELECT card_id FROM card_items WHERE item_id = ?1)
-           AND NOT EXISTS (SELECT 1 FROM board_cards bc WHERE bc.card_id = cards.id)
-           AND NOT EXISTS (SELECT 1 FROM card_items o WHERE o.card_id = cards.id AND o.item_id <> ?1)",
-        [id],
-    )?;
-    conn.execute("DELETE FROM items WHERE id = ?1", [id])?;
-    delete_orphan_tags(&conn)?;
+    let mut moved = Vec::new();
+    let done = in_savepoint(conn, || {
+        hand_over_shared_files(lib, id, &mut moved)?;
+        // Note cards that belong only to this item (no board, no other item) go with it,
+        // as the old free-text notes did. Cards on a board or shared with other items stay.
+        conn.execute(
+            "DELETE FROM cards WHERE id IN (SELECT card_id FROM card_items WHERE item_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM board_cards bc WHERE bc.card_id = cards.id)
+               AND NOT EXISTS (SELECT 1 FROM card_items o WHERE o.card_id = cards.id AND o.item_id <> ?1)",
+            [id],
+        )?;
+        conn.execute("DELETE FROM items WHERE id = ?1", [id])?;
+        delete_orphan_tags(conn)?;
+        Ok(())
+    });
+    if let Err(e) = done {
+        undo_moves(moved);
+        return Err(e);
+    }
     remove_dir_if_exists(&lib.storage_dir().join(id.to_string()))?;
     Ok(())
+}
+
+/// Runs `f` in a savepoint: its database changes are kept only if it succeeds. Savepoints nest,
+/// so this works on its own (it then commits) and inside a transaction or another savepoint.
+pub(crate) fn in_savepoint<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    conn.execute_batch("SAVEPOINT drawer_op")?;
+    match f() {
+        Ok(v) => {
+            conn.execute_batch("RELEASE drawer_op")?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO drawer_op; RELEASE drawer_op");
+            Err(e)
+        }
+    }
 }
 
 /// Drops tags no item uses any more.
@@ -712,16 +860,24 @@ pub struct TagInfo {
 }
 
 #[tauri::command]
-pub fn list_tags(state: State<'_, DrawerState>) -> Result<Vec<TagInfo>> {
+pub fn list_tags(state: State<'_, DrawerState>, library: Option<String>) -> Result<Vec<TagInfo>> {
+    if let Some(l) = &library {
+        check_library(l)?;
+    }
     let lib = state.lock();
+    // With a library, only its items are counted and tags none of them use are left out.
     let rows = lib
         .conn
         .prepare(
-            "SELECT t.id, t.name, COUNT(it.item_id) FROM tags t
+            "SELECT t.id, t.name, COUNT(i.id) FROM tags t
              LEFT JOIN item_tags it ON it.tag_id = t.id
-             GROUP BY t.id ORDER BY t.name COLLATE NOCASE",
+             LEFT JOIN items i ON i.id = it.item_id
+                AND (?1 IS NULL OR (substr(i.item_type, 1, 4) = 'file') = (?1 = 'files'))
+             GROUP BY t.id
+             HAVING ?1 IS NULL OR COUNT(i.id) > 0
+             ORDER BY t.name COLLATE NOCASE",
         )?
-        .query_map([], |r| Ok(TagInfo { id: r.get(0)?, name: r.get(1)?, count: r.get(2)? }))?
+        .query_map([library], |r| Ok(TagInfo { id: r.get(0)?, name: r.get(1)?, count: r.get(2)? }))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -980,7 +1136,7 @@ pub(crate) fn unique_target(dir: &Path, file_name: &str) -> PathBuf {
 
 /// Copies the given files into the item's storage folder and records them.
 /// Files larger than `link_threshold` are not copied; their original path is recorded instead.
-fn import_files(state: &DrawerState, item_id: i64, paths: &[PathBuf]) -> Result<Vec<Attachment>> {
+fn attach_files(state: &DrawerState, item_id: i64, paths: &[PathBuf]) -> Result<Vec<Attachment>> {
     let lib = state.lock();
     let conn = &lib.conn;
     let exists: bool = conn.query_row(
@@ -1025,14 +1181,19 @@ fn import_files(state: &DrawerState, item_id: i64, paths: &[PathBuf]) -> Result<
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![item_id, stored_name, stored_path, size, now, linked],
         )?;
+        let id = conn.last_insert_rowid();
+        // A 文獻庫 attachment also shows up in 檔案庫.
+        let mirrored = mirror_attachment(conn, id)?.is_some();
         added.push(Attachment {
-            id: conn.last_insert_rowid(),
+            id,
             item_id,
             file_name: stored_name,
             size,
             created_at: now,
             linked,
             linked_path: linked.then_some(stored_path),
+            mirror_of: None,
+            mirrored,
         });
     }
     if !added.is_empty() {
@@ -1070,7 +1231,7 @@ pub async fn pick_attachments(
         .into_iter()
         .filter_map(|f| f.into_path().ok())
         .collect();
-    import_files(&state, item_id, &paths)
+    attach_files(&state, item_id, &paths)
 }
 
 /// Attaches files given by path (used for drag-and-drop).
@@ -1081,7 +1242,7 @@ pub fn add_attachments(
     paths: Vec<String>,
 ) -> Result<Vec<Attachment>> {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    import_files(&state, item_id, &paths)
+    attach_files(&state, item_id, &paths)
 }
 
 /// The attachment's bytes, sent to the page without JSON encoding (gallery pictures).
@@ -1108,6 +1269,7 @@ pub fn import_images(state: State<'_, DrawerState>, collection_id: i64, paths: V
             if !is_gallery(conn, collection_id)? {
                 return Err(Error("只能把圖片直接拖進畫廊".into()));
             }
+            check_type_fits(conn, "photo", collection_id)?; // a 文獻庫 gallery
             let now = now_ms();
             conn.execute(
                 "INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('photo', ?1, ?2, ?2)",
@@ -1120,10 +1282,241 @@ pub fn import_images(state: State<'_, DrawerState>, collection_id: i64, paths: V
             )?;
             id
         };
-        import_files(&state, id, &[path])?;
+        attach_files(&state, id, &[path])?;
         ids.push(id);
     }
     Ok(ids)
+}
+
+/// Result of adding files to the file library.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    /// The new items, in the order of the files.
+    item_ids: Vec<i64>,
+    /// Folders and files a gallery doesn't take (non-pictures).
+    skipped: usize,
+    /// Files too large to copy that were linked instead.
+    linked: Vec<String>,
+    /// Files that couldn't be added, with the reason ("name: reason"). The others still are.
+    failed: Vec<String>,
+}
+
+/// Files added to the file library (檔案庫): each file becomes an item whose type follows its
+/// extension, titled after the file, with the file attached. `collection_id` must be a folder of
+/// the file library; a gallery takes pictures only. Folders are skipped.
+pub fn import_into_file_library(
+    state: &DrawerState,
+    collection_id: Option<i64>,
+    paths: &[PathBuf],
+) -> Result<ImportResult> {
+    if let Some(cid) = collection_id {
+        let lib = state.lock();
+        match collection_library(&lib.conn, cid)? {
+            None => return Err(Error("找不到這個資料夾".into())),
+            Some(l) if l != FILES => return Err(Error("只能把檔案加進檔案庫的資料夾".into())),
+            _ => {}
+        }
+    }
+    let mut result = ImportResult { item_ids: Vec::new(), skipped: 0, linked: Vec::new(), failed: Vec::new() };
+    for path in paths {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let item_type = file_type_for(&name);
+        let fits = {
+            let lib = state.lock();
+            match collection_id {
+                Some(cid) => check_type_fits(&lib.conn, item_type, cid).is_ok(),
+                None => true,
+            }
+        };
+        if !path.is_file() || !fits {
+            result.skipped += 1;
+            continue;
+        }
+        let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or(&name).to_string();
+        let id = {
+            let mut lib = state.lock();
+            let tx = lib.conn.transaction()?;
+            let now = now_ms();
+            tx.execute(
+                "INSERT INTO items (item_type, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                params![item_type, title, now],
+            )?;
+            let id = tx.last_insert_rowid();
+            if let Some(cid) = collection_id {
+                tx.execute(
+                    "INSERT INTO item_collections (item_id, collection_id) VALUES (?1, ?2)",
+                    params![id, cid],
+                )?;
+            }
+            tx.commit()?;
+            id
+        };
+        let added = match attach_files(state, id, std::slice::from_ref(path)) {
+            Ok(a) => a,
+            Err(e) => {
+                // Don't leave an item without its file behind; go on with the other files, so
+                // the ones already added are still reported.
+                let lib = state.lock();
+                let _ = delete_item_in(&lib, id);
+                result.failed.push(format!("{name}：{}", e.0));
+                continue;
+            }
+        };
+        result.linked.extend(added.into_iter().filter(|a| a.linked).map(|a| a.file_name));
+        result.item_ids.push(id);
+    }
+    Ok(result)
+}
+
+/// Files dropped onto the file library (see `import_into_file_library`).
+#[tauri::command]
+pub fn import_files(
+    state: State<'_, DrawerState>,
+    collection_id: Option<i64>,
+    paths: Vec<String>,
+) -> Result<ImportResult> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    import_into_file_library(&state, collection_id, &paths)
+}
+
+/// Opens the system file picker and adds the chosen files to the file library.
+#[tauri::command]
+pub async fn pick_import_files(
+    app: AppHandle,
+    state: State<'_, DrawerState>,
+    collection_id: Option<i64>,
+) -> Result<ImportResult> {
+    let Some(picked) = app.dialog().file().set_title("加入檔案").blocking_pick_files() else {
+        return Ok(ImportResult { item_ids: Vec::new(), skipped: 0, linked: Vec::new(), failed: Vec::new() });
+    };
+    let paths: Vec<PathBuf> = picked.into_iter().filter_map(|f| f.into_path().ok()).collect();
+    import_into_file_library(&state, collection_id, &paths)
+}
+
+// ---------- 文獻庫 attachments in 檔案庫 ----------
+
+/// Gives a 文獻庫 attachment a 檔案庫 copy: a new file item (typed by the file's extension,
+/// titled after it, unfiled, related to the literature item) whose attachment row shares the
+/// same file. Nothing happens for 檔案庫 items or attachments that already have a copy.
+/// Returns the new file item's id.
+pub(crate) fn mirror_attachment(conn: &Connection, attachment_id: i64) -> rusqlite::Result<Option<i64>> {
+    let row: Option<(i64, String, String, String, i64, i64, bool)> = conn
+        .query_row(
+            "SELECT a.item_id, i.item_type, a.file_name, a.stored_path, a.size, a.created_at, a.linked
+             FROM attachments a JOIN items i ON i.id = a.item_id
+             WHERE a.id = ?1 AND a.mirror_of IS NULL
+               AND NOT EXISTS (SELECT 1 FROM attachments m WHERE m.mirror_of = a.id)",
+            [attachment_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        )
+        .optional()?;
+    let Some((source_item, source_type, file_name, stored_path, size, created_at, linked)) = row else {
+        return Ok(None);
+    };
+    if is_file_type(&source_type) {
+        return Ok(None);
+    }
+    let title = Path::new(&file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(&file_name).to_string();
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO items (item_type, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+        params![file_type_for(&file_name), title, created_at, now],
+    )?;
+    let file_item = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO attachments (item_id, file_name, stored_path, size, created_at, linked, mirror_of)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![file_item, file_name, stored_path, size, created_at, linked, attachment_id],
+    )?;
+    // Related both ways (without touching the literature item, so its place in the list stays).
+    conn.execute(
+        "INSERT OR IGNORE INTO item_relations (item_a, item_b, created_at) VALUES (?1, ?2, ?3)",
+        params![source_item.min(file_item), source_item.max(file_item), now],
+    )?;
+    Ok(Some(file_item))
+}
+
+/// Gives every 文獻庫 attachment without one a 檔案庫 copy (database upgrade to v16).
+pub fn mirror_all_literature_attachments(conn: &Connection) -> rusqlite::Result<usize> {
+    let ids: Vec<i64> = conn
+        .prepare(
+            "SELECT a.id FROM attachments a JOIN items i ON i.id = a.item_id
+             WHERE substr(i.item_type, 1, 4) <> 'file' AND a.mirror_of IS NULL
+             ORDER BY a.created_at, a.id",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut n = 0;
+    for id in ids {
+        n += mirror_attachment(conn, id)?.is_some() as usize;
+    }
+    Ok(n)
+}
+
+/// A file moved (or copied, when it couldn't be moved) while handing it over to 檔案庫.
+struct FileMove {
+    from: PathBuf,
+    to: PathBuf,
+    renamed: bool,
+}
+
+/// Puts files handed over by `hand_over_shared_files` back where they were (best effort).
+fn undo_moves(moved: Vec<FileMove>) {
+    for m in moved.into_iter().rev() {
+        if m.renamed {
+            if fs::rename(&m.to, &m.from).is_err() && fs::copy(&m.to, &m.from).is_ok() {
+                let _ = fs::remove_file(&m.to);
+            }
+        } else {
+            let _ = fs::remove_file(&m.to);
+        }
+    }
+}
+
+/// Before a 文獻庫 item is deleted: its files that also show up in 檔案庫 stay there. Each copied
+/// file moves into the file item's own storage folder and stops being a shared copy. Every file
+/// moved is recorded in `moved`, so the caller can put them back if the deletion fails.
+fn hand_over_shared_files(lib: &crate::library::Library, item_id: i64, moved: &mut Vec<FileMove>) -> Result<()> {
+    let conn = &lib.conn;
+    let copies: Vec<(i64, i64, String, String, bool, i64)> = conn
+        .prepare(
+            "SELECT m.id, m.item_id, m.file_name, m.stored_path, m.linked, s.id
+             FROM attachments m JOIN attachments s ON s.id = m.mirror_of
+             WHERE s.item_id = ?1",
+        )?
+        .query_map([item_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (copy_id, copy_item, file_name, stored, linked, source_id) in copies {
+        // The copy becomes the file's only attachment, so the file's annotations move to it, and
+        // cards made from them cite the copy too (so they aren't deleted with the item's own notes).
+        conn.execute("UPDATE annotations SET attachment_id = ?1 WHERE attachment_id = ?2", params![copy_id, source_id])?;
+        conn.execute(
+            "INSERT OR IGNORE INTO card_items (card_id, item_id, created_at)
+             SELECT card_id, ?1, ?2 FROM annotations WHERE attachment_id = ?3 AND card_id IS NOT NULL",
+            params![copy_item, now_ms(), copy_id],
+        )?;
+        if linked {
+            // The file isn't in the library; the copy just keeps pointing at it.
+            conn.execute("UPDATE attachments SET mirror_of = NULL WHERE id = ?1", [copy_id])?;
+            continue;
+        }
+        let dir = lib.storage_dir().join(copy_item.to_string());
+        fs::create_dir_all(&dir)?;
+        let target = unique_target(&dir, &file_name);
+        let from = lib.storage_dir().join(&stored);
+        let renamed = fs::rename(&from, &target).is_ok();
+        if !renamed {
+            fs::copy(&from, &target)?;
+        }
+        moved.push(FileMove { from, to: target.clone(), renamed });
+        let name = target.file_name().unwrap().to_string_lossy().to_string();
+        conn.execute(
+            "UPDATE attachments SET file_name = ?1, stored_path = ?2, mirror_of = NULL WHERE id = ?3",
+            params![name, format!("{copy_item}/{name}"), copy_id],
+        )?;
+    }
+    Ok(())
 }
 
 fn attachment_path(state: &DrawerState, id: i64) -> Result<PathBuf> {
@@ -1154,6 +1547,11 @@ fn attachment_path(state: &DrawerState, id: i64) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The attachment's file on disk (for the `attachment:` protocol the reader streams from).
+pub fn attachment_file(state: &DrawerState, id: i64) -> Result<PathBuf> {
+    attachment_path(state, id)
+}
+
 #[tauri::command]
 pub fn open_attachment(app: AppHandle, state: State<'_, DrawerState>, id: i64) -> Result<()> {
     let path = attachment_path(&state, id)?;
@@ -1170,30 +1568,66 @@ pub fn reveal_attachment(app: AppHandle, state: State<'_, DrawerState>, id: i64)
         .map_err(|e| Error(format!("無法顯示附件位置：{e}")))
 }
 
+/// Deletes an attachment. A 檔案庫 item is a file, so one left without any file goes too.
+/// Returns true when the attachment's own item was deleted with it.
 #[tauri::command]
-pub fn delete_attachment(state: State<'_, DrawerState>, id: i64) -> Result<()> {
+pub fn delete_attachment(state: State<'_, DrawerState>, id: i64) -> Result<bool> {
     let lib = state.lock();
     let conn = &lib.conn;
-    let row: Option<(i64, String, bool)> = conn
+    let row: Option<(i64, String, bool, Option<i64>, String)> = conn
         .query_row(
-            "SELECT item_id, stored_path, linked FROM attachments WHERE id = ?1",
+            "SELECT a.item_id, a.stored_path, a.linked, a.mirror_of, i.item_type
+             FROM attachments a JOIN items i ON i.id = a.item_id WHERE a.id = ?1",
             [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    let Some((item_id, stored, linked)) = row else {
-        return Ok(());
+    let Some((item_id, stored, linked, mirror_of, item_type)) = row else {
+        return Ok(false);
     };
-    conn.execute("DELETE FROM attachments WHERE id = ?1", [id])?;
+    /// Deletes the file item when it has no attachment left; otherwise marks it as changed.
+    fn drop_if_empty(lib: &Library, item: i64) -> Result<bool> {
+        let empty: bool = lib.conn.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM attachments WHERE item_id = ?1)",
+            [item],
+            |r| r.get(0),
+        )?;
+        if empty {
+            delete_item_in(lib, item)?;
+        } else {
+            touch_item(&lib.conn, item)?;
+        }
+        Ok(empty)
+    }
+    let item_removed = in_savepoint(conn, || {
+        if mirror_of.is_none() {
+            // The file goes away, so its 檔案庫 copies go too, with file items left without any file.
+            let copies: Vec<i64> = conn
+                .prepare("SELECT item_id FROM attachments WHERE mirror_of = ?1")?
+                .query_map([id], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            conn.execute("DELETE FROM attachments WHERE mirror_of = ?1", [id])?;
+            for copy in copies {
+                drop_if_empty(&lib, copy)?;
+            }
+        }
+        // A 檔案庫 copy only drops its row: the file belongs to the 文獻庫 item.
+        conn.execute("DELETE FROM attachments WHERE id = ?1", [id])?;
+        if is_file_type(&item_type) {
+            drop_if_empty(&lib, item_id)
+        } else {
+            touch_item(conn, item_id)?;
+            Ok(false)
+        }
+    })?;
     // A linked attachment only forgets the path: the user's original file is never deleted.
-    if !linked {
+    if mirror_of.is_none() && !linked {
         match fs::remove_file(lib.storage_dir().join(stored)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
             _ => {}
         }
     }
-    touch_item(&conn, item_id)?;
-    Ok(())
+    Ok(item_removed)
 }
 
 

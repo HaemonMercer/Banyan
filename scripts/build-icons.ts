@@ -30,7 +30,7 @@ fs.writeFileSync(path.join(root, "public/banyan.svg"), appIcon);
 
 // ---------- preview sheet ----------
 const LABELS: Record<string, string> = {
-    drawer: "Drawer", whiteboard: "Whiteboard", graph: "Graph", cardHub: "Card Hub", writer: "Writer", slides: "Slides",
+    drawer: "Drawer", whiteboard: "Whiteboard", cardHub: "Card Hub", writer: "Writer", slides: "Slides",
     publisher: "Publisher", draw: "Draw", layout: "Layout", base: "Base", versions: "Version Machine",
     journalArticle: "期刊論文", book: "書籍", bookSection: "書籍章節", magazineArticle: "雜誌文章", conferencePaper: "會議論文",
     thesis: "學位論文", report: "報告", music: "音樂", cd: "CD", dvd: "DVD / 藍光", film: "電影", tvEpisode: "電視節目",

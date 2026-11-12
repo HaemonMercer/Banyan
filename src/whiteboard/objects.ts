@@ -5,14 +5,14 @@
  *
  * | kind      | data                                   | content                     |
  * |-----------|----------------------------------------|-----------------------------|
- * | note      | ""                                     | Markdown                    |
- * | sticky    | { color }                              | Markdown                    |
- * | image     | { file, width, height }                | notes (Markdown)            |
- * | video     | { provider: "youtube", videoId, url, start } | notes (Markdown)      |
- * | pdf       | { file, pages, page }                  | notes (Markdown)            |
+ * | note      | ""                                     | text                        |
+ * | sticky    | { color }                              | text                        |
+ * | image     | { file, width, height }                | notes                       |
+ * | video     | { provider: "youtube", videoId, url, start } | notes                 |
+ * | pdf       | { file, pages, page }                  | notes                       |
  * | mindmap   | { root: MindNode }                     | outline of the map (search) |
- * | table     | TableData (see table.ts)               | Markdown table of the cells |
- * | chart     | ChartData (see chart.ts)               | Markdown table of the numbers |
+ * | table     | TableData (see table.ts)               | cells as tab-separated text |
+ * | chart     | ChartData (see chart.ts)               | numbers as tab-separated text |
  *
  * Keep the list in sync with `CARD_KINDS` in `src-tauri/src/whiteboard.rs`.
  */
@@ -212,11 +212,11 @@ export function readMindMap(data: string, fallbackTitle = ""): MindMapData {
     return { root };
 }
 
-/** The map as a nested Markdown list (stored in `content` so it is searchable and diffable). */
+/** The map as an indented outline (stored in `content` so it is searchable and diffable). */
 export function mindMapOutline(m: MindMapData): string {
     const lines: string[] = [];
     const walk = (n: MindNode, depth: number) => {
-        lines.push(`${"  ".repeat(depth)}- ${n.text.replace(/\n/g, " ").trim() || "（空白）"}`);
+        lines.push(`${"  ".repeat(depth)}${n.text.replace(/\n/g, " ").trim() || "（空白）"}`);
         n.children.forEach((c) => walk(c, depth + 1));
     };
     walk(m.root, 0);

@@ -20,20 +20,52 @@ const STORAGE_DIR: &str = "storage";
 pub struct Library {
     pub conn: Connection,
     pub dir: PathBuf,
+    /// Set when the database was upgraded as it was opened (after a Banyan update). Kept for the
+    /// whole session: Drawer shows it once, the settings page whenever it is open.
+    pub notice: Option<String>,
+}
+
+impl From<db::DbError> for Error {
+    fn from(e: db::DbError) -> Self {
+        Error(e.to_string())
+    }
 }
 
 impl Library {
+    /// Opens (and if needed safely upgrades) the library in `dir`. See `db::open_with_report`.
     pub fn open(dir: &Path) -> Result<Self> {
         fs::create_dir_all(dir.join(STORAGE_DIR))?;
-        let conn = db::open(&dir.join(DB_FILE))?;
+        let (conn, upgrade) = db::open_with_report(&dir.join(DB_FILE))?;
+        let notice = upgrade.map(|u| {
+            format!(
+                "Banyan 已更新：資料庫已從第 {} 版升級到第 {} 版。升級前的資料另外備份在 {}。",
+                u.from,
+                u.to,
+                u.backup.display()
+            )
+        });
         Ok(Library {
             conn,
             dir: dir.to_path_buf(),
+            notice,
         })
     }
 
     pub fn storage_dir(&self) -> PathBuf {
         self.dir.join(STORAGE_DIR)
+    }
+
+    /// An empty in-memory library, only used while telling the user that theirs can't be opened.
+    pub fn in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        db::create_schema(&conn)?;
+        Ok(Library { conn, dir: std::env::temp_dir().join("banyan-unavailable"), notice: None })
+    }
+
+    /// Where the copies made before upgrades are kept.
+    pub fn backup_dir(&self) -> PathBuf {
+        self.dir.join(db::BACKUP_DIR)
     }
 }
 
@@ -149,6 +181,10 @@ pub struct LibraryInfo {
     is_default: bool,
     /// Shown once, e.g. when the configured folder was missing at startup.
     warning: Option<String>,
+    /// The database was upgraded (with a backup) when it was opened, this session.
+    notice: Option<String>,
+    /// Copies made before upgrades (`backups/`), at most `db::KEEP_BACKUPS`.
+    backup_count: usize,
 }
 
 fn info(state: &DrawerState, warning: Option<String>) -> LibraryInfo {
@@ -158,6 +194,8 @@ fn info(state: &DrawerState, warning: Option<String>) -> LibraryInfo {
         default_path: state.default_dir.display().to_string(),
         is_default: same_dir(&lib.dir, &state.default_dir),
         warning,
+        notice: lib.notice.clone(),
+        backup_count: db::list_backups(&lib.backup_dir()).len(),
     }
 }
 
@@ -279,6 +317,18 @@ pub async fn change_library_dir(
     *lib = new_lib;
     drop(lib);
     Ok(info(&state, None))
+}
+
+/// Opens the folder with the copies made before database upgrades.
+#[tauri::command]
+pub fn reveal_backups(app: AppHandle, state: State<'_, DrawerState>) -> Result<()> {
+    let dir = state.lock().backup_dir();
+    if !dir.is_dir() {
+        return Err(Error("還沒有任何升級前的備份".into()));
+    }
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| Error(format!("無法開啟資料夾：{e}")))
 }
 
 #[tauri::command]

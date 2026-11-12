@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "../../icons/Icon";
 import { errorMessage } from "../../drawer/api";
-import Markdown from "../../markdown/Markdown";
-import CardEditor from "../../markdown/CardEditor";
+import Markdown, { sourceOffsetAt } from "../../markdown/Markdown";
+import MarkdownEditor from "../../markdown/MarkdownEditor";
+import { resolveWikiTarget, WikiLinkProvider } from "../../markdown/links";
+import { openCardInWhiteboard } from "../../annotator/api";
 import SectionHeader from "./SectionHeader";
 import { whiteboardApi, type CardHit, type ItemCard, type Whiteboard } from "../../whiteboard/api";
 import { AUTOSAVE_MS, serial } from "../../whiteboard/autosave";
@@ -30,8 +32,6 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
     const [cards, setCards] = useState<ItemCard[]>([]);
     /** Title + content of each card as last saved. */
     const saved = useRef<Record<number, string>>({});
-    /** Cards whose saved text has not had its `[[ ]]` links synced yet. */
-    const unsynced = useRef(new Set<number>());
     const cardsRef = useRef<ItemCard[]>([]);
     const queueSave = useRef(serial()).current;
     const [boards, setBoards] = useState<Whiteboard[]>([]);
@@ -40,24 +40,10 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
     /** The one note card opened for editing; the others show only their title. */
     const [openId, setOpenId] = useState<number | null>(null);
     /**
-     * The open card's content is rendered Markdown until clicked; then the WYSIWYG editor opens
-     * with the caret at `point` (null = end of the text).
+     * The open card's content is shown as text until clicked; then the editor opens with the
+     * caret at `offset` (null = end of the text).
      */
-    const [editing, setEditing] = useState<{ point: { x: number; y: number } | null } | null>(null);
-
-    /** `[[title]]` in a note: open the card with that title in Whiteboard. */
-    const openWikiLink = async (target: string) => {
-        const key = target.trim().toLowerCase();
-        try {
-            const hits = await whiteboardApi.searchCards(target, null);
-            const hit = hits.find((h) => h.title.trim().toLowerCase() === key);
-            if (!hit) onInfo(`找不到標題為「${target}」的卡片`);
-            else if (hit.boardId === null) onInfo(`「${hit.title}」不在任何白板上`);
-            else onOpenCard(hit.cardId, hit.boardId);
-        } catch (e) {
-            onError(errorMessage(e));
-        }
-    };
+    const [editing, setEditing] = useState<{ offset: number | null } | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -99,7 +85,7 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
 
     cardsRef.current = cards;
 
-    /** Writes a card's text if it changed (autosave); `[[ ]]` links wait for `save`. */
+    /** Writes a card's text if it changed (autosave). */
     const persist = (cardId: number) =>
         queueSave(async () => {
             const c = cardsRef.current.find((x) => x.cardId === cardId);
@@ -109,7 +95,7 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
             try {
                 await whiteboardApi.updateCard(cardId, c.title, c.content);
                 saved.current[cardId] = key;
-                unsynced.current.add(cardId);
+                await whiteboardApi.syncWikiLinks(cardId, c.content);
             } catch (e) {
                 onError(errorMessage(e));
             }
@@ -123,19 +109,10 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
         return () => window.clearTimeout(t);
     }, [open?.cardId, open?.title, open?.content]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    /** The editor closed: save what is left and make the `[[ ]]` links. */
+    /** The editor closed: save what is left. */
     const save = async (c: ItemCard) => {
         await persist(c.cardId);
-        if (!unsynced.current.has(c.cardId)) return;
-        unsynced.current.delete(c.cardId);
-        const latest = cardsRef.current.find((x) => x.cardId === c.cardId) ?? c;
-        try {
-            const created = await whiteboardApi.syncWikiLinks(c.cardId, latest.content);
-            if (created.length > 0) onInfo(`依 [[ ]] 建立了 ${created.length} 條連結`);
-            onChanged();
-        } catch (e) {
-            onError(errorMessage(e));
-        }
+        onChanged();
     };
 
     const run = async (fn: () => Promise<unknown>) => {
@@ -152,12 +129,25 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
         run(async () => {
             const c = await whiteboardApi.createItemCard(itemId);
             setOpenId(c.cardId);
-            setEditing({ point: null }); // the editor focuses itself
+            setEditing({ offset: null }); // the editor focuses itself
         });
 
     const linkedIds = new Set(cards.map((c) => c.cardId));
 
+    /** `[[link]]` in a note: open the linked card in Whiteboard. */
+    const openWikiLink = async (target: string) => {
+        try {
+            const r = await resolveWikiTarget(target);
+            if ("error" in r) onInfo(r.error);
+            else if (r.boardId !== null) onOpenCard(r.cardId, r.boardId);
+            else openCardInWhiteboard(r.cardId);
+        } catch (e) {
+            onError(errorMessage(e));
+        }
+    };
+
     return (
+        <WikiLinkProvider onWikiLink={(t) => void openWikiLink(t)}>
         <section className="detail-section item-cards">
             <SectionHeader title="筆記卡片" count={cards.length} collapsed={collapsed} onToggle={onToggle}>
                 <button
@@ -255,30 +245,29 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
                             tabIndex={editing ? -1 : 0}
                             title={editing ? undefined : "點一下以編輯"}
                             onFocus={(e) => {
-                                if (!editing && e.target === e.currentTarget) setEditing({ point: null });
+                                if (!editing && e.target === e.currentTarget) setEditing({ offset: null });
                             }}
                             onClick={(e) => {
                                 if (editing || (e.target as HTMLElement).closest("a, input")) return;
-                                setEditing({ point: { x: e.clientX, y: e.clientY } });
+                                setEditing({ offset: sourceOffsetAt(e.currentTarget, e.clientX, e.clientY) });
                             }}
                         >
                             {editing ? (
-                                <CardEditor
+                                <MarkdownEditor
                                     value={c.content}
-                                    excludeCardId={c.cardId}
-                                    initialPoint={editing.point}
-                                    placeholder="寫下關於這個條目的想法…（支援 Markdown）"
+                                    cardId={c.cardId}
+                                    initialOffset={editing.offset}
+                                    placeholder="寫下關於這個條目的想法…"
                                     onChange={(v) => edit(c.cardId, c.title, v)}
                                     onBlur={() => {
                                         setEditing(null);
                                         save(c);
                                     }}
-                                    onWikiLink={(t) => void openWikiLink(t)}
                                 />
                             ) : c.content.trim() ? (
-                                <Markdown source={c.content} onWikiLink={(t) => void openWikiLink(t)} />
+                                <Markdown source={c.content} />
                             ) : (
-                                <div className="note-card-placeholder">寫下關於這個條目的想法…（支援 Markdown）</div>
+                                <div className="note-card-placeholder">寫下關於這個條目的想法…</div>
                             )}
                         </div>
                         <div className="note-card-footer">
@@ -339,6 +328,7 @@ function ItemCards({ itemId, onOpenCard, onChanged, onError, onInfo, collapsed, 
             </ul>
             </div>
         </section>
+        </WikiLinkProvider>
     );
 }
 

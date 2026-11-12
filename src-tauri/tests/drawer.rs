@@ -51,12 +51,16 @@ fn filter(v: Value) -> ItemFilter {
 fn library_round_trip() {
     let (app, root, storage) = setup();
     let s = || app.state::<DrawerState>();
-    let count = |f: Value| list_items(s(), filter(f)).unwrap().len();
+    // 文獻庫 only: its attachments also create 檔案庫 items (tested separately).
+    let count = |mut f: Value| {
+        f["library"] = json!("literature");
+        list_items(s(), filter(f)).unwrap().len()
+    };
 
     // Collections: nesting, validation, rename.
-    let ml = j(create_collection(s(), "機器學習".into(), None, None).unwrap())["id"].as_i64().unwrap();
-    let nlp = j(create_collection(s(), "NLP".into(), Some(ml), None).unwrap())["id"].as_i64().unwrap();
-    assert!(create_collection(s(), "  ".into(), None, None).is_err());
+    let ml = j(create_collection(s(), "機器學習".into(), None, None, None).unwrap())["id"].as_i64().unwrap();
+    let nlp = j(create_collection(s(), "NLP".into(), Some(ml), None, None).unwrap())["id"].as_i64().unwrap();
+    assert!(create_collection(s(), "  ".into(), None, None, None).is_err());
     rename_collection(s(), nlp, "自然語言".into()).unwrap();
     let cols = j(list_collections(s()).unwrap());
     assert_eq!(cols.as_array().unwrap().len(), 2);
@@ -150,7 +154,7 @@ fn library_round_trip() {
     delete_item(s(), m).unwrap();
 
     // Drag-and-drop onto a folder: add keeps other memberships, move leaves the source.
-    let other = j(create_collection(s(), "其他".into(), None, None).unwrap())["id"].as_i64().unwrap();
+    let other = j(create_collection(s(), "其他".into(), None, None, None).unwrap())["id"].as_i64().unwrap();
     assert_eq!(add_items_to_collection(s(), vec![a, b, 999_999], other, None).unwrap(), 2);
     assert_eq!(add_items_to_collection(s(), vec![a], other, None).unwrap(), 0); // already there
     assert_eq!(j(get_item(s(), a).unwrap())["collectionIds"].as_array().unwrap().len(), 2);
@@ -241,7 +245,7 @@ fn change_library_location() {
         .map_err(|e| e.0)
     };
     let titles = || -> Vec<String> {
-        j(list_items(s(), filter(json!({})))
+        j(list_items(s(), filter(json!({ "library": "literature" })))
             .unwrap())
             .as_array()
             .unwrap()
@@ -325,6 +329,10 @@ fn old_authors_migrate_to_creators() {
         conn.execute_batch(
             "ALTER TABLE items DROP COLUMN full_text;
              ALTER TABLE collections DROP COLUMN view;
+             ALTER TABLE collections DROP COLUMN library;
+             DROP TABLE card_annotations;
+             DROP TABLE annotations;
+             ALTER TABLE attachments DROP COLUMN mirror_of;
              ALTER TABLE cards DROP COLUMN kind;
              ALTER TABLE cards DROP COLUMN data;
              DROP TABLE card_versions;
@@ -370,7 +378,7 @@ fn old_authors_migrate_to_creators() {
         ]
     );
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 14);
+    assert_eq!(version, 18);
     drop(conn);
     let _ = fs::remove_dir_all(root);
 }
@@ -385,6 +393,10 @@ fn old_notes_become_cards() {
         conn.execute_batch(
             "ALTER TABLE items DROP COLUMN full_text;
              ALTER TABLE collections DROP COLUMN view;
+             ALTER TABLE collections DROP COLUMN library;
+             DROP TABLE card_annotations;
+             DROP TABLE annotations;
+             ALTER TABLE attachments DROP COLUMN mirror_of;
              ALTER TABLE cards DROP COLUMN kind;
              ALTER TABLE cards DROP COLUMN data;
              DROP TABLE card_versions;
@@ -430,7 +442,7 @@ fn old_notes_become_cards() {
         .unwrap();
     assert_eq!(has_notes, 0);
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 14);
+    assert_eq!(version, 18);
     drop(conn);
     let _ = fs::remove_dir_all(root);
 }
@@ -440,7 +452,7 @@ fn tags_in_left_pane() {
     let (app, root, _) = setup();
     let s = || app.state::<DrawerState>();
     let ids = |v: Value| -> Vec<i64> { v.as_array().unwrap().iter().map(|i| i["id"].as_i64().unwrap()).collect() };
-    let tags = || j(list_tags(s()).unwrap());
+    let tags = || j(list_tags(s(), None).unwrap());
     let tag_id = |name: &str| tags().as_array().unwrap().iter().find(|t| t["name"] == name).unwrap()["id"].as_i64().unwrap();
 
     let a = j(create_item(s(), "book".into(), None).unwrap())["id"].as_i64().unwrap();
@@ -497,7 +509,7 @@ fn bulk_editing() {
     let (a, b, c) = (new_item("book"), new_item("book"), new_item("film"));
     let all = vec![a, b, c];
     set_item_tags(s(), a, vec!["小說".into()]).unwrap();
-    let folder = j(create_collection(s(), "文學".into(), None, None).unwrap())["id"].as_i64().unwrap();
+    let folder = j(create_collection(s(), "文學".into(), None, None, None).unwrap())["id"].as_i64().unwrap();
     add_items_to_collection(s(), vec![a, b], folder, None).unwrap();
 
     // Summary of what the selection has in common.
@@ -514,7 +526,7 @@ fn bulk_editing() {
     bulk_remove_tag(s(), vec![a, b], "小說".into()).unwrap();
     assert_eq!(j(get_item(s(), a).unwrap())["tags"], json!([]));
     bulk_remove_tag(s(), vec![c], "小說".into()).unwrap();
-    assert!(j(list_tags(s()).unwrap()).as_array().unwrap().is_empty(), "unused tag is dropped");
+    assert!(j(list_tags(s(), None).unwrap()).as_array().unwrap().is_empty(), "unused tag is dropped");
 
     // Folders.
     remove_items_from_collection(s(), vec![a, c], folder).unwrap();
@@ -641,11 +653,11 @@ fn gallery_folders() {
         update_item(s(), id, serde_json::from_value(f).unwrap())
     };
 
-    let gallery = j(create_collection(s(), "照片牆".into(), None, Some("gallery".into())).unwrap());
+    let gallery = j(create_collection(s(), "照片牆".into(), None, Some("gallery".into()), None).unwrap());
     assert_eq!(gallery["view"], "gallery");
     let g = gallery["id"].as_i64().unwrap();
-    assert!(create_collection(s(), "x".into(), None, Some("grid".into())).is_err());
-    let folder = j(create_collection(s(), "一般".into(), None, None).unwrap());
+    assert!(create_collection(s(), "x".into(), None, Some("grid".into()), None).is_err());
+    let folder = j(create_collection(s(), "一般".into(), None, None, None).unwrap());
     assert_eq!(folder["view"], "list");
     let f = folder["id"].as_i64().unwrap();
 
@@ -707,6 +719,233 @@ fn news_full_text() {
     // A new reporter is the main role.
     set_item_creators(s(), id, serde_json::from_value(json!([{ "role": "reporter", "name": "王小明" }])).unwrap()).unwrap();
     assert_eq!(j(get_item(s(), id).unwrap())["creators"][0]["role"], "reporter");
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn file_library() {
+    let (app, root, _) = setup();
+    let s = || app.state::<DrawerState>();
+    let ids_of = |f: Value| -> Vec<i64> {
+        j(list_items(s(), filter(f)).unwrap()).as_array().unwrap().iter().map(|i| i["id"].as_i64().unwrap()).collect()
+    };
+
+    // Types follow the extension.
+    assert_eq!(file_type_for("報告.PDF"), "fileDocument");
+    assert_eq!(file_type_for("a.jpeg"), "fileImage");
+    assert_eq!(file_type_for("三體.EPUB"), "fileEbook");
+    assert_eq!(file_type_for("a.azw3"), "fileEbook");
+    assert_eq!(file_type_for("漫畫.cbz"), "fileEbook");
+    assert_eq!(file_type_for("a.mkv"), "fileVideo");
+    assert_eq!(file_type_for("a.flac"), "fileAudio");
+    assert_eq!(file_type_for("README.md"), "fileText");
+    assert_eq!(file_type_for("a.xlsx"), "fileSpreadsheet");
+    assert_eq!(file_type_for("a.pptx"), "filePresentation");
+    assert_eq!(file_type_for("main.rs"), "fileCode");
+    assert_eq!(file_type_for("a.tar.gz"), "fileArchive");
+    assert_eq!(file_type_for("noext"), "fileOther");
+    assert_eq!(library_of("film"), "literature");
+    assert_eq!(library_of("fileVideo"), "files");
+
+    // Each library has its own folders; sub-folders follow their parent.
+    let lit = j(create_collection(s(), "論文".into(), None, None, None).unwrap());
+    assert_eq!(lit["library"], "literature");
+    let lit = lit["id"].as_i64().unwrap();
+    let docs = j(create_collection(s(), "文件".into(), None, None, Some("files".into())).unwrap())["id"].as_i64().unwrap();
+    let sub = j(create_collection(s(), "2026".into(), Some(docs), None, Some("literature".into())).unwrap());
+    assert_eq!(sub["library"], "files", "a sub-folder is in its parent's library");
+    assert!(create_collection(s(), "x".into(), None, None, Some("music".into())).is_err());
+    let pics = j(create_collection(s(), "相簿".into(), None, Some("gallery".into()), Some("files".into())).unwrap())["id"]
+        .as_i64()
+        .unwrap();
+
+    // Importing: one item per file, titled after it; folders are skipped.
+    let dir = root.join("in");
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    for n in ["會議紀錄.pdf", "海邊.png", "notes.md"] {
+        fs::write(dir.join(n), b"data").unwrap();
+    }
+    let path = |n: &str| dir.join(n).to_string_lossy().to_string();
+    let r = j(import_files(s(), Some(docs), vec![path("會議紀錄.pdf"), path("海邊.png"), path("sub")]).unwrap());
+    assert_eq!(r["skipped"], 1);
+    let new: Vec<i64> = r["itemIds"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
+    assert_eq!(new.len(), 2);
+    let pdf = j(get_item(s(), new[0]).unwrap());
+    assert_eq!((pdf["title"].as_str(), pdf["itemType"].as_str()), (Some("會議紀錄"), Some("fileDocument")));
+    assert_eq!(pdf["attachments"][0]["fileName"], "會議紀錄.pdf");
+    assert_eq!(pdf["collectionIds"], json!([docs]));
+    // Unfiled import, and a gallery takes pictures only.
+    let loose = j(import_files(s(), None, vec![path("notes.md")]).unwrap())["itemIds"][0].as_i64().unwrap();
+    let g = j(import_files(s(), Some(pics), vec![path("海邊.png"), path("notes.md")]).unwrap());
+    assert_eq!((g["itemIds"].as_array().unwrap().len(), g["skipped"].as_i64()), (1, Some(1)));
+    // Not into a literature folder.
+    assert!(import_files(s(), Some(lit), vec![path("notes.md")]).is_err());
+
+    // The list is split by library; file rows carry the file's name and size.
+    let book = j(create_item(s(), "book".into(), None).unwrap())["id"].as_i64().unwrap();
+    assert_eq!(ids_of(json!({ "library": "literature" })), vec![book]);
+    assert_eq!(ids_of(json!({ "library": "files" })).len(), 4);
+    assert_eq!(ids_of(json!({})).len(), 5, "no library: everything (whiteboard's list)");
+    assert_eq!(ids_of(json!({ "library": "files", "unfiled": true })), vec![loose]);
+    let rows = j(list_items(s(), filter(json!({ "collectionId": docs }))).unwrap());
+    let row = rows.as_array().unwrap().iter().find(|i| i["id"] == new[0]).unwrap().clone();
+    assert_eq!((row["fileName"].as_str(), row["fileSize"].as_i64()), (Some("會議紀錄.pdf"), Some(4)));
+    assert!(list_items(s(), filter(json!({ "library": "music" }))).is_err());
+
+    // Items stay in their own library: folders and types.
+    assert!(add_items_to_collection(s(), vec![book], docs, None).is_err());
+    assert!(add_items_to_collection(s(), vec![loose], lit, None).is_err());
+    assert!(set_item_collections(s(), loose, vec![lit]).is_err());
+    assert!(create_item(s(), "book".into(), Some(docs)).is_err());
+    assert!(create_item(s(), "fileText".into(), Some(docs)).is_ok());
+    assert!(bulk_set_type(s(), vec![loose], "book".into()).is_err());
+    assert!(bulk_set_type(s(), vec![book], "fileOther".into()).is_err());
+    bulk_set_type(s(), vec![loose], "fileCode".into()).unwrap();
+
+    // Tags are listed per library.
+    set_item_tags(s(), book, vec!["共用".into(), "書".into()]).unwrap();
+    set_item_tags(s(), loose, vec!["共用".into()]).unwrap();
+    let names = |l: Option<&str>| -> Vec<(String, i64)> {
+        j(list_tags(s(), l.map(String::from)).unwrap())
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t["name"].as_str().unwrap().to_string(), t["count"].as_i64().unwrap()))
+            .collect()
+    };
+    assert_eq!(names(Some("files")), vec![("共用".into(), 1)]);
+    assert_eq!(names(Some("literature")), vec![("共用".into(), 1), ("書".into(), 1)]);
+    assert_eq!(names(None), vec![("共用".into(), 2), ("書".into(), 1)]);
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn literature_attachments_show_up_in_file_library() {
+    let (app, root, storage) = setup();
+    let s = || app.state::<DrawerState>();
+    let files = || -> Vec<Value> {
+        j(list_items(s(), filter(json!({ "library": "files" }))).unwrap()).as_array().unwrap().clone()
+    };
+    let dir = root.join("src");
+    fs::create_dir_all(&dir).unwrap();
+    for n in ["論文.pdf", "附錄.txt", "大檔.mkv"] {
+        fs::write(dir.join(n), if n == "大檔.mkv" { vec![0u8; 200] } else { b"data".to_vec() }).unwrap();
+    }
+    let path = |n: &str| dir.join(n).to_string_lossy().to_string();
+
+    // Adding an attachment to a 文獻庫 item creates a related 檔案庫 item sharing the file.
+    let book = j(create_item(s(), "book".into(), None).unwrap())["id"].as_i64().unwrap();
+    let added = j(add_attachments(s(), book, vec![path("論文.pdf"), path("附錄.txt"), path("大檔.mkv")]).unwrap());
+    assert!(added.as_array().unwrap().iter().all(|a| a["mirrored"] == true));
+    let list = files();
+    assert_eq!(list.len(), 3);
+    let pdf_item = list.iter().find(|i| i["title"] == "論文").unwrap()["id"].as_i64().unwrap();
+    let pdf = j(get_item(s(), pdf_item).unwrap());
+    assert_eq!(pdf["itemType"], "fileDocument");
+    assert_eq!(pdf["related"][0]["id"], book);
+    let book_pdf = added[0]["id"].as_i64().unwrap();
+    let copy = pdf["attachments"][0]["id"].as_i64().unwrap();
+    assert_eq!(pdf["attachments"][0]["mirrorOf"], book_pdf);
+    assert!(read_attachment(s(), copy).is_ok(), "the copy reads the shared file");
+    assert_eq!(fs::read_dir(storage.join(book.to_string())).unwrap().count(), 2, "stored once (the big one is linked)");
+    // Attachments of 檔案庫 items aren't copied again.
+    add_attachments(s(), pdf_item, vec![path("附錄.txt")]).unwrap();
+    assert_eq!(files().len(), 3);
+
+    // Removing the 檔案庫 copy keeps the 文獻庫 file.
+    let txt_item = files().iter().find(|i| i["title"] == "附錄").unwrap()["id"].as_i64().unwrap();
+    let txt_copy = j(get_item(s(), txt_item).unwrap())["attachments"][0]["id"].as_i64().unwrap();
+    assert!(delete_attachment(s(), txt_copy).unwrap(), "the file item, left without a file, goes too");
+    assert!(get_item(s(), txt_item).is_err());
+    let book_txt = added[1]["id"].as_i64().unwrap();
+    assert!(read_attachment(s(), book_txt).is_ok());
+    assert!(!j(get_item(s(), book).unwrap())["attachments"][1]["mirrored"].as_bool().unwrap());
+    // Deleting the 文獻庫 attachment deletes its copy, and the file item left without any file.
+    let big_item = files().iter().find(|i| i["title"] == "大檔").unwrap()["id"].as_i64().unwrap();
+    assert!(!delete_attachment(s(), added[2]["id"].as_i64().unwrap()).unwrap(), "the 文獻庫 item stays");
+    assert!(get_item(s(), big_item).is_err());
+    // A 檔案庫 item keeps going while it still has a file of its own.
+    let extra = j(get_item(s(), pdf_item).unwrap())["attachments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["mirrorOf"].is_null())
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    assert!(!delete_attachment(s(), extra).unwrap());
+    assert!(get_item(s(), pdf_item).is_ok());
+    assert!(dir.join("大檔.mkv").exists(), "a linked original is never deleted");
+
+    // Deleting the 文獻庫 item keeps its files in 檔案庫 (moved to the file item's folder).
+    delete_item(s(), book).unwrap();
+    let pdf = j(get_item(s(), pdf_item).unwrap());
+    let att = pdf["attachments"].as_array().unwrap().iter().find(|a| a["fileName"] == "論文.pdf").unwrap().clone();
+    assert!(att["mirrorOf"].is_null());
+    assert!(read_attachment(s(), att["id"].as_i64().unwrap()).is_ok());
+    assert!(!storage.join(book.to_string()).exists());
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn upgrade_copies_existing_literature_attachments() {
+    let root = temp_root();
+    let db_path = root.join("banyan.db");
+    {
+        let conn = banyan_lib::db::open(&db_path).unwrap();
+        conn.execute_batch(
+            "DROP TABLE card_annotations;
+             DROP TABLE annotations;
+             ALTER TABLE attachments DROP COLUMN mirror_of;
+             INSERT INTO items (id, item_type, title, created_at, updated_at) VALUES
+                 (1, 'book', 'SICP', 0, 7), (2, 'fileImage', '照片', 0, 0);
+             INSERT INTO attachments (item_id, file_name, stored_path, size, created_at) VALUES
+                 (1, 'sicp.pdf', '1/sicp.pdf', 10, 5), (2, 'a.png', '2/a.png', 3, 5);
+             PRAGMA user_version = 15;",
+        )
+        .unwrap();
+    }
+    let conn = banyan_lib::db::open(&db_path).unwrap();
+    let rows: Vec<(String, String, String, i64)> = conn
+        .prepare(
+            "SELECT i.item_type, i.title, a.stored_path, a.mirror_of FROM attachments a
+             JOIN items i ON i.id = a.item_id WHERE a.mirror_of IS NOT NULL",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(rows, vec![("fileDocument".into(), "sicp".into(), "1/sicp.pdf".into(), 1)]);
+    let updated: i64 = conn.query_row("SELECT updated_at FROM items WHERE id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(updated, 7, "the literature item isn't touched");
+    drop(conn);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_failing_file_doesnt_stop_an_import() {
+    let (app, root, storage) = setup();
+    let s = || app.state::<DrawerState>();
+    let dir = root.join("in");
+    fs::create_dir_all(&dir).unwrap();
+    for n in ["好.pdf", "壞.pdf"] {
+        fs::write(dir.join(n), b"data").unwrap();
+    }
+    // The next two items get ids first + 1 and first + 2; a file where the second one's storage
+    // folder should go makes attaching its file fail.
+    let first = j(create_item(s(), "fileOther".into(), None).unwrap())["id"].as_i64().unwrap();
+    fs::create_dir_all(&storage).unwrap();
+    fs::write(storage.join((first + 2).to_string()), b"in the way").unwrap();
+    let paths = ["好.pdf", "壞.pdf"].map(|n| dir.join(n).to_string_lossy().to_string()).to_vec();
+    let r = j(import_files(s(), None, paths).unwrap());
+    assert_eq!(r["itemIds"], json!([first + 1]), "the file before the failing one is reported");
+    assert_eq!(r["failed"].as_array().unwrap().len(), 1);
+    assert!(r["failed"][0].as_str().unwrap().starts_with("壞.pdf"));
+    assert!(get_item(s(), first + 2).is_err(), "no item is left without its file");
     drop(app);
     let _ = fs::remove_dir_all(root);
 }
