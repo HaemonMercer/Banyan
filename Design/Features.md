@@ -454,7 +454,7 @@ Banyan 更新後，新版本可能需要升級資料庫的結構（`banyan.db` �
 
 **技術細節**
 - 使用 `tauri-plugin-updater`（只在桌面版啟用）與 `tauri-plugin-process`（重新啟動）。
-- 更新來源：`src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints`，目前是 `https://github.com/HaemonMercer/Banyan/releases/latest/download/latest.json`。已發布的版本：v0.1.0（2026-11-11）。目前程式碼的版本是 0.1.1（建置中，尚未發布）。
+- 更新來源：`src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints`，目前是 `https://github.com/HaemonMercer/Banyan/releases/latest/download/latest.json`。已發布的版本：v0.1.0（2026-11-11）。目前程式碼的版本是 0.1.2（2026-11-13 已建置，尚未發布）。
 - 發布前要先調高版本號（`tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml` 三處一致），已安裝的舊版才會把它當成更新。
 - 更新檔必須簽章：公鑰在 `tauri.conf.json`，私鑰在 `%USERPROFILE%\.tauri\banyan.key`（沒有密碼，不在專案中；遺失就無法再發布能被舊版接受的更新）。
 - Windows 以 `passive` 模式安裝（顯示進度、不需操作）。
@@ -913,3 +913,4 @@ Banyan 更新後，新版本可能需要升級資料庫的結構（`banyan.db` �
 | 2026-11-12 | Markdown 回來了，改用 Banyan 自己寫的引擎（`src/markdown/`，依《Banyan Markdown 企劃書》P0a）：卡片、便利貼、側邊面板、Drawer 筆記卡片與版本記錄以 BFM 顯示——CommonMark 全部、GFM（表格、刪除線、待辦清單、自動連結、腳註）、螢光筆與顏色、`[[卡片連結]]`（可點）、`#標籤`、數學式（KaTeX）、提示框、`%% 註解 %%`、中文友善的粗體規則；單一換行仍是換行；縮小時的摘要去掉符號；點內容時游標放在原文對應的位置。CommonMark 規格 652 個範例全部通過（`npm test`，另有 57 個 GFM／BFM 測試）；1 萬字約 2.4 ms 解析 |
 | 2026-11-12 | 所見即所得的 Markdown 編輯器（企劃書 P0b，ProseMirror）：白板卡片、便利貼、側邊面板、Drawer 筆記卡片編輯時直接看到排好的格式；打字時自動轉換（`# `、`- `、`1. `、`> `、`[ ] `、`**粗**`、`==亮==`…）、快速鍵、待辦可直接勾選、`[[` 卡片建議清單、提示框標題可直接改、表格／數學式等雙擊編輯原文、貼上 Markdown 或網頁內容。存檔時沒改過的區塊一字不差寫回；打出像語法的字自動跳脫。存檔後 `[[標題]]`／`[[card:id]]` 自動建立雙向卡片連結（新指令 `sync_wiki_links`）。往返測試：652 個 CommonMark 範例「不改就原樣寫回」全部一致，重新產生時除 24 個編輯器無法表示的寫法外意義不變 |
 | 2026-11-12 | 修正：PDF 中的 JPEG 2000／JBIG2 圖片（多數掃描檔）與未內嵌的中日韓字型不會顯示——pdf.js 的解碼器（wasm）、CMap、標準字型與 ICC 檔案現在隨 App 提供 |
+| 2026-11-13 | 版本號改為 0.1.2（`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`），重新建置有簽章的安裝檔 |
