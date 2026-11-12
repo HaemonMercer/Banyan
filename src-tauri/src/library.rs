@@ -67,6 +67,112 @@ impl Library {
     pub fn backup_dir(&self) -> PathBuf {
         self.dir.join(db::BACKUP_DIR)
     }
+
+    /// The backups in `backups/`, newest first.
+    pub fn backups(&self) -> Vec<BackupInfo> {
+        db::list_backups(&self.backup_dir()).iter().filter_map(|p| BackupInfo::read(p)).collect()
+    }
+
+    /// Replaces the database with the backup named `name` (a file in `backups/`), then opens it,
+    /// upgrading it again if it is from an older version. The current database is first saved
+    /// to `backups/` (`…-before-restore.db`), so the restore itself can be undone the same way.
+    /// Attachments (`storage/`) are not touched. On any failure the current database stays.
+    /// Returns the message shown to the user.
+    pub fn restore_backup(&mut self, name: &str) -> Result<String> {
+        let source = db::list_backups(&self.backup_dir())
+            .into_iter()
+            .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy() == name))
+            .ok_or_else(|| Error("找不到這份備份".into()))?;
+        let version = db::check_backup(&source).map_err(|e| match e {
+            db::DbError::Sqlite(e) => Error(format!("無法讀取這份備份：{e}")),
+            other => Error(other.to_string()),
+        })?;
+
+        let dir = self.dir.clone();
+        let db_path = dir.join(DB_FILE);
+        let staging = dir.join(format!("{DB_FILE}.restoring"));
+        // Copy first, while nothing has changed yet.
+        fs::copy(&source, &staging).map_err(|e| Error(format!("無法複製備份（{e}），資料庫沒有變動。")))?;
+        let saved = match db::snapshot(&self.conn, &self.backup_dir(), db::SCHEMA_VERSION, "-before-restore") {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = fs::remove_file(&staging);
+                return Err(Error(e.to_string()));
+            }
+        };
+
+        // Close the connection (this checkpoints and removes the WAL) so the file can be replaced.
+        drop(std::mem::replace(self, Library::in_memory()?));
+        let replaced = remove_wal_files(&db_path).and_then(|_| fs::rename(&staging, &db_path));
+        if let Err(e) = replaced {
+            let _ = fs::remove_file(&staging);
+            *self = Library::open(&dir)?;
+            return Err(Error(format!("無法取代資料庫檔案（{e}），資料庫沒有變動。")));
+        }
+
+        match Library::open(&dir) {
+            Ok(lib) => {
+                *self = lib;
+                let mut message = format!("已還原備份 {name}（資料庫第 {version} 版）");
+                if version < db::SCHEMA_VERSION {
+                    message.push_str(&format!("，並升級到第 {} 版", db::SCHEMA_VERSION));
+                }
+                message.push_str(&format!("。還原前的資料庫另外存成 {}。", saved.display()));
+                self.notice = Some(message.clone());
+                Ok(message)
+            }
+            Err(e) => {
+                // Put the database from before the restore back.
+                let back = remove_wal_files(&db_path).and_then(|_| fs::copy(&saved, &db_path).map(|_| ()));
+                *self = Library::open(&dir)?;
+                Err(Error(match back {
+                    Ok(()) => format!("還原失敗（{}），已恢復成還原前的資料庫。", e.0),
+                    Err(io) => format!("還原失敗（{}），也無法放回還原前的資料庫（{io}）；它存在 {}。", e.0, saved.display()),
+                }))
+            }
+        }
+    }
+}
+
+/// Removes the `-wal` and `-shm` files of a closed database (a stale WAL would be applied to
+/// whatever file takes its place).
+fn remove_wal_files(db_path: &Path) -> std::io::Result<()> {
+    for suffix in ["-wal", "-shm"] {
+        let p = PathBuf::from(format!("{}{suffix}", db_path.display()));
+        if p.exists() {
+            fs::remove_file(p)?;
+        }
+    }
+    Ok(())
+}
+
+/// One file in `backups/`.
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo {
+    pub name: String,
+    /// Schema version, from the file name.
+    pub version: i32,
+    /// Made just before a restore (not before an upgrade).
+    pub before_restore: bool,
+    /// When the copy was written (ms since 1970).
+    pub created_at: i64,
+    pub size: u64,
+}
+
+impl BackupInfo {
+    fn read(path: &Path) -> Option<Self> {
+        let name = path.file_name()?.to_string_lossy().to_string();
+        let version = name.strip_prefix("banyan-v")?.split('-').next()?.parse().ok()?;
+        let meta = fs::metadata(path).ok()?;
+        let created_at = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        Some(BackupInfo { before_restore: name.contains("-before-restore"), name, version, created_at, size: meta.len() })
+    }
 }
 
 // ---------- config ----------
@@ -329,6 +435,18 @@ pub fn reveal_backups(app: AppHandle, state: State<'_, DrawerState>) -> Result<(
     app.opener()
         .open_path(dir.to_string_lossy(), None::<&str>)
         .map_err(|e| Error(format!("無法開啟資料夾：{e}")))
+}
+
+#[tauri::command]
+pub fn list_backups(state: State<'_, DrawerState>) -> Vec<BackupInfo> {
+    state.lock().backups()
+}
+
+/// Replaces the database with a backup. See `Library::restore_backup`.
+#[tauri::command]
+pub async fn restore_backup(state: State<'_, DrawerState>, name: String) -> Result<LibraryInfo> {
+    state.lock().restore_backup(&name)?;
+    Ok(info(&state, None))
 }
 
 #[tauri::command]

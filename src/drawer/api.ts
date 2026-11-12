@@ -250,7 +250,22 @@ export const drawerApi = {
     revealLibraryDir: () => invoke<void>("reveal_library_dir"),
     /** Opens the folder with the copies made before database upgrades. */
     revealBackups: () => invoke<void>("reveal_backups"),
+    /** The copies in backups/, newest first. */
+    listBackups: () => invoke<BackupInfo[]>("list_backups"),
+    /** Replaces the database with a backup (the current one is saved to backups/ first). */
+    restoreBackup: (name: string) => invoke<LibraryInfo>("restore_backup", { name }),
 };
+
+export interface BackupInfo {
+    name: string;
+    /** Schema version of the copy. */
+    version: number;
+    /** Saved just before a restore, rather than before an upgrade. */
+    beforeRestore: boolean;
+    /** ms since 1970 */
+    createdAt: number;
+    size: number;
+}
 
 export interface LibraryInfo {
     path: string;

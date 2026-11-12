@@ -150,3 +150,83 @@ fn stand_in_library_has_the_schema() {
     let n: i64 = lib.conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 0);
 }
+
+fn titles(lib: &Library) -> Vec<String> {
+    lib.conn
+        .prepare("SELECT title FROM items ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+#[test]
+fn restoring_a_backup_brings_back_the_old_data() {
+    let root = temp_root();
+    v15_library(&root);
+    let mut lib = Library::open(&root).unwrap();
+    // Work done after the upgrade, which the restore takes away.
+    lib.conn
+        .execute("INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('book', 'TAOCP', 2, 2)", [])
+        .unwrap();
+    assert_eq!(titles(&lib), ["SICP", "TAOCP"]);
+
+    let backups = lib.backups();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(backups[0].version, 15);
+    assert!(!backups[0].before_restore);
+    let message = lib.restore_backup(&backups[0].name).unwrap();
+    assert!(message.contains("第 15 版") && message.contains("升級到第 18 版"), "{message}");
+    assert_eq!(lib.notice.as_deref(), Some(message.as_str()));
+
+    // The backup's data, upgraded to the current schema.
+    assert_eq!(titles(&lib), ["SICP"]);
+    assert_eq!(version(&root.join("banyan.db")), SCHEMA_VERSION);
+    assert!(!root.join("banyan.db.restoring").exists());
+
+    // The database from before the restore was kept, and can itself be restored.
+    let saved = lib.backups().into_iter().find(|b| b.before_restore).expect("pre-restore copy");
+    assert_eq!(saved.version, SCHEMA_VERSION);
+    assert!(message.contains(&saved.name));
+    lib.restore_backup(&saved.name).unwrap();
+    assert_eq!(titles(&lib), ["SICP", "TAOCP"]);
+    drop(lib);
+
+    // Still fine after reopening (no stale WAL got applied).
+    let lib = Library::open(&root).unwrap();
+    assert_eq!(titles(&lib), ["SICP", "TAOCP"]);
+    drop(lib);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn unusable_backups_are_not_restored() {
+    let root = temp_root();
+    v15_library(&root);
+    let mut lib = Library::open(&root).unwrap();
+    lib.conn
+        .execute("INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('book', 'TAOCP', 2, 2)", [])
+        .unwrap();
+
+    // Only files in backups/ can be restored.
+    assert!(lib.restore_backup("../banyan.db").is_err());
+    assert!(lib.restore_backup("banyan-v1-nothing.db").is_err());
+
+    // A backup from a newer Banyan.
+    let name = lib.backups()[0].name.clone();
+    let path = lib.backup_dir().join(&name);
+    Connection::open(&path).unwrap().execute_batch("PRAGMA user_version = 99;").unwrap();
+    let err = lib.restore_backup(&name).unwrap_err();
+    assert!(err.0.contains("較新版"), "{}", err.0);
+
+    // A file that isn't a database.
+    fs::write(&path, b"not a database at all, just some text that is long enough").unwrap();
+    assert!(lib.restore_backup(&name).is_err());
+
+    // Nothing changed, and no pre-restore copy was made.
+    assert_eq!(titles(&lib), ["SICP", "TAOCP"]);
+    assert!(lib.backups().iter().all(|b| !b.before_restore));
+    drop(lib);
+    let _ = fs::remove_dir_all(root);
+}

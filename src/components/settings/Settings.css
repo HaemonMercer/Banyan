@@ -116,3 +116,17 @@
     font-weight: var(--fw-semibold);
 }
 .settings-actions .muted { align-self: center; }
+
+/* Backups under 更新時的資料庫保護 */
+.backup-list { list-style: none; margin: var(--sp-3) 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--r-md); }
+.backup-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+}
+.backup-list li + li { border-top: 1px solid var(--border); }
+.backup-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.backup-info .muted { font-size: var(--fs-sm); }
+.backup-info .badge { margin-left: var(--sp-2); }

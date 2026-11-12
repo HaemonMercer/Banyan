@@ -112,6 +112,8 @@ pub fn run() {
             drawer::open_attachment,
             drawer::reveal_attachment,
             library::reveal_backups,
+            library::list_backups,
+            library::restore_backup,
             annotations::list_annotations,
             annotations::create_annotation,
             annotations::update_annotation,

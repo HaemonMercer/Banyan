@@ -162,18 +162,40 @@ fn upgrade(conn: &Connection, version: i32) -> Result<(), String> {
 /// and removes the oldest copies beyond `KEEP_BACKUPS`.
 fn backup(conn: &Connection, db_path: &Path, version: i32) -> Result<PathBuf, DbError> {
     let dir = db_path.parent().unwrap_or(Path::new(".")).join(BACKUP_DIR);
-    fs::create_dir_all(&dir).map_err(|e| DbError::Backup(e.to_string()))?;
+    let target = snapshot(conn, &dir, version, "")?;
+    prune_backups(&dir, KEEP_BACKUPS);
+    Ok(target)
+}
+
+/// Writes a consistent copy of the open database to `dir` as
+/// `banyan-v<version>-<UTC time><suffix>.db` (never overwriting). Does not prune.
+pub fn snapshot(conn: &Connection, dir: &Path, version: i32, suffix: &str) -> Result<PathBuf, DbError> {
+    fs::create_dir_all(dir).map_err(|e| DbError::Backup(e.to_string()))?;
     let stamp = utc_stamp(SystemTime::now());
-    let mut target = dir.join(format!("banyan-v{version}-{stamp}.db"));
+    let mut target = dir.join(format!("banyan-v{version}-{stamp}{suffix}.db"));
     let mut n = 2;
     while target.exists() {
-        target = dir.join(format!("banyan-v{version}-{stamp}-{n}.db"));
+        target = dir.join(format!("banyan-v{version}-{stamp}{suffix}-{n}.db"));
         n += 1;
     }
     conn.execute("VACUUM INTO ?1", [target.to_string_lossy()])
         .map_err(|e| DbError::Backup(e.to_string()))?;
-    prune_backups(&dir, KEEP_BACKUPS);
     Ok(target)
+}
+
+/// Checks that a backup file can be restored: it is intact and not newer than this Banyan.
+/// Returns its schema version. The file is opened read-only.
+pub fn check_backup(path: &Path) -> Result<i32, DbError> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version > SCHEMA_VERSION {
+        return Err(DbError::TooNew { found: version, supported: SCHEMA_VERSION });
+    }
+    if version < 1 {
+        return Err(DbError::Damaged("不是 Banyan 的資料庫".into()));
+    }
+    check_integrity(&conn)?;
+    Ok(version)
 }
 
 /// Pre-upgrade copies in `dir`, newest first.
