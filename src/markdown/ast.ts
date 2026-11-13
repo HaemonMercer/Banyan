@@ -22,7 +22,8 @@ export type BlockType =
     | "tableRow"
     | "tableCell"
     | "footnoteDef"
-    | "commentBlock";
+    | "commentBlock"
+    | "bibliography";
 
 export type InlineType =
     | "text"
@@ -40,7 +41,8 @@ export type InlineType =
     | "wikiLink"
     | "tag"
     | "footnoteRef"
-    | "comment";
+    | "comment"
+    | "citation";
 
 export type NodeType = BlockType | InlineType;
 
@@ -84,10 +86,24 @@ export interface MdNode {
     color?: string;
     /** tag name, footnote label. */
     name?: string;
+    /** citation: the cited keys with their locators; narrative = written as `@key` in the text. */
+    cites?: CiteRef[];
+    narrative?: boolean;
     /** math: display (`$$…$$`) vs inline. */
     display?: boolean;
     /** text: the literal equals the source (no escapes/entities), so offsets inside it are exact. */
     verbatim?: boolean;
+}
+
+/** One key in a citation: `[見 @kahneman2011, p. 33]`, `[-@key]`. */
+export interface CiteRef {
+    key: string;
+    /** Text before the key (`見`). */
+    prefix: string;
+    /** Text after the comma (`p. 33`). */
+    locator: string;
+    /** `-@key`: leave the author out. */
+    suppressAuthor: boolean;
 }
 
 export interface LinkRef {

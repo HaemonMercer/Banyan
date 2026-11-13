@@ -201,6 +201,8 @@ body.box-selecting, body.box-selecting * { user-select: none !important; cursor:
 .drawer-detail { background: var(--pane); border-right: none; overflow-y: auto; }
 .drawer-detail-empty { align-items: center; justify-content: center; }
 .drawer-detail .pane-header select {
+    flex: 0 1 auto;
+    min-width: 0;
     height: 26px;
     border: 1px solid var(--border);
     padding: 0 6px;
@@ -269,6 +271,7 @@ body.box-selecting, body.box-selecting * { user-select: none !important; cursor:
 .section-toggle:hover { color: var(--text); }
 .section-caret { display: inline-flex; width: 12px; font-size: 12px; }
 .section-actions { display: flex; gap: var(--sp-1); }
+.drawer-detail .pane-header > button { flex-shrink: 0; }
 .fold-all { margin-left: auto; font-size: var(--fs-sm); padding: 3px var(--sp-2); }
 .fold-all + .danger-btn { margin-left: 0; }
 
@@ -720,3 +723,8 @@ mark.search-hit { padding: 0 1px; border-radius: 2px; background: color-mix(in s
 /* empty list: a message and what to do */
 .drawer-list .empty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); }
 .drawer-list .empty p { margin: 0; }
+
+/* Citation key (資料) */
+.cite-key-row { display: flex; align-items: center; gap: var(--sp-1); }
+.cite-key-row input { flex: 1; min-width: 0; font-family: var(--font-mono); }
+.cite-key-at { color: var(--muted); font-family: var(--font-mono); }

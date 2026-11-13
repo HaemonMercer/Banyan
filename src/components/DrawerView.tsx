@@ -7,12 +7,15 @@ import { collectionPath } from "../drawer/collections";
 import { NO_SELECTION, single, type Selection } from "../drawer/selection";
 import CollectionTree, { allLabel, type LibraryView } from "./drawer/CollectionTree";
 import ItemList, { type FileView } from "./drawer/ItemList";
+import ItemGraph from "./drawer/ItemGraph";
 import ItemDetail from "./drawer/ItemDetail";
 import BulkEdit from "./drawer/BulkEdit";
 import Reader, { canRead, type ReaderFile } from "./reader/Reader";
 import "./drawer/Drawer.css";
 import { ask, Toast, useToast } from "./Feedback";
 import { openFileTab, opensInTab, withoutExtension } from "../tabs";
+import { parseBibtex, toBibtexFile, toImportItem } from "../markdown/bibtex.ts";
+import { citeApi, invalidateCites } from "../markdown/citeStore";
 
 interface Props {
     /** Item to select when the view opens (e.g. coming from a whiteboard card). */
@@ -114,6 +117,39 @@ function DrawerView({ initialItemId = null, onOpenCard, onOpenSettings }: Props)
 
     /** The one item shown in the detail pane (null when none or several are selected). */
     const selectedId = selection.ids.length === 1 ? selection.ids[0] : null;
+    /** The relation graph replaces the item list while one item is selected. */
+    const [graphOpen, setGraphOpen] = useState(() => {
+        try {
+            return localStorage.getItem("banyan.drawer.graph") === "1";
+        } catch {
+            return false;
+        }
+    });
+    const [graphReload, setGraphReload] = useState(0);
+    const setGraph = (open: boolean) => {
+        setGraphOpen(open);
+        try {
+            localStorage.setItem("banyan.drawer.graph", open ? "1" : "0");
+        } catch {
+            /* storage unavailable */
+        }
+    };
+    const toggleGraph = () => setGraph(!graphOpen);
+    /**
+     * The list header's 關聯圖 button: the graph needs one item at its center, so with several
+     * selected it keeps the focused one, and with none it takes the first item in the list.
+     */
+    const showGraph = () => {
+        if (selectedId === null) {
+            const id = selection.focus ?? items[0]?.id ?? null;
+            if (id === null) {
+                showInfo("這裡沒有條目可以顯示關聯圖");
+                return;
+            }
+            selectOnly(id);
+        }
+        setGraph(true);
+    };
     const selectOnly = (id: number | null) => setSelection(single(id));
 
 
@@ -197,6 +233,7 @@ function DrawerView({ initialItemId = null, onOpenCard, onOpenSettings }: Props)
         refreshItems();
         refreshTags();
         setBulkReload((n) => n + 1);
+        setGraphReload((n) => n + 1);
     }, [refreshItems, refreshTags]);
 
     useEffect(() => {
@@ -247,6 +284,46 @@ function DrawerView({ initialItemId = null, onOpenCard, onOpenSettings }: Props)
     }, [refreshItems, refreshTags, showError, showInfo]);
     const tagsRef = useRef(tags);
     tagsRef.current = tags;
+
+    /** 文獻庫's BibTeX menu. Imported items go into the folder being viewed. */
+    const bibtex = async (action: "import" | "exportSelected" | "exportAll" | "copySelected") => {
+        try {
+            if (action === "import") {
+                const text = await citeApi.openBibFile();
+                if (text === null) return;
+                const entries = parseBibtex(text);
+                if (entries.length === 0) {
+                    showError("這個檔案裡沒有 BibTeX 條目");
+                    return;
+                }
+                const { view } = filterRef.current;
+                const r = await citeApi.import(entries.map(toImportItem), view.kind === "collection" ? view.id : null);
+                invalidateCites();
+                showInfo(
+                    `已匯入 ${r.keys.length} 筆文獻` + (r.renamed > 0 ? `；${r.renamed} 個引用鍵已被使用，加上了 a、b… 字尾` : ""),
+                );
+                await refreshItems();
+                await refreshTags();
+                return;
+            }
+            const ids = action === "exportAll" ? null : selectedRef.current.ids;
+            const items = await citeApi.items(ids, "literature");
+            if (items.length === 0) {
+                showError(action === "exportAll" ? "文獻庫是空的" : "選取的條目中沒有文獻");
+                return;
+            }
+            const text = toBibtexFile(items);
+            if (action === "copySelected") {
+                await navigator.clipboard.writeText(text);
+                showInfo(`已複製 ${items.length} 筆 BibTeX`);
+                return;
+            }
+            const path = await citeApi.saveFile(action === "exportAll" ? "文獻庫.bib" : "文獻.bib", text);
+            if (path) showInfo(`已匯出 ${items.length} 筆到 ${path}`);
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
 
     // Files dropped onto the window: in 檔案庫 each becomes an item; in 文獻庫 they become
     // attachments of the selected item.
@@ -612,10 +689,21 @@ function DrawerView({ initialItemId = null, onOpenCard, onOpenSettings }: Props)
                 onDeleteTag={deleteTag}
                 dropTarget={drag?.target ?? null}
             />
+            {graphOpen && selectedId !== null ? (
+                <ItemGraph
+                    itemId={selectedId}
+                    reloadKey={graphReload + detailReload}
+                    onOpenItem={openItem}
+                    onOpenCard={onOpenCard}
+                    onClose={toggleGraph}
+                    onError={showError}
+                />
+            ) : (
             <ItemList
                 key={library}
                 library={library}
                 onAddFiles={() => addFiles(drawerApi.pickImportFiles)}
+                onBibtex={(a) => void bibtex(a)}
                 title={viewTitle}
                 items={items}
                 selection={selection}
@@ -640,7 +728,9 @@ function DrawerView({ initialItemId = null, onOpenCard, onOpenSettings }: Props)
                 onUp={goUp}
                 onOpenItem={openFileItem}
                 dropFolderId={drag?.target?.kind === "collection" ? drag.target.id : null}
+                onShowGraph={showGraph}
             />
+            )}
             {selection.ids.length > 1 ? (
                 <BulkEdit
                     library={library}
@@ -673,6 +763,8 @@ function DrawerView({ initialItemId = null, onOpenCard, onOpenSettings }: Props)
                     onOpenItem={openItem}
                     onRead={openReader}
                     relatedDropActive={drag?.target?.kind === "related"}
+                    graphOpen={graphOpen}
+                    onToggleGraph={toggleGraph}
                 />
             ) : gallery ? null : (
                 <aside className="drawer-pane drawer-detail drawer-detail-empty" />

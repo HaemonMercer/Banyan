@@ -698,6 +698,13 @@ export function escapeText(text: string, before: string, after: string, inLink =
             case "!":
                 s += next === "[" ? "\\!" : "!";
                 break;
+            case "@":
+                // `@key` in typed text would become a citation (e-mails, `a@b`, stay as they are).
+                s +=
+                    /[\p{L}\p{N}_]/u.test(next) && !(/[A-Za-z0-9_+.\-/\\]/.test(prev) && prev !== "")
+                        ? "\\@"
+                        : "@";
+                break;
             default:
                 s += c;
         }

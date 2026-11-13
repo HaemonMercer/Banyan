@@ -108,22 +108,39 @@
 .wiki-complete {
     position: fixed;
     z-index: var(--z-popover);
+    box-sizing: border-box;
     min-width: 200px;
-    max-width: 260px;
+    width: max-content;
+    max-width: min(260px, calc(100vw - 16px));
     margin: 0;
     list-style: none;
     font-size: var(--fs-md);
 }
 .wiki-complete li {
     display: flex;
+    align-items: baseline;
     justify-content: space-between;
     gap: var(--sp-2);
+    min-width: 0;
     padding: var(--sp-1) var(--sp-2);
     border-radius: var(--r-sm);
     cursor: pointer;
 }
 .wiki-complete li:hover { background: var(--hover); }
 .wiki-complete li.active { background: var(--accent-soft); color: var(--accent-text); }
-.wiki-complete-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wiki-complete-boards { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; flex-shrink: 0; }
-.wiki-complete li.wiki-complete-hint { color: var(--muted); cursor: default; background: none; }
+/* The title shrinks (with …) so long titles stay inside the list. */
+.wiki-complete-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-complete-boards {
+    flex: 0 1 auto;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted);
+    font-size: var(--fs-xs);
+    white-space: nowrap;
+}
+.wiki-complete li.wiki-complete-hint { color: var(--muted); cursor: default; background: none; white-space: normal; }
+.wiki-complete.cite { max-width: min(330px, calc(100vw - 16px)); }
+.wiki-complete .wiki-complete-sub { display: block; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-complete li.active .wiki-complete-sub { color: var(--accent-text); }
+.md-editor .md-atom-inline.md-cite { cursor: default; }

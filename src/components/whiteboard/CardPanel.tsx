@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../drawer/api";
+import FoldSection from "./FoldSection";
 import { itemType } from "../../drawer/itemTypes";
 import Markdown, { sourceOffsetAt } from "../../markdown/Markdown";
 import MarkdownEditor from "../../markdown/MarkdownEditor";
@@ -350,9 +351,7 @@ function CardPanel(props: Props) {
                 )}
 
                 <section className="wb-cp-section">
-                    <h3 className="wb-section-title">
-                        連結 <span className="muted">{linked.length}</span>
-                    </h3>
+                    <FoldSection name="links" title="連結" count={linked.length} defaultOpen>
                     {linked.length === 0 ? (
                         <p className="muted wb-hint">還沒有連結。</p>
                     ) : (
@@ -369,13 +368,12 @@ function CardPanel(props: Props) {
                             ))}
                         </ul>
                     )}
+                    </FoldSection>
                 </section>
 
                 {card.items.length > 0 && (
                     <section className="wb-cp-section">
-                        <h3 className="wb-section-title">
-                            引用的文獻 <span className="muted">{card.items.length}</span>
-                        </h3>
+                        <FoldSection name="items" title="引用的文獻" count={card.items.length}>
                         <ul className="wb-link-list">
                             {card.items.map((it) => (
                                 <li key={it.itemId}>
@@ -390,14 +388,13 @@ function CardPanel(props: Props) {
                                 </li>
                             ))}
                         </ul>
+                        </FoldSection>
                     </section>
                 )}
 
                 {card.annotations.length > 0 && (
                     <section className="wb-cp-section">
-                        <h3 className="wb-section-title">
-                            引用的註解 <span className="muted">{card.annotations.length}</span>
-                        </h3>
+                        <FoldSection name="annotations" title="引用的註解" count={card.annotations.length}>
                         <ul className="wb-link-list">
                             {card.annotations.map((a) => (
                                 <li key={a.annotationId} className={`wb-annot-ref annot-bg-${a.color}`}>
@@ -410,6 +407,7 @@ function CardPanel(props: Props) {
                                 </li>
                             ))}
                         </ul>
+                        </FoldSection>
                     </section>
                 )}
 

@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 
 /// Bump this and append a migration step whenever the schema changes.
-pub const SCHEMA_VERSION: i32 = 18;
+pub const SCHEMA_VERSION: i32 = 20;
 /// Folder next to the database file that holds the copies made before upgrades.
 pub const BACKUP_DIR: &str = "backups";
 /// How many pre-upgrade copies are kept (the oldest are removed).
@@ -568,6 +568,24 @@ fn migrate_steps(conn: &Connection, version: i32) -> rusqlite::Result<()> {
                  SELECT n.card_id, n.id, n.updated_at FROM annotations n
                  WHERE n.card_id IS NOT NULL AND EXISTS (SELECT 1 FROM cards c WHERE c.id = n.card_id);",
         )?;
+    }
+    if version < 19 {
+        // Per board: a card folded to its title bar, and a card whose height follows its content.
+        conn.execute_batch(
+            "ALTER TABLE board_cards ADD COLUMN collapsed   INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE board_cards ADD COLUMN auto_height INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    if version < 20 {
+        // BibTeX-style citation keys: items get `cite_key` (`kahneman2011`), annotations a number
+        // per item and kind (`kahneman2011:h3`). See citations.rs.
+        conn.execute_batch(
+            "ALTER TABLE items ADD COLUMN cite_key        TEXT    NOT NULL DEFAULT '';
+             ALTER TABLE items ADD COLUMN cite_key_manual INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE annotations ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        crate::citations::fill_missing(conn)?;
+        conn.execute_batch("CREATE UNIQUE INDEX idx_items_cite_key ON items(cite_key) WHERE cite_key <> '';")?;
     }
     Ok(())
 }

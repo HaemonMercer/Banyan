@@ -98,6 +98,8 @@ function Face({ card }: { card: LibraryCard }) {
             y: 0,
             width: size.width,
             height: size.height,
+            collapsed: false,
+            autoHeight: false,
             updatedAt: card.updatedAt,
             items: card.items,
             annotations: card.annotations,

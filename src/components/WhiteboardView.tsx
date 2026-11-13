@@ -31,7 +31,8 @@ import { loadPdf } from "../whiteboard/pdf";
 import { newTable, readTable as readTableSafe, tableText, tableSize } from "../whiteboard/table";
 import { chartText, snapshotFromTable, usedRange } from "../whiteboard/chart";
 import InsertToolbar from "./whiteboard/InsertToolbar";
-import BoardCanvas, { sectionAt, type BoardCanvasHandle, type Rect } from "./whiteboard/BoardCanvas";
+import BoardCanvas, { canAutoHeight, sectionAt, type BoardCanvasHandle, type Rect } from "./whiteboard/BoardCanvas";
+import { annotationBlock, appendBlock, cardBlock } from "../whiteboard/quote";
 import BoardTree, { folderSubtree } from "./whiteboard/BoardTree";
 import CardLibrary from "./whiteboard/CardLibrary";
 import CardPanel from "./whiteboard/CardPanel";
@@ -43,6 +44,15 @@ import { isHomeActive } from "../tabs";
 import { resolveWikiTarget, WikiLinkProvider } from "../markdown/links";
 
 const untitled = (t: string) => t || "（無標題）";
+
+/**
+ * Cards copied or cut on a board, for Ctrl+V on any board (kept while the app runs). `text` is what
+ * was put on the system clipboard: pasting only takes these cards while the clipboard still holds it.
+ */
+let cardClipboard: { cards: BoardCard[]; text: string } | null = null;
+const sameText = (a: string, b: string) => a.replace(/\r\n/g, "\n").trim() === b.replace(/\r\n/g, "\n").trim();
+/** A card as Markdown text (for pasting into other apps). */
+const cardAsText = (c: BoardCard) => (c.title.trim() ? `# ${c.title.trim()}\n\n${c.content}` : c.content).trim();
 const samePair = (l: CardLink, a: number, b: number) =>
     (l.cardA === a && l.cardB === b) || (l.cardA === b && l.cardB === a);
 
@@ -562,6 +572,12 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable)) return;
         const dt = e.clipboardData;
         if (!dt) return;
+        // Cards copied on a board (while the clipboard still holds what was copied with them).
+        if (cardClipboard && dt.files.length === 0 && (!cardClipboard.text || sameText(dt.getData("text/plain"), cardClipboard.text))) {
+            e.preventDefault();
+            void pasteCards(canvas.current?.visibleCenter() ?? { x: 0, y: 0 });
+            return;
+        }
         const images = [...dt.files].filter((f) => f.type.startsWith("image/"));
         if (images.length > 0) {
             e.preventDefault();
@@ -669,7 +685,7 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
     const deleteCard = (id: number) => deleteCards([id]);
 
     /** Takes cards off the open board only; they stay in the card library and on other boards. */
-    const removeFromBoard = async (ids: number[]) => {
+    const removeFromBoard = async (ids: number[], message?: string) => {
         if (boardId === null || ids.length === 0) return;
         try {
             ids.forEach((id) => {
@@ -682,10 +698,124 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
             setSelection((s) => s.filter((x) => !ids.includes(x)));
             refreshBoards();
             bumpLinks();
-            showInfo(n > 1 ? `已從白板移除 ${n} 張卡片（仍在卡片庫中）` : "已從白板移除（卡片仍在卡片庫中）");
+            showInfo(message ?? (n > 1 ? `已從白板移除 ${n} 張卡片（仍在卡片庫中）` : "已從白板移除（卡片仍在卡片庫中）"));
         } catch (e) {
             showError(errorMessage(e));
         }
+    };
+
+    // ---------- fold, auto height, copy / cut / paste ----------
+
+    /** Folds / unfolds cards, or turns auto height on or off, on this board. */
+    const setDisplay = async (ids: number[], display: { collapsed?: boolean; autoHeight?: boolean }) => {
+        if (boardId === null || ids.length === 0) return;
+        const apply = (c: BoardCard) => (ids.includes(c.id) ? { ...c, ...display } : c);
+        setCards((list) => list.map(apply));
+        cardsRef.current = cardsRef.current.map(apply);
+        try {
+            await whiteboardApi.setCardDisplay(boardId, ids, display);
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+    };
+
+    /** Copies (or cuts: takes off this board) cards; Ctrl+V on any board puts them there. */
+    const copyCards = async (ids: number[], cut: boolean) => {
+        const chosen = cardsRef.current.filter((c) => ids.includes(c.id));
+        if (chosen.length === 0) return;
+        chosen.forEach((c) => dirty.current.has(c.id) && void saveCard(c.id));
+        const text = chosen.map(cardAsText).join("\n\n---\n\n");
+        cardClipboard = { cards: chosen.map((c) => ({ ...c })), text };
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch {
+            cardClipboard.text = ""; // no system clipboard: Ctrl+V takes the cards whatever it holds
+        }
+        const what = chosen.length > 1 ? `${chosen.length} 張卡片` : `「${untitled(chosen[0].title)}」`;
+        if (cut) await removeFromBoard(ids, `已剪下${what}：在任一白板按 Ctrl+V 貼上`);
+        else showInfo(`已複製${what}：在任一白板按 Ctrl+V 貼上`);
+    };
+
+    /**
+     * A new card with the same content (and kind data) at `rect`. Images and PDFs get their own
+     * copy of the file. Tags and citations are not copied.
+     */
+    const cloneCard = async (c: BoardCard, rect: Rect) => {
+        if (boardId === null) return null;
+        const copy = await whiteboardApi.createObject(boardId, c.kind || "note", rect, c.title, c.content, c.data);
+        let data = c.data;
+        const file = (c.kind === "image" || c.kind === "pdf") && (JSON.parse(c.data || "{}") as { file?: string }).file;
+        if (file) {
+            const bytes = await whiteboardApi.readCardFile(c.id, file);
+            const stored = await whiteboardApi.saveCardFile(copy.id, file, new Uint8Array(bytes));
+            data = JSON.stringify({ ...JSON.parse(c.data), file: stored });
+            await whiteboardApi.updateCardData(copy.id, copy.title, copy.content, data);
+        }
+        if (c.collapsed || c.autoHeight) await whiteboardApi.setCardDisplay(boardId, [copy.id], { collapsed: c.collapsed, autoHeight: c.autoHeight });
+        return copy.id;
+    };
+
+    /** Puts the copied cards on this board around `at`: the same cards, or copies of those already here. */
+    const pasteCards = async (at: { x: number; y: number }) => {
+        const clip = cardClipboard;
+        if (boardId === null || !clip) return;
+        const minX = Math.min(...clip.cards.map((c) => c.x));
+        const minY = Math.min(...clip.cards.map((c) => c.y));
+        const maxX = Math.max(...clip.cards.map((c) => c.x + c.width));
+        const maxY = Math.max(...clip.cards.map((c) => c.y + c.height));
+        const dx = at.x - (minX + maxX) / 2;
+        const dy = at.y - (minY + maxY) / 2;
+        const placed: number[] = [];
+        let copies = 0;
+        let missing = 0;
+        try {
+            for (const c of clip.cards) {
+                const rect = { x: Math.round(c.x + dx), y: Math.round(c.y + dy), width: c.width, height: c.height };
+                if (cardsRef.current.some((x) => x.id === c.id)) {
+                    const id = await cloneCard(c, rect);
+                    if (id !== null) placed.push(id);
+                    copies++;
+                    continue;
+                }
+                try {
+                    await whiteboardApi.addCardToBoard(boardId, c.id, rect.x, rect.y);
+                } catch {
+                    missing++; // deleted since it was copied
+                    continue;
+                }
+                await whiteboardApi.placeCards(boardId, [{ cardId: c.id, ...rect }]);
+                if (c.collapsed || c.autoHeight) await whiteboardApi.setCardDisplay(boardId, [c.id], { collapsed: c.collapsed, autoHeight: c.autoHeight });
+                placed.push(c.id);
+            }
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+        await reloadBoard(null);
+        setSelection(placed);
+        const rects = new Map(cardsRef.current.filter((c) => placed.includes(c.id)).map((c) => [c.id, c] as const));
+        if (rects.size > 0) await joinSections(rects);
+        if (missing > 0) showInfo(`有 ${missing} 張卡片已被刪除，無法貼上`);
+        else if (copies > 0) showInfo(copies === placed.length ? "卡片已在這個白板上：貼上了副本" : `已貼上；其中 ${copies} 張已在這個白板上，貼上的是副本`);
+    };
+
+    /** Copies of the cards, a little below and to the right of them. */
+    const duplicateCards = async (ids: number[]) => {
+        const chosen = cardsRef.current.filter((c) => ids.includes(c.id));
+        const made: number[] = [];
+        try {
+            for (const c of chosen) {
+                if (dirty.current.has(c.id)) await saveCard(c.id);
+                const id = await cloneCard(c, { x: Math.round(c.x + 30), y: Math.round(c.y + 30), width: c.width, height: c.height });
+                if (id !== null) made.push(id);
+            }
+        } catch (e) {
+            showError(errorMessage(e));
+        }
+        if (made.length === 0) return;
+        await reloadBoard(null);
+        setSelection(made);
+        const rects = new Map(cardsRef.current.filter((c) => made.includes(c.id)).map((c) => [c.id, c] as const));
+        await joinSections(rects);
     };
 
     /** Reloads the Drawer items a card refers to. */
@@ -878,6 +1008,17 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                 setSelection(cardsRef.current.map((c) => c.id));
                 return;
             }
+            // Copy / cut / duplicate the selected cards (unless text on the board is selected).
+            const mod = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+            const key = e.key.toLowerCase();
+            if (mod && selection.length > 0 && (key === "c" || key === "x" || key === "d")) {
+                const textSelected = !(window.getSelection()?.isCollapsed ?? true);
+                if (key !== "d" && textSelected) return;
+                e.preventDefault();
+                if (key === "d") void duplicateCards(selection);
+                else void copyCards(selection, key === "x");
+                return;
+            }
             if (e.key !== "Delete" && e.key !== "Backspace") return;
             const l = links.find((l) => l.id === selectedLinkId);
             if (l) {
@@ -950,6 +1091,19 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         window.addEventListener("keydown", key, true);
     };
 
+    /**
+     * Adds a block of text at the end of a text card (note or sticky) and saves it; saving turns its
+     * `[@key]` / `[[card:…]]` into the card's citation or link.
+     */
+    const appendToCard = async (cardId: number, block: string) => {
+        const c = cardsRef.current.find((x) => x.id === cardId);
+        if (!c) return;
+        const content = appendBlock(c.content, block);
+        cardsRef.current = cardsRef.current.map((x) => (x.id === cardId ? { ...x, content } : x));
+        editCard(cardId, c.title, content);
+        await saveCard(cardId);
+    };
+
     const drop = async (
         payload: DragPayload,
         target: { kind: "card"; cardId: number } | { kind: "board" },
@@ -960,6 +1114,32 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
         const titleOf = (id: number) => untitled(cardsRef.current.find((c) => c.id === id)?.title ?? "");
         try {
             if (target.kind === "card") {
+                // Text dropped on a text card (note or sticky) is written into it as a quote.
+                const targetCard = cardsRef.current.find((c) => c.id === target.cardId);
+                const textTarget = !!targetCard && canAutoHeight(targetCard);
+                if (payload.kind === "card" && textTarget && payload.id !== target.cardId) {
+                    const src = await whiteboardApi.getCard(payload.id);
+                    if (canAutoHeight(src) && (src.title.trim() || src.content.trim())) {
+                        await appendToCard(target.cardId, cardBlock(src.id, src.title, src.content));
+                        selectOne(target.cardId);
+                        showInfo(`已把「${payload.title}」的內容引用到「${titleOf(target.cardId)}」`);
+                        return;
+                    }
+                }
+                if (payload.kind === "annotation" && textTarget) {
+                    const a = await annotationApi.get(payload.id);
+                    if (a.kind === "highlight" && a.quote.trim()) {
+                        const key = await annotationApi.citeKey(a.id);
+                        await appendToCard(target.cardId, annotationBlock(a.quote, key, a.note));
+                        // Also when there is no key to write (saving links it from the key otherwise).
+                        if (!key) await annotationApi.linkCard(target.cardId, a.id);
+                        await refreshCardItems(target.cardId);
+                        refreshAnnotations();
+                        selectOne(target.cardId);
+                        showInfo(`已把引文加入「${titleOf(target.cardId)}」`);
+                        return;
+                    }
+                }
                 if (payload.kind === "card") {
                     if (payload.id === target.cardId) return;
                     if (links.some((l) => samePair(l, payload.id, target.cardId))) {
@@ -1235,9 +1415,13 @@ function WhiteboardView({ initialCard = null, onOpenItem }: Props) {
                             onPlaceCards={(rects) => void placeCards(rects)}
                             onEditCard={editCard}
                             onSaveCard={saveCard}
-                            onDeleteCard={deleteCard}
-                            onRemoveCard={(id) => void removeFromBoard([id])}
+                            onDeleteCards={(ids) => void deleteCards(ids)}
+                            onRemoveCards={(ids) => void removeFromBoard(ids)}
                             onOpenCard={openPanel}
+                            onBackgroundClick={() => setOpenCardId(null)}
+                            onSetDisplay={(ids, d) => void setDisplay(ids, d)}
+                            onCopyCards={(ids, cut) => void copyCards(ids, cut)}
+                            onDuplicateCards={(ids) => void duplicateCards(ids)}
                             onLink={(a, b) => link(a, b).catch(() => {})}
                             onUnlink={(l) => unlink(l.cardA, l.cardB).catch(() => {})}
                             onEditLink={(id) => {

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import FoldSection from "./FoldSection";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons/icons";
 import { drawerApi, errorMessage, type ItemSummary } from "../../drawer/api";
@@ -333,9 +334,7 @@ function SelectedCard({ boardId, selectedCard: card, reloadKey, onOpenCard, onUn
                 </button>
             </div>
             <div className="wb-selected-body">
-                <h3 className="wb-section-title">
-                    連結 <span className="muted">{linked.length}</span>
-                </h3>
+                <FoldSection name="links" title="連結" count={linked.length} defaultOpen>
                 {linked.length === 0 ? (
                     <p className="muted wb-hint">還沒有連結。</p>
                 ) : (
@@ -359,10 +358,9 @@ function SelectedCard({ boardId, selectedCard: card, reloadKey, onOpenCard, onUn
                         ))}
                     </ul>
                 )}
+                </FoldSection>
 
-                <h3 className="wb-section-title">
-                    引用的文獻 <span className="muted">{card.items.length}</span>
-                </h3>
+                <FoldSection name="items" title="引用的文獻" count={card.items.length}>
                 {card.items.length === 0 ? (
                     <p className="muted wb-hint">還沒有引用的文獻。</p>
                 ) : (
@@ -384,10 +382,9 @@ function SelectedCard({ boardId, selectedCard: card, reloadKey, onOpenCard, onUn
                         ))}
                     </ul>
                 )}
+                </FoldSection>
 
-                <h3 className="wb-section-title">
-                    引用的註解 <span className="muted">{card.annotations.length}</span>
-                </h3>
+                <FoldSection name="annotations" title="引用的註解" count={card.annotations.length}>
                 {card.annotations.length === 0 ? (
                     <p className="muted wb-hint">還沒有引用的註解。從上方「註解」分頁拖到卡片上。</p>
                 ) : (
@@ -407,6 +404,7 @@ function SelectedCard({ boardId, selectedCard: card, reloadKey, onOpenCard, onUn
                         ))}
                     </ul>
                 )}
+                </FoldSection>
             </div>
         </section>
     );

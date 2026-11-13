@@ -414,6 +414,35 @@ fn remove_from_board_keeps_the_card() {
 }
 
 #[test]
+fn collapse_and_auto_height_are_per_board() {
+    let (app, root) = setup();
+    let s = || app.state::<DrawerState>();
+    let one = j(create_whiteboard(s(), "一".into(), None).unwrap())["id"].as_i64().unwrap();
+    let two = j(create_whiteboard(s(), "二".into(), None).unwrap())["id"].as_i64().unwrap();
+    let a = j(create_card(s(), one, 0.0, 0.0).unwrap());
+    assert_eq!(a["collapsed"], false);
+    assert_eq!(a["autoHeight"], false);
+    let a = a["id"].as_i64().unwrap();
+    add_card_to_board(s(), two, a, None, None).unwrap();
+
+    set_card_display(s(), one, vec![a], Some(true), None).unwrap();
+    set_card_display(s(), one, vec![a], None, Some(true)).unwrap();
+    let card = &j(get_whiteboard(s(), one).unwrap())["cards"][0];
+    assert_eq!(card["collapsed"], true);
+    assert_eq!(card["autoHeight"], true, "None leaves the other setting alone");
+    let other = &j(get_whiteboard(s(), two).unwrap())["cards"][0];
+    assert_eq!(other["collapsed"], false, "another board is not affected");
+
+    set_card_display(s(), one, vec![a], Some(false), None).unwrap();
+    let card = &j(get_whiteboard(s(), one).unwrap())["cards"][0];
+    assert_eq!(card["collapsed"], false);
+    assert_eq!(card["autoHeight"], true);
+
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn board_objects_of_other_kinds() {
     use banyan_lib::card_files::*;
     use banyan_lib::history::*;

@@ -132,6 +132,8 @@ export const annotationApi = {
     toCard: (id: number, place: string) => invoke<number>("annotation_to_card", { id, place }),
     /** The card cites the annotation; false when it already did. */
     linkCard: (cardId: number, annotationId: number) => invoke<boolean>("link_card_annotation", { cardId, annotationId }),
+    /** Its citation key (`kahneman2011:h3`); null when its item has no key yet. */
+    citeKey: (id: number) => invoke<string | null>("annotation_cite_key", { id }),
     unlinkCard: (cardId: number, annotationId: number) => invoke<void>("unlink_card_annotation", { cardId, annotationId }),
     cardsOf: (annotationId: number) => invoke<CitingCard[]>("list_annotation_cards", { annotationId }),
 };

@@ -12,6 +12,7 @@ import { GROUP_LABELS, fieldLabel, formatSize, groupedTypes, isImageType, itemTy
 import FilePreview from "./FilePreview";
 import { canRead, type ReaderFile } from "../reader/Reader";
 import { ask, splitAsk } from "../Feedback";
+import CiteKeyField from "./CiteKeyField";
 
 interface Props {
     itemId: number;
@@ -32,10 +33,14 @@ interface Props {
     relatedDropActive: boolean;
     /** Opens files in the full-window reader. */
     onRead: (files: ReaderFile[], index: number) => void;
+    /** The relation graph is shown in the middle column. */
+    graphOpen: boolean;
+    onToggleGraph: () => void;
 }
 
 function ItemDetail({
     itemId, collections, reloadKey, onChanged, onDelete, onRemoved, onError, onInfo, onOpenCard, onOpenItem, relatedDropActive, onRead,
+    graphOpen, onToggleGraph,
 }: Props) {
     const [item, setItem] = useState<Item | null>(null);
     const [draft, setDraft] = useState<ItemFields | null>(null);
@@ -73,6 +78,9 @@ function ItemDetail({
         try {
             await drawerApi.updateItem(idRef.current, d);
             onChanged();
+            // An automatic citation key follows the title, authors and year.
+            const fresh = await drawerApi.getItem(idRef.current);
+            setItem((p) => (p && p.id === fresh.id ? { ...p, citeKey: fresh.citeKey } : p));
         } catch (e) {
             onError(errorMessage(e));
         }
@@ -174,6 +182,14 @@ function ItemDetail({
                     ))}
                 </select>
                 <button
+                    className={`icon-btn graph-toggle${graphOpen ? " active" : ""}`}
+                    title={graphOpen ? "關閉關聯圖，回到條目清單" : "關聯圖：在中欄顯示這個條目和卡片、關聯條目的關係"}
+                    aria-pressed={graphOpen}
+                    onClick={onToggleGraph}
+                >
+                    <Icon name="related" />
+                </button>
+                <button
                     className="secondary-btn fold-all"
                     title={allFolded ? "展開所有區塊" : "收合所有區塊"}
                     onClick={() => setFolded(allFolded ? [] : SECTIONS)}
@@ -249,6 +265,14 @@ function ItemDetail({
                     <span>{isFile ? "說明" : "摘要"}</span>
                     <textarea rows={4} value={draft.abstractNote} onChange={(e) => set("abstractNote", e.target.value)} />
                 </label>
+                <CiteKeyField
+                    key={item.id}
+                    itemId={item.id}
+                    citeKey={item.citeKey}
+                    onChanged={(k) => setItem((p) => (p && p.id === item.id ? { ...p, citeKey: k } : p))}
+                    onError={onError}
+                    onInfo={onInfo}
+                />
                 </div>
             </section>
 

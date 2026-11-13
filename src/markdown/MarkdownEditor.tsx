@@ -21,6 +21,9 @@ import { whiteboardApi, type CardHit } from "../whiteboard/api";
 import { buildInputRules, buildKeymaps } from "./editorCommands.ts";
 import { load, positionForOffset, save, schema, type Loaded } from "./editorCore.ts";
 import { useWikiLinkHandler, type WikiLinkHandler } from "./links";
+import { formatCitation, yearOf } from "./cite.ts";
+import { openCited } from "./Citations";
+import { citeApi, getCite, requestCites, subscribeCites, type CiteHit } from "./citeStore";
 import { parse } from "./index.ts";
 import Markdown from "./Markdown";
 import "./editor.css";
@@ -202,6 +205,21 @@ class SourceInlineView implements NodeView {
                 img.alt = m[1];
                 this.dom.appendChild(img);
             } else this.dom.textContent = src;
+        } else if (kind === "citation") {
+            // Shown as the formatted citation once the keys are known.
+            const node = parse(src).children[0]?.children?.find((n) => n.type === "citation");
+            const cites = node?.cites ?? [];
+            const keys = cites.map((c) => c.key);
+            const known = keys.map((k) => getCite(k));
+            if (known.some((d) => d === undefined)) {
+                requestCites(keys);
+                this.waitForCites();
+            }
+            this.dom.classList.add("md-cite");
+            const missing = known.some((d) => d === null);
+            this.dom.classList.toggle("missing", missing);
+            this.dom.textContent = node && !missing && !known.includes(undefined) ? formatCitation(cites, !!node.narrative, (k) => getCite(k) ?? null) : src;
+            this.dom.title = (missing ? "找不到這個引用鍵；" : "") + "雙擊編輯原文（" + src + "）";
         } else if (kind === "footnoteRef") {
             const sup = document.createElement("sup");
             sup.textContent = src;
@@ -210,6 +228,22 @@ class SourceInlineView implements NodeView {
             this.dom.classList.add("raw");
             this.dom.textContent = src;
         }
+    }
+
+    private unsubscribe: (() => void) | null = null;
+
+    /** Re-render when the cited keys arrive. */
+    private waitForCites() {
+        if (this.unsubscribe) return;
+        this.unsubscribe = subscribeCites(() => {
+            this.unsubscribe?.();
+            this.unsubscribe = null;
+            this.render();
+        });
+    }
+
+    destroy() {
+        this.unsubscribe?.();
     }
 
     private edit() {
@@ -250,16 +284,51 @@ class SourceInlineView implements NodeView {
 
 class WikiLinkView implements NodeView {
     dom: HTMLElement;
+    private node: PMNode;
+    private unsubscribe: (() => void) | null = null;
+
     constructor(node: PMNode, open: () => WikiLinkHandler | null) {
+        this.node = node;
         this.dom = document.createElement("span");
-        this.dom.className = "md-wikilink" + (node.attrs.embed ? " md-embed" : "");
-        this.dom.textContent = node.attrs.label || node.attrs.target;
-        this.dom.title = `${node.attrs.target}（Ctrl＋點一下開啟）`;
         this.dom.addEventListener("mousedown", (e) => {
             if (!(e.ctrlKey || e.metaKey)) return;
             e.preventDefault();
-            open()?.(node.attrs.target);
+            const target: string = this.node.attrs.target;
+            if (target.startsWith("@")) openCited(getCite(target.slice(1)) ?? null);
+            else open()?.(target);
         });
+        this.render();
+    }
+
+    private render() {
+        const { target, label, embed } = this.node.attrs as { target: string; label: string; embed: boolean };
+        this.dom.className = "md-wikilink" + (embed ? " md-embed" : "");
+        let text = label || target;
+        if (target.startsWith("@")) {
+            const key = target.slice(1);
+            const d = getCite(key);
+            if (d === undefined) {
+                requestCites([key]);
+                this.unsubscribe ??= subscribeCites(() => {
+                    this.unsubscribe?.();
+                    this.unsubscribe = null;
+                    this.render();
+                });
+            } else if (d === null) this.dom.classList.add("missing");
+            else if (!label) text = d.annotation ? `「${(d.annotation.quote || d.annotation.locator).slice(0, 30)}」` : d.title || target;
+        }
+        this.dom.textContent = text;
+        this.dom.title = `${target}（Ctrl＋點一下開啟）`;
+    }
+
+    update(node: PMNode) {
+        if (node.type !== this.node.type) return false;
+        this.node = node;
+        this.render();
+        return true;
+    }
+    destroy() {
+        this.unsubscribe?.();
     }
     ignoreMutation() {
         return true;
@@ -370,6 +439,8 @@ class ListItemView implements NodeView {
 // ---- editor -------------------------------------------------------------------------------------
 
 interface Suggest {
+    /** `[[` → cards, `@` → items and annotations to cite. */
+    mode: "card" | "cite";
     query: string;
     from: number;
     to: number;
@@ -378,6 +449,8 @@ interface Suggest {
 }
 
 const reSuggest = /\[\[([^[\]\n|]*)$/;
+/** `@query` or `[@query` after a space, an opening bracket or Chinese punctuation. */
+const reCiteSuggest = /(?:^|[\s(（「『【，。、；：])(\[?@)([^\s@\[\]();,，。]*)$/;
 
 function placeholderPlugin(text: string) {
     return new Plugin({
@@ -402,18 +475,24 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
     wikiRef.current = wikiHandler;
 
     const [suggest, setSuggest] = useState<Suggest | null>(null);
-    const [hits, setHits] = useState<CardHit[]>([]);
+    const [hits, setHits] = useState<Hit[]>([]);
     const [active, setActive] = useState(0);
     const suggestRef = useRef({ suggest, hits, active });
     suggestRef.current = { suggest, hits, active };
 
-    const pick = (hit: CardHit | null) => {
+    const pick = (hit: Hit | null) => {
         const view = viewRef.current;
         const s = suggestRef.current.suggest;
         if (!view || !s) return;
-        const attrs = hit ? { target: `card:${hit.cardId}`, label: hit.title.trim() } : { target: s.query.trim(), label: "" };
-        if (!attrs.target) return;
-        const node = schema.nodes.wiki_link.create(attrs);
+        let node: PMNode;
+        if (s.mode === "cite") {
+            if (!hit || hit.kind !== "cite") return;
+            node = schema.nodes.md_inline.create({ src: `[@${hit.cite.key}]`, kind: "citation" });
+        } else {
+            const attrs = hit?.kind === "card" ? { target: `card:${hit.card.cardId}`, label: hit.card.title.trim() } : { target: s.query.trim(), label: "" };
+            if (!attrs.target) return;
+            node = schema.nodes.wiki_link.create(attrs);
+        }
         view.dispatch(view.state.tr.replaceWith(s.from, s.to, node).insertText(" "));
         setSuggest(null);
         view.focus();
@@ -430,10 +509,15 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
             const { $from, empty } = view.state.selection;
             if (!empty || $from.parent.type.spec.code) return setSuggest(null);
             const before = $from.parent.textBetween(Math.max(0, $from.parentOffset - 60), $from.parentOffset, "\n", "￼");
-            const m = reSuggest.exec(before);
-            if (!m) return setSuggest(null);
             const coords = view.coordsAtPos($from.pos);
-            setSuggest({ query: m[1], from: $from.pos - m[0].length, to: $from.pos, x: coords.left, y: coords.bottom });
+            const m = reSuggest.exec(before);
+            if (m) return setSuggest({ mode: "card", query: m[1], from: $from.pos - m[0].length, to: $from.pos, x: coords.left, y: coords.bottom });
+            const c = reCiteSuggest.exec(before);
+            if (c) {
+                const len = c[1].length + c[2].length;
+                return setSuggest({ mode: "cite", query: c[2], from: $from.pos - len, to: $from.pos, x: coords.left, y: coords.bottom });
+            }
+            setSuggest(null);
         };
 
         const state = EditorState.create({
@@ -478,7 +562,7 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
                     return true;
                 }
                 if (e.key === "Enter" || e.key === "Tab") {
-                    if (h.length === 0 && !s.query.trim()) return false;
+                    if (h.length === 0 && (s.mode === "cite" || !s.query.trim())) return false;
                     pickRef.current(h[a] ?? null);
                     return true;
                 }
@@ -514,15 +598,27 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // `[[` suggestions: cards whose title matches.
+    // Suggestions: `[[` → cards whose title matches; `@` → items and annotations to cite.
     const query = suggest?.query ?? null;
+    const mode = suggest?.mode ?? null;
     useEffect(() => {
-        if (query === null) {
+        if (query === null || mode === null) {
             setHits([]);
             return;
         }
         let stale = false;
         const t = setTimeout(() => {
+            if (mode === "cite") {
+                citeApi.search(query.trim(), 8).then(
+                    (list) => {
+                        if (stale) return;
+                        setHits(list.map((c) => ({ kind: "cite" as const, cite: c })));
+                        setActive(0);
+                    },
+                    () => !stale && setHits([]),
+                );
+                return;
+            }
             whiteboardApi.searchCards(query.trim(), cardId).then(
                 (list) => {
                     if (stale) return;
@@ -536,7 +632,8 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
                                 seen.add(key);
                                 return true;
                             })
-                            .slice(0, 8),
+                            .slice(0, 8)
+                            .map((card) => ({ kind: "card" as const, card })),
                     );
                     setActive(0);
                 },
@@ -547,7 +644,7 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
             stale = true;
             clearTimeout(t);
         };
-    }, [query, cardId]);
+    }, [query, mode, cardId]);
 
     return (
         <div
@@ -568,6 +665,7 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
             {suggest && (
                 <SuggestList
                     hits={hits}
+                    mode={suggest.mode}
                     query={suggest.query}
                     active={active}
                     x={suggest.x}
@@ -580,29 +678,78 @@ export default function MarkdownEditor({ value, onChange, onBlur, initialOffset 
     );
 }
 
-function SuggestList(props: { hits: CardHit[]; query: string; active: number; x: number; y: number; onPick: (h: CardHit | null) => void; onHover: (i: number) => void }) {
-    const { hits, query, active, x, y, onPick, onHover } = props;
+type Hit = { kind: "card"; card: CardHit } | { kind: "cite"; cite: CiteHit };
+
+function SuggestList(props: {
+    hits: Hit[];
+    mode: "card" | "cite";
+    query: string;
+    active: number;
+    x: number;
+    y: number;
+    onPick: (h: Hit | null) => void;
+    onHover: (i: number) => void;
+}) {
+    const { hits, mode, query, active, x, y, onPick, onHover } = props;
+    const hint =
+        mode === "cite"
+            ? query.trim()
+                ? "沒有符合的文獻或註解"
+                : "輸入作者、標題或引用鍵搜尋文獻"
+            : query.trim()
+              ? `沒有符合的卡片；按 Enter 連到「${query.trim()}」`
+              : "輸入卡片標題搜尋";
     const el = (
-        <ul className="wiki-complete" style={{ left: Math.min(x, window.innerWidth - 270), top: y + 2 }} role="listbox">
+        <ul
+            className={`wiki-complete${mode === "cite" ? " cite" : ""}`}
+            style={{ left: Math.min(x, window.innerWidth - (mode === "cite" ? 340 : 270)), top: y + 2 }}
+            role="listbox"
+            // The list is portalled to <body>, but React events still bubble to the editor's
+            // ancestors (the board would treat a click here as a click on empty canvas and end
+            // the editing). Keep them here; preventing pointerdown also keeps the editor's focus.
+            onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            }}
+            onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            }}
+            onClick={(e) => e.stopPropagation()}
+        >
             {hits.map((h, i) => (
                 <li
-                    key={h.cardId}
+                    key={h.kind === "card" ? `c${h.card.cardId}` : h.cite.key}
                     role="option"
                     aria-selected={i === active}
                     className={i === active ? "active" : undefined}
-                    onMouseDown={(e) => {
-                        e.preventDefault();
+                    onPointerDown={(e) => {
+                        if (e.button !== 0) return;
                         onPick(h);
                     }}
                     onMouseEnter={() => onHover(i)}
                 >
-                    <span className="wiki-complete-title">{h.title}</span>
-                    <span className="wiki-complete-boards">{h.boards.length > 0 ? h.boards.join("、") : "不在白板上"}</span>
+                    {h.kind === "card" ? (
+                        <>
+                            <span className="wiki-complete-title">{h.card.title}</span>
+                            <span className="wiki-complete-boards">{h.card.boards.length > 0 ? h.card.boards.join("、") : "不在白板上"}</span>
+                        </>
+                    ) : (
+                        <>
+                            <span className="wiki-complete-title">
+                                {h.cite.quote !== null ? `「${h.cite.quote || "書籤"}」` : h.cite.title || "（無標題）"}
+                                <span className="wiki-complete-sub">
+                                    {h.cite.quote !== null ? h.cite.title : [h.cite.authors.split("\n")[0], yearOf(h.cite.date)].filter(Boolean).join("，")}
+                                </span>
+                            </span>
+                            <span className="wiki-complete-boards">@{h.cite.key}</span>
+                        </>
+                    )}
                 </li>
             ))}
             {hits.length === 0 && (
                 <li className="wiki-complete-hint" onMouseDown={(e) => e.preventDefault()}>
-                    {query.trim() ? `沒有符合的卡片；按 Enter 連到「${query.trim()}」` : "輸入卡片標題搜尋"}
+                    {hint}
                 </li>
             )}
         </ul>

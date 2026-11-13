@@ -107,6 +107,9 @@ export function renderHtml(doc: Document, options: HtmlOptions = {}): string {
                     break;
                 case "comment":
                     break;
+                case "citation":
+                    lit(`<cite data-keys="${escapeXml((n.cites ?? []).map((c) => c.key).join(" "))}">` + escapeXml(n.value ?? "") + "</cite>");
+                    break;
                 default:
                     inline(n.children);
             }
@@ -205,6 +208,11 @@ export function renderHtml(doc: Document, options: HtmlOptions = {}): string {
                 cr();
                 break;
             case "commentBlock":
+                break;
+            case "bibliography":
+                cr();
+                lit("<div class=\"bibliography\"></div>");
+                cr();
                 break;
             case "table": {
                 cr();

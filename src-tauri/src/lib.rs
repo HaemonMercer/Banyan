@@ -1,9 +1,11 @@
 pub mod annotations;
+pub mod citations;
 pub mod card_files;
 pub mod db;
 pub mod drawer;
 pub mod file_protocol;
 pub mod history;
+pub mod item_graph;
 pub mod library;
 pub mod whiteboard;
 
@@ -125,6 +127,7 @@ pub fn run() {
             annotations::link_card_annotation,
             annotations::unlink_card_annotation,
             annotations::list_annotation_cards,
+            item_graph::item_graph,
             drawer::delete_attachment,
             library::get_library_info,
             library::inspect_library_dir,
@@ -151,6 +154,14 @@ pub fn run() {
             whiteboard::link_cards,
             whiteboard::unlink_cards,
             whiteboard::sync_wiki_links,
+            citations::resolve_cite_keys,
+            citations::search_citables,
+            citations::annotation_cite_key,
+            citations::set_cite_key,
+            citations::list_cite_items,
+            citations::import_items,
+            citations::save_text_file,
+            citations::open_bib_file,
             whiteboard::list_card_links,
             whiteboard::search_cards,
             whiteboard::update_link,
@@ -164,6 +175,7 @@ pub fn run() {
             whiteboard::update_section,
             whiteboard::delete_section,
             whiteboard::place_cards,
+            whiteboard::set_card_display,
             whiteboard::delete_cards,
             whiteboard::remove_cards_from_board,
             whiteboard::set_card_tags,

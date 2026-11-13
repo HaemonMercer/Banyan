@@ -117,10 +117,12 @@ pub fn create_annotation(
     let conn = &lib.conn;
     let original = original_attachment(conn, attachment_id)?;
     let now = now_ms();
+    // Numbered per item and kind, for citation keys like `kahneman2011:h3`.
+    let seq = crate::citations::next_annotation_seq(conn, original, &kind)?;
     conn.execute(
-        "INSERT INTO annotations (attachment_id, kind, color, quote, note, location, sort_key, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-        params![original, kind, color, quote.trim(), note.trim(), location, sort_key, now],
+        "INSERT INTO annotations (attachment_id, kind, color, quote, note, location, sort_key, created_at, updated_at, seq)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)",
+        params![original, kind, color, quote.trim(), note.trim(), location, sort_key, now, seq],
     )?;
     load(conn, conn.last_insert_rowid())
 }

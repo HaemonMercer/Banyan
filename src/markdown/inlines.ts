@@ -3,7 +3,7 @@
  * plus GFM strikethrough, extended autolinks and footnote references, and BFM highlight,
  * `[[wiki links]]`, `#tags`, `$math$` and `%% comments %%`.
  */
-import type { LinkRef, MdNode, NodeType, ParseOptions } from "./ast.ts";
+import type { CiteRef, LinkRef, MdNode, NodeType, ParseOptions } from "./ast.ts";
 import {
     ESCAPABLE,
     ESCAPED_CHAR,
@@ -127,6 +127,12 @@ const reFinalSpace = / *$/;
 const reSpaceAtEndOfLine = /^ *(?:\n|$)/;
 const reLinkLabel = /^\[(?:[^\\[\]]|\\.){0,1000}\]/s;
 const HIGHLIGHT_COLORS = new Set(["yellow", "green", "blue", "pink", "purple"]);
+/** One part of a bracketed citation: prefix, optional `-`, `@key`, then `, locator`. */
+const reCitePart = /^([^@]*?)(-?)@([\p{L}\p{N}_](?:[\p{L}\p{N}_]|[-.:/](?=[\p{L}\p{N}_]))*)((?:\s*,[\s\S]*)?)\s*$/u;
+/** A key written in running text: ASCII (`kahneman2011:h3`) or CJK with digits (`王2020`), so it
+ *  ends where the language changes (`@王2020指出` → `王2020`). */
+const reBareKey =
+    /^(?:[A-Za-z0-9_](?:[A-Za-z0-9_]|[-.:/](?=[A-Za-z0-9_]))*|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+(?:[0-9]+[a-z]{0,2})?(?::[hb][0-9]+)?)/u;
 /** Characters that end a tag (besides whitespace): ASCII punctuation except `_ - /`, and CJK punctuation. */
 const reTagChar = /^[\p{L}\p{N}\p{M}_\-/]/u;
 
@@ -144,7 +150,7 @@ export class InlineParser {
         this.opts = opts;
         let special = "\\n`\\[\\]\\\\!<&*_";
         if (opts.gfm) special += "~";
-        if (opts.bfm) special += "=$%#";
+        if (opts.bfm) special += "=$%#@";
         this.reMain = new RegExp("^[^" + special + "]+", "m");
     }
 
@@ -243,6 +249,9 @@ export class InlineParser {
                 break;
             case "#":
                 res = this.opts.bfm && this.parseTag(block);
+                break;
+            case "@":
+                res = this.opts.bfm && this.parseNarrativeCitation(block);
                 break;
             default:
                 res = this.parseString(block);
@@ -424,6 +433,69 @@ export class InlineParser {
         node.append(this.text(s, "#" + name));
         block.append(node);
         this.pos = s + 1 + name.length;
+        return true;
+    }
+
+    /**
+     * `[@key]`, `[見 @key, p. 33; @other]`, `[-@key]` (Pandoc citations). Every part separated
+     * by `;` must name a key, and the brackets must not be followed by `(` or `[` (a link).
+     */
+    parseCitation(block: INode): boolean {
+        const s = this.pos;
+        const sub = this.subject;
+        let i = s + 1;
+        let depth = 0;
+        while (i < sub.length) {
+            const c = sub[i];
+            if (c === "\\") {
+                i += 2;
+                continue;
+            }
+            if (c === "[") depth++;
+            else if (c === "]") {
+                if (depth === 0) break;
+                depth--;
+            } else if (c === "\n" && /^\n[ \t]*\n/.test(sub.slice(i))) return false;
+            i++;
+        }
+        if (i >= sub.length || sub[i + 1] === "(" || sub[i + 1] === "[") return false;
+        const inner = sub.slice(s + 1, i);
+        if (!inner.includes("@")) return false;
+        const cites: CiteRef[] = [];
+        for (const part of inner.split(";")) {
+            const m = reCitePart.exec(part);
+            if (!m) return false;
+            cites.push({
+                prefix: unescapeString(m[1].trim()),
+                suppressAuthor: m[2] === "-",
+                key: m[3],
+                locator: unescapeString(m[4].replace(/^\s*,?\s*/, "").trim()),
+            });
+        }
+        const node = new INode("citation", s, i + 1);
+        node.props.cites = cites;
+        node.props.narrative = false;
+        node.value = sub.slice(s, i + 1);
+        block.append(node);
+        this.pos = i + 1;
+        return true;
+    }
+
+    /** `@kahneman2011 指出…`: a key written in the text. Not after a letter or digit (e-mail). */
+    parseNarrativeCitation(block: INode): boolean {
+        const s = this.pos;
+        const before = charBefore(this.subject, s);
+        // Not inside an e-mail-like word (`a@b`, `a.b@c`, `x+@y`).
+        // (Right after Chinese text is fine: `而@王2020認為`.)
+        if (/[\p{L}\p{N}_\\+.\-/]/u.test(before) && !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(before)) return false;
+        const m = reBareKey.exec(this.subject.slice(s + 1));
+        if (!m) return false;
+        const node = new INode("citation", s, s + 1 + m[0].length);
+        node.props.cites = [{ key: m[0], prefix: "", locator: "", suppressAuthor: false }];
+        node.props.narrative = true;
+        node.value = "@" + m[0];
+        block.append(node);
+        this.pos = s + 1 + m[0].length;
         return true;
     }
 
@@ -634,6 +706,7 @@ export class InlineParser {
         const startpos = this.pos;
         if (this.opts.bfm && this.subject[startpos + 1] === "[" && this.parseWikiLink(block, false)) return true;
         if (this.opts.gfm && this.subject[startpos + 1] === "^" && this.parseFootnoteRef(block)) return true;
+        if (this.opts.bfm && this.parseCitation(block)) return true;
         this.pos += 1;
         const node = this.text(startpos, "[");
         block.append(node);
@@ -968,7 +1041,7 @@ function toNodes(parent: INode, map: (i: number) => number): MdNode[] {
     for (let n = parent.first; n; n = n.next) {
         if (n.type === "text" && n.value === "") continue;
         const node: MdNode = { type: n.type, start: map(n.s), end: map(Math.max(n.s, n.e)), ...n.props };
-        if (n.type === "text" || n.type === "code" || n.type === "htmlInline" || n.type === "math" || n.type === "comment") {
+        if (n.type === "text" || n.type === "code" || n.type === "htmlInline" || n.type === "math" || n.type === "comment" || n.type === "citation") {
             node.value = n.value;
         }
         if (n.type === "text") node.verbatim = n.verbatim;

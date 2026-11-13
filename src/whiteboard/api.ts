@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AnnotationRef } from "../annotator/api";
-import { extractLinks } from "../markdown";
+import { extractCitations, extractLinks } from "../markdown";
 import type { CardKind } from "./objects";
 
 export interface Whiteboard {
@@ -25,6 +25,10 @@ export interface BoardCard {
     y: number;
     width: number;
     height: number;
+    /** Folded to its title bar on this board (`height` is kept for unfolding). */
+    collapsed: boolean;
+    /** Notes and sticky notes: the height follows the content on this board. */
+    autoHeight: boolean;
     updatedAt: number;
     /** Drawer items this card refers to. */
     items: ItemRef[];
@@ -240,6 +244,14 @@ export const whiteboardApi = {
     /** Moves or resizes several cards on a board at once. */
     placeCards: (boardId: number, places: { cardId: number; x: number; y: number; width: number; height: number }[]) =>
         invoke<void>("place_cards", { boardId, places }),
+    /** Folds / unfolds cards, or turns auto height on or off, on one board (undefined = unchanged). */
+    setCardDisplay: (boardId: number, ids: number[], display: { collapsed?: boolean; autoHeight?: boolean }) =>
+        invoke<void>("set_card_display", {
+            boardId,
+            ids,
+            collapsed: display.collapsed ?? null,
+            autoHeight: display.autoHeight ?? null,
+        }),
     /** Deletes cards everywhere: every board and the card library. */
     deleteCards: (ids: number[]) => invoke<void>("delete_cards", { ids }),
     /** Takes cards off one board only; they stay in the library and on other boards. Returns how many. */
@@ -267,7 +279,8 @@ export const whiteboardApi = {
      */
     syncWikiLinks: async (cardId: number, content: string): Promise<CardLink[]> => {
         try {
-            const targets = extractLinks(content).map((l) => l.target);
+            // `[[…]]` targets (cards, `@key`) and `[@key]` citations: the card links / cites them.
+            const targets = [...extractLinks(content).map((l) => l.target), ...extractCitations(content).map((k) => "@" + k)];
             const created = await invoke<CardLink[]>("sync_wiki_links", { cardId, targets });
             if (created.length > 0) window.dispatchEvent(new CustomEvent<CardLink[]>(LINKS_CREATED_EVENT, { detail: created }));
             return created;

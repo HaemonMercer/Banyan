@@ -103,3 +103,59 @@
     color: var(--text-2);
 }
 .md .md-footnotes p { margin: 0; }
+
+/* Citations */
+.md .md-cite { color: var(--accent-text); cursor: pointer; border-bottom: 1px dotted var(--accent); }
+.md .md-cite:hover { background: var(--accent-soft); }
+.md .md-cite.missing { color: var(--danger); border-bottom-color: var(--danger); cursor: default; }
+.md .md-citelink.missing { color: var(--danger); background: var(--danger-soft); }
+.md .md-citelink .bn-icon { flex: none; }
+.md .md-cite-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    max-width: 100%;
+    padding: 0.35em 0.6em;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--pane);
+    cursor: pointer;
+    vertical-align: middle;
+}
+.md .md-cite-card:hover { border-color: var(--accent); }
+.md .md-cite-card-body { display: flex; flex-direction: column; min-width: 0; }
+.md .md-cite-card-title { font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; }
+.md .md-cite-card-meta { font-size: 0.85em; color: var(--muted); }
+.md .md-cite-quote {
+    display: block;
+    border-left: 3px solid rgba(var(--mark), 0.9);
+    background: rgba(var(--mark), 0.12);
+    padding: 0.3em 0.6em;
+    margin: 0.2em 0;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+}
+.md .md-cite-quote-note { display: block; color: var(--text-2); font-size: 0.9em; }
+.md .md-cite-quote-src { display: block; color: var(--muted); font-size: 0.85em; }
+.md .md-bibliography { margin: 0.8em 0 0.6em; }
+.md .md-bibliography-title { font-weight: var(--fw-semibold); margin-bottom: 0.3em; }
+.md .md-bibliography ul { list-style: none; padding-left: 0; }
+.md .md-bibliography li { padding-left: 1.5em; text-indent: -1.5em; margin-bottom: 0.3em; }
+.md .md-bibliography-empty { color: var(--muted); }
+.md .md-bibtex { border: 1px dashed var(--border-strong); border-radius: var(--r-md); padding: 0.4em 0.7em; margin: 0 0 0.6em; }
+.md .md-bibtex-head { display: flex; align-items: center; gap: 0.4em; color: var(--text-2); font-size: 0.9em; }
+.md .md-bibtex-add {
+    margin-left: auto;
+    font: inherit;
+    font-size: var(--fs-sm);
+    padding: 0.1em 0.6em;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--pane);
+    color: var(--text);
+    cursor: pointer;
+}
+.md .md-bibtex-add:disabled { opacity: 0.5; cursor: default; }
+.md .md-bibtex-note { font-size: 0.85em; color: var(--accent-text); margin-top: 0.2em; }
+.md .md-bibtex ul { margin: 0.3em 0 0; padding-left: 1.2em; font-size: 0.9em; }
+.md .md-bibtex code { font-size: 0.85em; }

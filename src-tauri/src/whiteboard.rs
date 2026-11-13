@@ -52,6 +52,10 @@ pub struct BoardCard {
     y: f64,
     width: f64,
     height: f64,
+    /// Folded to its title bar on this board.
+    collapsed: bool,
+    /// Height follows the content (notes and sticky notes) on this board.
+    auto_height: bool,
     updated_at: i64,
     /// Drawer items this card refers to.
     items: Vec<ItemRef>,
@@ -231,7 +235,8 @@ pub fn get_whiteboard(state: State<'_, DrawerState>, id: i64) -> Result<BoardCon
     let board = load_board(conn, id)?;
     let cards = conn
         .prepare(
-            "SELECT c.id, c.title, c.content, bc.x, bc.y, bc.width, bc.height, c.updated_at, c.kind, c.data
+            "SELECT c.id, c.title, c.content, bc.x, bc.y, bc.width, bc.height, c.updated_at, c.kind, c.data,
+                    bc.collapsed, bc.auto_height
              FROM board_cards bc JOIN cards c ON c.id = bc.card_id
              WHERE bc.board_id = ?1 ORDER BY c.id",
         )?
@@ -246,6 +251,8 @@ pub fn get_whiteboard(state: State<'_, DrawerState>, id: i64) -> Result<BoardCon
                 y: r.get(4)?,
                 width: r.get(5)?,
                 height: r.get(6)?,
+                collapsed: r.get::<_, i64>(10)? != 0,
+                auto_height: r.get::<_, i64>(11)? != 0,
                 updated_at: r.get(7)?,
                 items: Vec::new(),
                 annotations: Vec::new(),
@@ -327,6 +334,8 @@ pub fn create_card(state: State<'_, DrawerState>, board_id: i64, x: f64, y: f64)
         y,
         width: DEFAULT_CARD_WIDTH,
         height: DEFAULT_CARD_HEIGHT,
+        collapsed: false,
+        auto_height: false,
         updated_at: now,
         items: Vec::new(),
         annotations: Vec::new(),
@@ -379,6 +388,8 @@ pub fn create_board_object(
         y,
         width,
         height,
+        collapsed: false,
+        auto_height: false,
         updated_at: now,
         items: Vec::new(),
         annotations: Vec::new(),
@@ -506,10 +517,11 @@ pub fn unlink_cards(state: State<'_, DrawerState>, a: i64, b: i64) -> Result<()>
 
 /// Turns `[[wiki links]]` into two-way card links after `card_id` was saved.
 ///
-/// 1. Forward: `targets` are the card's own `[[…]]` targets (parsed by the frontend's Markdown
-///    engine). `card:42` names a card by id; anything else is a title, matched trimmed and
+/// 1. Forward: `targets` are the card's own `[[…]]` and `[@…]` targets (parsed by the frontend's
+///    Markdown engine). `card:42` names a card by id; `@key` makes the card cite that item or
+///    annotation (card_items / card_annotations); anything else is a title, matched trimmed and
 ///    case-insensitively (when several cards share it, one on a board with `card_id` wins, then
-///    the most recently edited). Other kinds (`@key`, `board:3`…) and the card itself are skipped.
+///    the most recently edited). Other kinds (`board:3`…) and the card itself are skipped.
 /// 2. Backward: links other cards whose text already contains `[[its title]]`, `[[its title|…]]`,
 ///    `[[card:<id>]]` or `[[card:<id>|…]]` (so writing `[[X]]` before X exists links them later).
 ///
@@ -548,7 +560,26 @@ pub fn sync_wiki_links(state: State<'_, DrawerState>, card_id: i64, targets: Vec
     let mut seen = std::collections::HashSet::new();
     for target in &targets {
         let target = target.trim();
-        if target.is_empty() || target.starts_with('@') {
+        if target.is_empty() {
+            continue;
+        }
+        // `@key`: the card cites that item or annotation.
+        if target.starts_with('@') {
+            match crate::citations::lookup(conn, target)? {
+                Some((item, None)) => {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO card_items (card_id, item_id, created_at) VALUES (?1, ?2, ?3)",
+                        params![card_id, item, now_ms()],
+                    )?;
+                }
+                Some((_, Some(annotation))) => {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO card_annotations (card_id, annotation_id, created_at) VALUES (?1, ?2, ?3)",
+                        params![card_id, annotation, now_ms()],
+                    )?;
+                }
+                None => {}
+            }
             continue;
         }
         let other = if let Some(id) = target.strip_prefix("card:") {
@@ -1147,6 +1178,31 @@ pub fn place_cards(state: State<'_, DrawerState>, board_id: i64, places: Vec<Pla
         }
     }
     touch_board(&tx, board_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// How cards are shown on one board: folded to the title bar, and/or with the height following
+/// the content. `None` leaves that setting as it is.
+#[tauri::command]
+pub fn set_card_display(
+    state: State<'_, DrawerState>,
+    board_id: i64,
+    ids: Vec<i64>,
+    collapsed: Option<bool>,
+    auto_height: Option<bool>,
+) -> Result<()> {
+    let mut lib = state.lock();
+    let tx = lib.conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "UPDATE board_cards SET collapsed = COALESCE(?1, collapsed), auto_height = COALESCE(?2, auto_height)
+             WHERE board_id = ?3 AND card_id = ?4",
+        )?;
+        for id in &ids {
+            stmt.execute(params![collapsed, auto_height, board_id, id])?;
+        }
+    }
     tx.commit()?;
     Ok(())
 }

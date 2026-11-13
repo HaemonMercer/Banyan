@@ -85,6 +85,7 @@ test("typed text that looks like syntax stays text", () => {
         "!結尾驚嘆號!",
         "---",
         "```",
+        "寄到 a@b.com 或找 @某人，@kahneman2011 不是引用",
     ];
     for (const text of cases) {
         const doc = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.text(text)));
@@ -92,7 +93,9 @@ test("typed text that looks like syntax stays text", () => {
         const tree = parse(out);
         assert.equal(tree.children.length, 1, `${text} → ${out}`);
         assert.equal(tree.children[0].type, "paragraph", `${text} → ${out}`);
-        const plain = (tree.children[0].children ?? []).map((n) => (n.type === "tag" ? "#" + n.name : n.value ?? "")).join("");
+        const textOf = (nodes: typeof tree.children): string =>
+            nodes.map((n) => (n.type === "tag" ? "#" + n.name : n.type === "link" ? textOf(n.children ?? []) : n.type === "citation" ? "<cite>" : n.value ?? "")).join("");
+        const plain = textOf(tree.children[0].children ?? []);
         assert.equal(plain, text, `${text} → ${out}`);
     }
 });

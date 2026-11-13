@@ -32,6 +32,8 @@ interface Props {
     library: Library;
     /** 檔案庫: "＋ 加入檔案" picks files, each becoming an item (instead of "＋ 新條目"). */
     onAddFiles: () => void;
+    /** 文獻庫's BibTeX menu: import a .bib file, export or copy items as BibTeX. */
+    onBibtex?: (action: "import" | "exportSelected" | "exportAll" | "copySelected") => void;
     /** Opens files in the reader (pictures of a gallery, an item's attachments). */
     onRead: (files: ReaderFile[], index: number) => void;
     /** 檔案庫, like Windows Explorer: large icons or the details table. */
@@ -50,6 +52,8 @@ interface Props {
     onOpenItem: (item: ItemSummary) => void;
     /** Folder under dragged items (its tile is highlighted). */
     dropFolderId: number | null;
+    /** Switches the middle column to the relation graph of the selected item. */
+    onShowGraph: () => void;
 }
 
 export type FileView = "icons" | "details";
@@ -90,8 +94,9 @@ const loadTile = () => {
 
 function ItemList({
     title, items: unsorted, selection, onSelectionChange, query, onQueryChange, onCreate, onDelete, onDragStart,
-    draggingIds, onError, mode, onModeChange, canCreate, library, onAddFiles, onRead,
+    draggingIds, onError, mode, onModeChange, canCreate, library, onAddFiles, onRead, onBibtex,
     fileView, onFileViewChange, folders, allFolders, onOpenFolder, crumbs, onUp, onOpenItem, dropFolderId,
+    onShowGraph,
 }: Props) {
     const gallery = mode === "gallery";
     const files = library === "files";
@@ -185,6 +190,7 @@ function ItemList({
     /** Set right after a box selection so the click that ends it doesn't reset the selection. */
     const suppressClick = useRef(false);
     const [menuOpen, setMenuOpen] = useState(false);
+    const [bibMenuOpen, setBibMenuOpen] = useState(false);
     /** Items whose attachments are shown as child rows. */
     const [expanded, setExpanded] = useState<Set<number>>(new Set());
     const [attachments, setAttachments] = useState<Map<number, Attachment[]>>(new Map());
@@ -417,6 +423,14 @@ function ItemList({
                         </button>
                     </div>
                 )}
+                <button
+                    className="icon-btn graph-toggle"
+                    title="切換成關聯圖（以選取的條目為中心）"
+                    disabled={items.length === 0}
+                    onClick={onShowGraph}
+                >
+                    <Icon name="related" />
+                </button>
                 {onModeChange && !files && (
                     <div className="view-switch" role="group">
                         <button className={mode === "list" ? "active" : ""} title="清單" onClick={() => onModeChange("list")}>
@@ -480,6 +494,41 @@ function ItemList({
                     >
                         <Icon name="settings" />
                     </button>
+                )}
+                {!files && onBibtex && (
+                    <div className="new-item">
+                        <button className="secondary-btn" onClick={() => setBibMenuOpen((o) => !o)} title="匯入或匯出 BibTeX（.bib）">
+                            BibTeX
+                        </button>
+                        {bibMenuOpen && (
+                            <>
+                                <div className="menu-backdrop" onClick={() => setBibMenuOpen(false)} />
+                                <ul className="menu">
+                                    {(
+                                        [
+                                            ["import", "匯入 .bib 檔…", true],
+                                            ["exportSelected", `匯出選取的 ${selection.ids.length} 筆…`, selection.ids.length > 0],
+                                            ["copySelected", "複製選取條目的 BibTeX", selection.ids.length > 0],
+                                            ["exportAll", "匯出整個文獻庫…", true],
+                                        ] as const
+                                    )
+                                        .filter(([, , show]) => show)
+                                        .map(([action, label]) => (
+                                            <li
+                                                key={action}
+                                                className="menu-item"
+                                                onClick={() => {
+                                                    setBibMenuOpen(false);
+                                                    onBibtex(action);
+                                                }}
+                                            >
+                                                {label}
+                                            </li>
+                                        ))}
+                                </ul>
+                            </>
+                        )}
+                    </div>
                 )}
                 {files ? (
                     <button className="primary-btn" onClick={onAddFiles} title="選擇檔案，每個檔案成為一個條目">＋ 加入檔案</button>

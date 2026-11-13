@@ -356,6 +356,9 @@ fn old_authors_migrate_to_creators() {
                   VALUES (1, 'film', 'David Lean\n\n  Robert Bolt ', 0, 0),
                          (2, 'book', 'Abelson\nSussman', 0, 0),
                          (3, 'book', '', 0, 0);
+             DROP INDEX idx_items_cite_key;
+             ALTER TABLE items DROP COLUMN cite_key;
+             ALTER TABLE items DROP COLUMN cite_key_manual;
              PRAGMA user_version = 3;",
         )
         .unwrap();
@@ -378,7 +381,7 @@ fn old_authors_migrate_to_creators() {
         ]
     );
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 18);
+    assert_eq!(version, banyan_lib::db::SCHEMA_VERSION);
     drop(conn);
     let _ = fs::remove_dir_all(root);
 }
@@ -415,6 +418,11 @@ fn old_notes_become_cards() {
                   VALUES (1, 'book', 'SICP', '第一章\n遞迴', 5, 7),
                          (2, 'film', '', '好看', 0, 0),
                          (3, 'book', 'Empty', '   ', 0, 0);
+             ALTER TABLE board_cards DROP COLUMN collapsed;
+             ALTER TABLE board_cards DROP COLUMN auto_height;
+             DROP INDEX idx_items_cite_key;
+             ALTER TABLE items DROP COLUMN cite_key;
+             ALTER TABLE items DROP COLUMN cite_key_manual;
              PRAGMA user_version = 5;",
         )
         .unwrap();
@@ -442,7 +450,7 @@ fn old_notes_become_cards() {
         .unwrap();
     assert_eq!(has_notes, 0);
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 18);
+    assert_eq!(version, banyan_lib::db::SCHEMA_VERSION);
     drop(conn);
     let _ = fs::remove_dir_all(root);
 }
@@ -904,6 +912,11 @@ fn upgrade_copies_existing_literature_attachments() {
                  (1, 'book', 'SICP', 0, 7), (2, 'fileImage', '照片', 0, 0);
              INSERT INTO attachments (item_id, file_name, stored_path, size, created_at) VALUES
                  (1, 'sicp.pdf', '1/sicp.pdf', 10, 5), (2, 'a.png', '2/a.png', 3, 5);
+             ALTER TABLE board_cards DROP COLUMN collapsed;
+             ALTER TABLE board_cards DROP COLUMN auto_height;
+             DROP INDEX idx_items_cite_key;
+             ALTER TABLE items DROP COLUMN cite_key;
+             ALTER TABLE items DROP COLUMN cite_key_manual;
              PRAGMA user_version = 15;",
         )
         .unwrap();

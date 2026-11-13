@@ -189,6 +189,12 @@ fn cards_cite_annotations() {
             "INSERT INTO cards (id, title, created_at, updated_at) VALUES (500, '摘錄', 1, 1);
              UPDATE annotations SET card_id = 500 WHERE id = (SELECT MIN(id) FROM annotations);
              DROP TABLE card_annotations;
+             ALTER TABLE board_cards DROP COLUMN collapsed;
+             ALTER TABLE board_cards DROP COLUMN auto_height;
+             DROP INDEX idx_items_cite_key;
+             ALTER TABLE items DROP COLUMN cite_key;
+             ALTER TABLE items DROP COLUMN cite_key_manual;
+             ALTER TABLE annotations DROP COLUMN seq;
              PRAGMA user_version = 17;",
         )
         .unwrap();

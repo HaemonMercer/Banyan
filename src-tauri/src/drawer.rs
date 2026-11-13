@@ -365,6 +365,8 @@ pub struct ItemDetail {
     attachments: Vec<Attachment>,
     /// Related items (both directions), sorted by title.
     related: Vec<RelatedItem>,
+    /// BibTeX-style citation key (`kahneman2011`), see citations.rs.
+    cite_key: String,
     created_at: i64,
     updated_at: i64,
 }
@@ -647,6 +649,12 @@ fn load_item(conn: &Connection, id: i64) -> Result<ItemDetail> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
+    let mut cite_key: String = conn.query_row("SELECT cite_key FROM items WHERE id = ?1", [id], |r| r.get(0))?;
+    if cite_key.is_empty() {
+        crate::citations::refresh_cite_key(conn, id)?;
+        cite_key = conn.query_row("SELECT cite_key FROM items WHERE id = ?1", [id], |r| r.get(0))?;
+    }
+
     Ok(ItemDetail {
         id,
         fields,
@@ -655,6 +663,7 @@ fn load_item(conn: &Connection, id: i64) -> Result<ItemDetail> {
         collection_ids,
         attachments,
         related,
+        cite_key,
         created_at,
         updated_at,
     })
@@ -685,6 +694,7 @@ pub fn create_item(
         params![item_type, now],
     )?;
     let id = tx.last_insert_rowid();
+    crate::citations::refresh_cite_key(&tx, id)?;
     if let Some(cid) = collection_id {
         tx.execute(
             "INSERT INTO item_collections (item_id, collection_id) VALUES (?1, ?2)",
@@ -712,6 +722,7 @@ pub fn update_item(state: State<'_, DrawerState>, id: i64, fields: ItemFields) -
     conn.execute(&sql, rusqlite::params_from_iter(values))?;
     // The type may have changed, which changes whose names come first in the summary.
     refresh_creator_summary(conn, id)?;
+    crate::citations::refresh_cite_key(conn, id)?;
     Ok(())
 }
 
@@ -755,6 +766,7 @@ pub fn set_item_creators(state: State<'_, DrawerState>, id: i64, creators: Vec<C
         )?;
     }
     refresh_creator_summary(&tx, id)?;
+    crate::citations::refresh_cite_key(&tx, id)?;
     touch_item(&tx, id)?;
     tx.commit()?;
     Ok(())

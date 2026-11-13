@@ -25,6 +25,7 @@ import { openAnnotation, parseLocation, placeLabel, refLabel } from "../../annot
 import MindMap from "./MindMap";
 import TableObject from "./TableObject";
 import ChartObject from "./ChartObject";
+import CardMenu, { type CardMenuEntry } from "./CardMenu";
 import { tableText } from "../../whiteboard/table";
 import { isHomeActive } from "../../tabs";
 
@@ -73,12 +74,20 @@ interface Props {
     onPlaceCards: (rects: Map<number, Rect>) => void;
     onEditCard: (id: number, title: string, content: string) => void;
     onSaveCard: (id: number) => void;
-    /** Delete the card everywhere (asks first). */
-    onDeleteCard: (id: number) => void;
-    /** Take the card off this board only; it stays in the library. */
-    onRemoveCard: (id: number) => void;
+    /** Delete cards everywhere (asks first). */
+    onDeleteCards: (ids: number[]) => void;
+    /** Take cards off this board only; they stay in the library. */
+    onRemoveCards: (ids: number[]) => void;
     /** Open the card in the side panel. */
     onOpenCard: (id: number) => void;
+    /** A plain click (no drag, no Shift) on empty board space. */
+    onBackgroundClick?: () => void;
+    /** Fold / unfold cards, or turn auto height on or off (undefined = unchanged). */
+    onSetDisplay: (ids: number[], display: { collapsed?: boolean; autoHeight?: boolean }) => void;
+    /** Copy (or cut) cards, to paste on any board with Ctrl+V. */
+    onCopyCards: (ids: number[], cut: boolean) => void;
+    /** A copy of the cards next to them on this board. */
+    onDuplicateCards: (ids: number[]) => void;
     onLink: (a: number, b: number) => void;
     onUnlink: (link: CardLink) => void;
     /** Double-click on a line: edit its direction and note. */
@@ -124,6 +133,13 @@ function edgePoint(r: Rect, tx: number, ty: number) {
     return t >= 1 ? { x: cx, y: cy } : { x: cx + dx * t, y: cy + dy * t };
 }
 
+/** Notes and sticky notes can have their height follow the content. */
+export const canAutoHeight = (c: { kind: string }) => !c.kind || c.kind === "note" || c.kind === "sticky";
+/** The card's height is set by its content right now (not folded). */
+const autoFits = (c: BoardCard) => c.autoHeight && !c.collapsed && canAutoHeight(c);
+/** Height of a folded card until it has been measured. */
+const FOLDED_GUESS = 48;
+
 const center = (r: Rect) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
 const rectOf = (c: Rect): Rect => ({ x: c.x, y: c.y, width: c.width, height: c.height });
 const intersects = (a: Rect, b: Rect) =>
@@ -153,9 +169,9 @@ export function cardsInSection(cards: BoardCard[], s: Rect): number[] {
 
 type Gesture =
     | { kind: "pan"; startX: number; startY: number; vx: number; vy: number }
-    | { kind: "box"; sx: number; sy: number; base: number[] }
+    | { kind: "box"; sx: number; sy: number; base: number[]; cx: number; cy: number; shift: boolean }
     | { kind: "move"; ids: number[]; grabbed: number; startX: number; startY: number; rects: Map<number, Rect>; moved: boolean; last?: Map<number, Rect> }
-    | { kind: "resize"; id: number; startX: number; startY: number; rect: Rect; last?: Rect; ratio: number | null }
+    | { kind: "resize"; id: number; startX: number; startY: number; rect: Rect; last?: Rect; ratio: number | null; widthOnly: boolean }
     | { kind: "link"; from: number }
     | {
           kind: "section";
@@ -189,6 +205,54 @@ function BoardCanvas(props: Props) {
     const propsRef = useRef(props);
     propsRef.current = props;
 
+    /** Measured heights of folded cards (drawn as just their top bar; `height` is kept for unfolding). */
+    const [foldedH, setFoldedH] = useState<Map<number, number>>(() => new Map());
+    const foldedRef = useRef(foldedH);
+    foldedRef.current = foldedH;
+    /** Pending saves of heights set by content (auto height), per card. */
+    const autoSaves = useRef(new Map<number, number>());
+    /** The rectangle a card takes up on the board as drawn (folded cards are short). */
+    const shownRect = useCallback(
+        (c: BoardCard): Rect =>
+            c.collapsed ? { x: c.x, y: c.y, width: c.width, height: foldedRef.current.get(c.id) ?? FOLDED_GUESS } : rectOf(c),
+        [],
+    );
+    /** A card reports its drawn height: folded, or following its content. */
+    const onMeasure = useCallback((id: number, h: number) => {
+        const p = propsRef.current;
+        const c = p.cards.find((x) => x.id === id);
+        if (!c || h <= 0) return;
+        if (c.collapsed) {
+            setFoldedH((m) => (m.get(id) === h ? m : new Map(m).set(id, h)));
+            return;
+        }
+        if (!autoFits(c)) return;
+        const height = Math.max(MIN_CARD_HEIGHT, Math.round(h));
+        if (Math.abs(height - c.height) < 1) return;
+        p.onMoveCards(new Map([[id, { ...rectOf(c), height }]]));
+        // Save once typing settles (and with the card's position at that time).
+        window.clearTimeout(autoSaves.current.get(id));
+        autoSaves.current.set(
+            id,
+            window.setTimeout(() => {
+                autoSaves.current.delete(id);
+                const cur = propsRef.current.cards.find((x) => x.id === id);
+                if (cur) propsRef.current.onPlaceCards(new Map([[id, rectOf(cur)]]));
+            }, 600),
+        );
+    }, []);
+    useEffect(
+        () => () => {
+            // Leaving the board: save heights that are still waiting.
+            autoSaves.current.forEach((t, id) => {
+                window.clearTimeout(t);
+                const cur = propsRef.current.cards.find((x) => x.id === id);
+                if (cur) propsRef.current.onPlaceCards(new Map([[id, rectOf(cur)]]));
+            });
+        },
+        [],
+    );
+
     const toBoard = useCallback((clientX: number, clientY: number) => {
         const r = rootRef.current!.getBoundingClientRect();
         const v = viewRef.current;
@@ -197,7 +261,7 @@ function BoardCanvas(props: Props) {
 
     const fit = useCallback(() => {
         const el = rootRef.current;
-        const list: Rect[] = [...propsRef.current.cards, ...propsRef.current.sections];
+        const list: Rect[] = [...propsRef.current.cards.map(shownRect), ...propsRef.current.sections];
         if (!el) return;
         const { width, height } = el.getBoundingClientRect();
         if (list.length === 0) {
@@ -215,7 +279,7 @@ function BoardCanvas(props: Props) {
             x: width / 2 - ((minX + maxX) / 2) * zoom,
             y: height / 2 - ((minY + maxY) / 2) * zoom,
         });
-    }, []);
+    }, [shownRect]);
 
     useImperativeHandle(
         props.handle,
@@ -227,15 +291,16 @@ function BoardCanvas(props: Props) {
                 return toBoard(r.left + r.width / 2, r.top + r.height / 2);
             },
             centerOn: (id) => {
-                const c = propsRef.current.cards.find((c) => c.id === id);
+                const card = propsRef.current.cards.find((c) => c.id === id);
                 const el = rootRef.current;
-                if (!c || !el) return;
+                if (!card || !el) return;
+                const c = shownRect(card);
                 const { width, height } = el.getBoundingClientRect();
                 const z = viewRef.current.zoom;
                 setView({ zoom: z, x: width / 2 - (c.x + c.width / 2) * z, y: height / 2 - (c.y + c.height / 2) * z });
             },
         }),
-        [fit, toBoard],
+        [fit, toBoard, shownRect],
     );
 
     // Wheel: scroll pans, Ctrl + wheel (or pinch) zooms around the cursor. Needs a non-passive listener.
@@ -304,6 +369,16 @@ function BoardCanvas(props: Props) {
         rootRef.current!.setPointerCapture(e.pointerId);
         e.preventDefault();
     };
+    /**
+     * Pointer to capture once it starts moving. Title bars (card grips, section headers) capture
+     * only when dragged: capturing on press would send the next click and double-click to the
+     * board instead of the title, so renaming by double-click would never start.
+     */
+    const pendingCapture = useRef<{ id: number; x: number; y: number } | null>(null);
+    const captureOnDrag = (e: React.PointerEvent) => {
+        pendingCapture.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+        e.preventDefault(); // no text selection while dragging
+    };
 
     const onPointerDown = (e: React.PointerEvent) => {
         const target = e.target as HTMLElement;
@@ -331,13 +406,14 @@ function BoardCanvas(props: Props) {
             p.onSelectLink(null);
             if (role === "section-header") {
                 const inner = new Map(
-                    p.cards.filter((c) => inside(c, section)).map((c) => [c.id, rectOf(c)] as const),
+                    p.cards.filter((c) => inside(shownRect(c), section)).map((c) => [c.id, rectOf(c)] as const),
                 );
                 gesture.current = { kind: "section", section, startX: e.clientX, startY: e.clientY, cards: inner, moved: false };
+                captureOnDrag(e);
             } else {
                 gesture.current = { kind: "section-resize", section, startX: e.clientX, startY: e.clientY };
+                capture(e);
             }
-            capture(e);
             return;
         }
 
@@ -348,7 +424,7 @@ function BoardCanvas(props: Props) {
             const base = e.shiftKey ? [...p.selectedIds] : [];
             if (!e.shiftKey) p.onSelect([]);
             const pt = toBoard(e.clientX, e.clientY);
-            gesture.current = { kind: "box", sx: pt.x, sy: pt.y, base };
+            gesture.current = { kind: "box", sx: pt.x, sy: pt.y, base, cx: e.clientX, cy: e.clientY, shift: e.shiftKey };
             capture(e);
             return;
         }
@@ -379,10 +455,14 @@ function BoardCanvas(props: Props) {
             const ids = selected.has(id) || e.shiftKey ? [...new Set([...p.selectedIds, id])] : [id];
             const rects = new Map(p.cards.filter((c) => ids.includes(c.id)).map((c) => [c.id, rectOf(c)] as const));
             gesture.current = { kind: "move", ids, grabbed: id, startX: e.clientX, startY: e.clientY, rects, moved: false };
+            captureOnDrag(e);
+            return;
         } else if (role === "resize") {
             // Images and videos keep their proportions.
             const ratio = card.kind === "image" || card.kind === "video" ? card.height / card.width : null;
-            gesture.current = { kind: "resize", id, startX: e.clientX, startY: e.clientY, rect: rectOf(card), ratio };
+            // Auto height: only the width is dragged; the content sets the height.
+            const widthOnly = autoFits(card);
+            gesture.current = { kind: "resize", id, startX: e.clientX, startY: e.clientY, rect: rectOf(card), ratio, widthOnly };
         } else if (role === "connect") {
             gesture.current = { kind: "link", from: id };
             setLinkEnd({ ...toBoard(e.clientX, e.clientY), target: null });
@@ -395,6 +475,13 @@ function BoardCanvas(props: Props) {
     const onPointerMove = (e: React.PointerEvent) => {
         const g = gesture.current;
         if (!g) return;
+        const pc = pendingCapture.current;
+        if (pc && pc.id === e.pointerId) {
+            // A few pixels of jitter between the clicks of a double-click is not a drag.
+            if (Math.abs(e.clientX - pc.x) + Math.abs(e.clientY - pc.y) < 4) return;
+            pendingCapture.current = null;
+            rootRef.current!.setPointerCapture(e.pointerId);
+        }
         const z = viewRef.current.zoom;
         const p = propsRef.current;
         if (g.kind === "pan") {
@@ -403,7 +490,7 @@ function BoardCanvas(props: Props) {
             const pt = toBoard(e.clientX, e.clientY);
             const r = { x: Math.min(g.sx, pt.x), y: Math.min(g.sy, pt.y), width: Math.abs(pt.x - g.sx), height: Math.abs(pt.y - g.sy) };
             setBox(r);
-            const hits = p.cards.filter((c) => intersects(c, r)).map((c) => c.id);
+            const hits = p.cards.filter((c) => intersects(shownRect(c), r)).map((c) => c.id);
             p.onSelect([...new Set([...g.base, ...hits])]);
         } else if (g.kind === "move") {
             const dx = (e.clientX - g.startX) / z;
@@ -423,9 +510,11 @@ function BoardCanvas(props: Props) {
             g.last = {
                 ...g.rect,
                 width,
-                height: g.ratio !== null
-                    ? Math.max(MIN_CARD_HEIGHT, width * g.ratio)
-                    : Math.max(MIN_CARD_HEIGHT, g.rect.height + (e.clientY - g.startY) / z),
+                height: g.widthOnly
+                    ? g.rect.height
+                    : g.ratio !== null
+                      ? Math.max(MIN_CARD_HEIGHT, width * g.ratio)
+                      : Math.max(MIN_CARD_HEIGHT, g.rect.height + (e.clientY - g.startY) / z),
             };
             p.onMoveCards(new Map([[g.id, g.last]]));
         } else if (g.kind === "link") {
@@ -454,12 +543,16 @@ function BoardCanvas(props: Props) {
     const onPointerUp = (e: React.PointerEvent) => {
         const g = gesture.current;
         gesture.current = null;
+        pendingCapture.current = null;
         setPanning(false);
         setBox(null);
         setJoinSection(null);
         if (!g) return;
         const p = propsRef.current;
-        if (g.kind === "move") {
+        if (g.kind === "box") {
+            // A click (not a selection drag) on empty space.
+            if (!g.shift && Math.abs(e.clientX - g.cx) + Math.abs(e.clientY - g.cy) < 4) p.onBackgroundClick?.();
+        } else if (g.kind === "move") {
             if (g.moved && g.last) p.onPlaceCards(g.last);
         } else if (g.kind === "resize") {
             if (g.last) p.onPlaceCards(new Map([[g.id, g.last]]));
@@ -481,8 +574,38 @@ function BoardCanvas(props: Props) {
     };
 
     const byId = new Map(cards.map((c) => [c.id, c]));
-    const linkingFrom = gesture.current?.kind === "link" ? byId.get(gesture.current.from) : undefined;
+    const rectById = new Map(cards.map((c) => [c.id, shownRect(c)]));
+    const linkingFrom = gesture.current?.kind === "link" ? rectById.get(gesture.current.from) : undefined;
     const selectedLink = links.find((l) => l.id === selectedLinkId);
+
+    /** The top bar's fold button and "⋯" menu of a card; menu actions cover the whole selection it is part of. */
+    const actionsFor = (c: BoardCard): CardActions => {
+        const ids = selected.has(c.id) && selectedIds.length > 1 ? selectedIds : [c.id];
+        const n = ids.length > 1 ? `（${ids.length} 張）` : "";
+        const menu: CardMenuEntry[] = [];
+        if (canAutoHeight(c))
+            menu.push({ label: "自動適應長度", checked: c.autoHeight, onClick: () => props.onSetDisplay(ids, { autoHeight: !c.autoHeight }) });
+        menu.push(
+            {
+                label: (c.collapsed ? "展開" : "摺疊") + n,
+                icon: c.collapsed ? "chevronDown" : "chevronRight",
+                onClick: () => props.onSetDisplay(ids, { collapsed: !c.collapsed }),
+            },
+            { label: "在側邊面板開啟", icon: "openExternal", keys: "Enter", onClick: () => props.onOpenCard(c.id) },
+            "sep",
+            { label: "複製" + n, keys: "Ctrl+C", onClick: () => props.onCopyCards(ids, false) },
+            { label: "剪下" + n, keys: "Ctrl+X", onClick: () => props.onCopyCards(ids, true) },
+            { label: "建立副本" + n, keys: "Ctrl+D", onClick: () => props.onDuplicateCards(ids) },
+            "sep",
+            { label: "從白板移除" + n, icon: "close", keys: "Delete", onClick: () => props.onRemoveCards(ids) },
+            { label: "完全刪除" + n, icon: "trash", keys: "Shift+Del", danger: true, onClick: () => props.onDeleteCards(ids) },
+        );
+        return {
+            menu,
+            onToggleFold: () => props.onSetDisplay([c.id], { collapsed: !c.collapsed }),
+            onMeasure: (h) => onMeasure(c.id, h),
+        };
+    };
 
     const segment = (a: Rect, b: Rect) => {
         const ca = center(a);
@@ -538,8 +661,8 @@ function BoardCanvas(props: Props) {
                         ))}
                     </defs>
                     {links.map((l) => {
-                        const a = byId.get(l.cardA);
-                        const b = byId.get(l.cardB);
+                        const a = rectById.get(l.cardA);
+                        const b = rectById.get(l.cardB);
                         if (!a || !b) return null;
                         const { p, q } = segment(a, b);
                         const sel = l.id === selectedLinkId;
@@ -579,7 +702,7 @@ function BoardCanvas(props: Props) {
                         );
                     })}
                     {linkingFrom && linkEnd && (() => {
-                        const target = linkEnd.target !== null ? byId.get(linkEnd.target) : undefined;
+                        const target = linkEnd.target !== null ? rectById.get(linkEnd.target) : undefined;
                         const { p, q } = target
                             ? segment(linkingFrom, target)
                             : { p: edgePoint(linkingFrom, linkEnd.x, linkEnd.y), q: linkEnd };
@@ -597,8 +720,7 @@ function BoardCanvas(props: Props) {
                             opened={c.id === props.openCardId}
                             linkTarget={linkEnd?.target === c.id || props.dropTargetId === c.id}
                             zoom={view.zoom}
-                            onDelete={props.onDeleteCard}
-                            onRemove={props.onRemoveCard}
+                            actions={actionsFor(c)}
                             onOpen={props.onOpenCard}
                             onEditData={props.onEditData}
                             onFit={(r) => props.onPlaceCards(new Map([[c.id, r]]))}
@@ -616,8 +738,7 @@ function BoardCanvas(props: Props) {
                             linkTarget={linkEnd?.target === c.id || props.dropTargetId === c.id}
                             onEdit={props.onEditCard}
                             onSave={props.onSaveCard}
-                            onDelete={props.onDeleteCard}
-                            onRemove={props.onRemoveCard}
+                            actions={actionsFor(c)}
                             onOpen={props.onOpenCard}
                             onOpenItem={props.onOpenItem}
                             onEditData={props.onEditData}
@@ -628,8 +749,8 @@ function BoardCanvas(props: Props) {
                 )}
 
                 {links.map((l) => {
-                    const a = byId.get(l.cardA);
-                    const b = byId.get(l.cardB);
+                    const a = rectById.get(l.cardA);
+                    const b = rectById.get(l.cardB);
                     if (!l.note || !a || !b) return null;
                     const { p, q } = segment(a, b);
                     return (
@@ -656,8 +777,8 @@ function BoardCanvas(props: Props) {
                     );
                 })}
 
-                {selectedLink && byId.get(selectedLink.cardA) && byId.get(selectedLink.cardB) && (() => {
-                    const { p, q } = segment(byId.get(selectedLink.cardA)!, byId.get(selectedLink.cardB)!);
+                {selectedLink && rectById.get(selectedLink.cardA) && rectById.get(selectedLink.cardB) && (() => {
+                    const { p, q } = segment(rectById.get(selectedLink.cardA)!, rectById.get(selectedLink.cardB)!);
                     // Sit above the note label when there is one.
                     const lift = selectedLink.note ? 22 : 0;
                     return (
@@ -793,8 +914,8 @@ interface CardViewProps {
     linkTarget: boolean;
     onEdit: (id: number, title: string, content: string) => void;
     onSave: (id: number) => void;
-    onDelete: (id: number) => void;
-    onRemove: (id: number) => void;
+    /** Fold button and "⋯" menu; null draws neither (card library). */
+    actions: CardActions | null;
     onOpen: (id: number) => void;
     onOpenItem: (itemId: number) => void;
     onEditData: (id: number, data: string) => void;
@@ -803,10 +924,63 @@ interface CardViewProps {
     zoom: number;
 }
 
+/** Cards whose citation list is opened (kept while the app runs). */
+const openRefs = new Set<number>();
+
 /** Below this zoom, cards switch to the overview (title + summary in a readable size). */
 const OVERVIEW_ZOOM = 0.55;
 
-function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, onDelete, onRemove, onOpen, onOpenItem, onEditData, overview, zoom }: CardViewProps) {
+/** What the top bar of a card on a board can do besides opening it. */
+export interface CardActions {
+    menu: CardMenuEntry[];
+    onToggleFold: () => void;
+    /** The card's drawn height, reported while it is folded or follows its content. */
+    onMeasure: (height: number) => void;
+}
+
+/** Reports the element's height while `on`. */
+function useReportHeight(ref: React.RefObject<HTMLElement | null>, on: boolean, report: ((h: number) => void) | undefined) {
+    const cb = useRef(report);
+    cb.current = report;
+    useEffect(() => {
+        const el = ref.current;
+        if (!el || !on) return;
+        const send = () => cb.current?.(el.offsetHeight);
+        send();
+        const ro = new ResizeObserver(send);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [ref, on]);
+}
+
+/** Left end of a card's top bar: fold / unfold, then open in the side panel. */
+function CardBarStart({ card, actions, onOpen }: { card: BoardCard; actions: CardActions | null; onOpen: (id: number) => void }) {
+    if (!actions) return null;
+    return (
+        <>
+            <button
+                className={`wb-card-btn wb-card-fold${card.collapsed ? " folded" : ""}`}
+                title={card.collapsed ? "展開卡片" : "摺疊卡片（只留標題列）"}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={actions.onToggleFold}
+            >
+                <Icon name={card.collapsed ? "chevronRight" : "chevronDown"} />
+            </button>
+            <button
+                className="wb-card-btn wb-card-open"
+                title="在側邊面板開啟（Enter）"
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={() => onOpen(card.id)}
+            >
+                <Icon name="openExternal" />
+            </button>
+        </>
+    );
+}
+
+function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, actions, onOpen, onOpenItem, onEditData, overview, zoom }: CardViewProps) {
     // Sticky notes: a coloured square of text, no title.
     const sticky = card.kind === "sticky";
     const stickyColor = sticky ? parseData<StickyData>(card.data).color ?? "yellow" : null;
@@ -818,7 +992,7 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
     const [clipped, setClipped] = useState(false);
     useEffect(() => {
         const el = previewRef.current;
-        if (!el || editing || overview) {
+        if (!el || editing || overview || card.autoHeight) {
             setClipped(false);
             return;
         }
@@ -828,18 +1002,34 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
         ro.observe(el);
         if (el.firstElementChild) ro.observe(el.firstElementChild);
         return () => ro.disconnect();
-    }, [editing, overview, card.content, card.height, card.width]);
+    }, [editing, overview, card.content, card.height, card.width, card.autoHeight, card.collapsed]);
     const summary = useMemo(() => (overview ? summarize(card.content, 90) : ""), [overview, card.content]);
     // Overview text grows as the board shrinks, so it stays readable on screen.
     const overviewScale = Math.min(2.6, 0.75 / zoom);
+    const folded = card.collapsed;
+    // Auto height (not while zoomed out, where the card shows only a summary).
+    const autoFit = card.autoHeight && !folded && !overview;
+    const rootRef = useRef<HTMLDivElement>(null);
+    useReportHeight(rootRef, folded || autoFit, actions?.onMeasure);
+    const foldedText = useMemo(() => (folded && sticky ? summarize(card.content, 60) : ""), [folded, sticky, card.content]);
+    // Cited items and annotations are folded into one line until opened (remembered per card).
+    const [refsOpen, setRefsOpen] = useState(() => openRefs.has(card.id));
+    const toggleRefs = () => {
+        const open = !refsOpen;
+        if (open) openRefs.add(card.id);
+        else openRefs.delete(card.id);
+        setRefsOpen(open);
+    };
 
     return (
         <div
-            className={`wb-card${sticky ? ` wb-sticky sticky-${stickyColor}` : ""}${selected ? " selected" : ""}${selected && multi ? " multi" : ""}${opened ? " opened" : ""}${linkTarget ? " link-target" : ""}${overview && !editing ? " overview" : ""}`}
+            className={`wb-card${sticky ? ` wb-sticky sticky-${stickyColor}` : ""}${selected ? " selected" : ""}${selected && multi ? " multi" : ""}${opened ? " opened" : ""}${linkTarget ? " link-target" : ""}${overview && !editing ? " overview" : ""}${folded ? " collapsed" : ""}${autoFit ? " auto-height" : ""}`}
+            ref={rootRef}
             data-card-id={card.id}
-            style={{ left: card.x, top: card.y, width: card.width, height: card.height }}
+            style={{ left: card.x, top: card.y, width: card.width, height: folded || autoFit ? undefined : card.height }}
         >
             <div className="wb-card-grip" data-role="grip" title="拖曳以移動（已選取多張時一起移動）">
+                <CardBarStart card={card} actions={actions} onOpen={onOpen} />
                 <Icon name="grip" className="wb-grip-dots" />
                 {sticky && (
                     <span className="wb-sticky-colors">
@@ -854,31 +1044,9 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
                         ))}
                     </span>
                 )}
-                <button
-                    className="wb-card-open"
-                    title="在側邊面板開啟（Enter）"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onOpen(card.id)}
-                >
-                    <Icon name="openExternal" />
-                </button>
-                <button
-                    className="wb-card-delete wb-card-trash"
-                    title="完全刪除卡片（Shift＋Delete）：從所有白板和卡片庫中刪除"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onDelete(card.id)}
-                >
-                    <Icon name="trash" />
-                </button>
-                <button
-                    className="wb-card-delete"
-                    title="從這個白板移除（Delete）：卡片仍保留在卡片庫"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onRemove(card.id)}
-                >
-                    <Icon name="close" />
-                </button>
+                {actions && <CardMenu entries={actions.menu} />}
             </div>
+            {folded && sticky && <div className="wb-card-folded-text">{foldedText || "（空白便利貼）"}</div>}
             {!sticky && <input
                 className="wb-card-title"
                 style={overview && !editing ? { fontSize: 14 * overviewScale } : undefined}
@@ -894,6 +1062,7 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
                     }
                 }}
             />}
+            {!folded && <>
             {card.tags.length > 0 && !(overview && !editing) && (
                 <div className="wb-card-tags">
                     {card.tags.map((t) => (
@@ -943,6 +1112,18 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
                 <div className="wb-card-more" title="還有更多內容：點一下內容編輯，或按 ↗ 在側邊面板查看全部">⋯</div>
             )}
             {(card.items.length > 0 || card.annotations.length > 0) && !(overview && !editing) && (
+                <button
+                    className={`wb-refs-toggle${refsOpen ? " open" : ""}`}
+                    title={refsOpen ? "收起引用" : "顯示引用的文獻與註解"}
+                    onClick={toggleRefs}
+                >
+                    <Icon name={refsOpen ? "chevronDown" : "chevronRight"} />
+                    <span>引用</span>
+                    {card.items.length > 0 && <span className="wb-refs-count">{card.items.length} 筆文獻</span>}
+                    {card.annotations.length > 0 && <span className="wb-refs-count">{card.annotations.length} 則註解</span>}
+                </button>
+            )}
+            {refsOpen && (card.items.length > 0 || card.annotations.length > 0) && !(overview && !editing) && (
                 <div className="wb-card-refs">
                     {card.items.map((it) => (
                         <button
@@ -968,8 +1149,9 @@ function CardView({ card, selected, multi, opened, linkTarget, onEdit, onSave, o
                     ))}
                 </div>
             )}
+            </>}
             <div className="wb-card-connect" data-role="connect" title="拖到另一張卡片以建立連結" />
-            <div className="wb-card-resize" data-role="resize" title="拖曳以調整大小" />
+            {!folded && <div className="wb-card-resize" data-role="resize" title={autoFit ? "拖曳以調整寬度（高度隨內容）" : "拖曳以調整大小"} />}
         </div>
     );
 }
@@ -983,8 +1165,7 @@ interface ObjectViewProps {
     opened: boolean;
     linkTarget: boolean;
     zoom: number;
-    onDelete: (id: number) => void;
-    onRemove: (id: number) => void;
+    actions: CardActions | null;
     onOpen: (id: number) => void;
     onEditData: (id: number, data: string, title?: string, content?: string) => void;
     onFit: (r: Rect) => void;
@@ -995,8 +1176,11 @@ interface ObjectViewProps {
     onInsertChart?: (range: string) => void;
 }
 
-function ObjectView({ card, selected, multi, opened, linkTarget, zoom, onDelete, onRemove, onOpen, onEditData, onFit, onError, findCard, onInsertChart }: ObjectViewProps) {
+function ObjectView({ card, selected, multi, opened, linkTarget, zoom, actions, onOpen, onEditData, onFit, onError, findCard, onInsertChart }: ObjectViewProps) {
     const info = kindInfo(card.kind);
+    const folded = card.collapsed;
+    const rootRef = useRef<HTMLDivElement>(null);
+    useReportHeight(rootRef, folded, actions?.onMeasure);
     const mindmap = card.kind === "mindmap";
     const table = card.kind === "table";
     /** Sized by their content: no resize corner, double-click edits inside. */
@@ -1012,7 +1196,8 @@ function ObjectView({ card, selected, multi, opened, linkTarget, zoom, onDelete,
         if (save && name !== card.title) onEditData(card.id, card.data, name);
     };
     let body: ReactNode = null;
-    if (card.kind === "image") body = <ImageBody cardId={card.id} data={card.data} title={card.title} />;
+    if (folded) body = null;
+    else if (card.kind === "image") body = <ImageBody cardId={card.id} data={card.data} title={card.title} />;
     else if (card.kind === "video") body = <VideoBody data={card.data} title={card.title} selected={active} />;
     else if (card.kind === "pdf")
         body = (
@@ -1060,12 +1245,14 @@ function ObjectView({ card, selected, multi, opened, linkTarget, zoom, onDelete,
         );
     return (
         <div
-            className={`wb-card wb-obj kind-${card.kind}${selected ? " selected" : ""}${selected && multi ? " multi" : ""}${opened ? " opened" : ""}${linkTarget ? " link-target" : ""}`}
+            className={`wb-card wb-obj kind-${card.kind}${selected ? " selected" : ""}${selected && multi ? " multi" : ""}${opened ? " opened" : ""}${linkTarget ? " link-target" : ""}${folded ? " collapsed" : ""}`}
+            ref={rootRef}
             data-card-id={card.id}
-            style={{ left: card.x, top: card.y, width: card.width, height: card.height }}
-            onDoubleClick={selfSized ? undefined : () => onOpen(card.id)}
+            style={{ left: card.x, top: card.y, width: card.width, height: folded ? undefined : card.height }}
+            onDoubleClick={selfSized && !folded ? undefined : () => onOpen(card.id)}
         >
             <div className="wb-card-grip wb-obj-grip" data-role="grip" title={`${info.label}：拖曳以移動；雙擊在側邊面板開啟`}>
+                <CardBarStart card={card} actions={actions} onOpen={onOpen} />
                 <Icon name={info.icon} className="wb-obj-kind" />
                 {renaming !== null ? (
                     <input
@@ -1098,37 +1285,14 @@ function ObjectView({ card, selected, multi, opened, linkTarget, zoom, onDelete,
                                 : undefined
                         }
                     >
-                        {card.kind === "image" ? "" : card.title || (renamable ? info.label : "")}
+                        {card.kind === "image" ? (folded ? card.title || info.label : "") : card.title || (renamable ? info.label : "")}
                     </span>
                 )}
-                <button
-                    className="wb-card-open"
-                    title="在側邊面板開啟（Enter）"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onOpen(card.id)}
-                >
-                    <Icon name="openExternal" />
-                </button>
-                <button
-                    className="wb-card-delete wb-card-trash"
-                    title="完全刪除（Shift＋Delete）：從所有白板和卡片庫中刪除"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onDelete(card.id)}
-                >
-                    <Icon name="trash" />
-                </button>
-                <button
-                    className="wb-card-delete"
-                    title="從這個白板移除（Delete）：仍保留在卡片庫"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onRemove(card.id)}
-                >
-                    <Icon name="close" />
-                </button>
+                {actions && <CardMenu entries={actions.menu} />}
             </div>
             {body}
             <div className="wb-card-connect" data-role="connect" title="拖到另一張卡片以建立連結" />
-            {!selfSized && <div className="wb-card-resize" data-role="resize" title="拖曳以調整大小" />}
+            {!selfSized && !folded && <div className="wb-card-resize" data-role="resize" title="拖曳以調整大小" />}
         </div>
     );
 }
@@ -1152,8 +1316,7 @@ export function CardFace({ card }: { card: BoardCard }) {
                 opened={false}
                 linkTarget={false}
                 zoom={1}
-                onDelete={noop}
-                onRemove={noop}
+                actions={null}
                 onOpen={noop}
                 onEditData={noop}
                 onFit={noop}
@@ -1170,8 +1333,7 @@ export function CardFace({ card }: { card: BoardCard }) {
             linkTarget={false}
             onEdit={noop}
             onSave={noop}
-            onDelete={noop}
-            onRemove={noop}
+            actions={null}
             onOpen={noop}
             onOpenItem={noop}
             onEditData={noop}

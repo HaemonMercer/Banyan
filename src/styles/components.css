@@ -5,6 +5,16 @@
 
 .muted { color: var(--muted); }
 
+/*
+ * Text fields can always be selected with the mouse, also inside areas that turn selection off
+ * (the board, tree rows, table cells…): `user-select: none` is inherited, and on an input it
+ * stops the caret from going where you click and stops drag-selecting part of the text.
+ */
+input, textarea, [contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
 /* ======================================================================
    Panes
    ====================================================================== */

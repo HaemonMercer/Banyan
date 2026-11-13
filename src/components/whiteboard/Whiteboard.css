@@ -1688,3 +1688,130 @@ g.hot > .wb-chart-hit { fill: color-mix(in srgb, var(--text) 5%, transparent); }
 .wb-ref-annot:hover { background: rgba(var(--annot), 0.3); border-color: rgb(var(--annot)); }
 .wb-ref-annot-mark { flex-shrink: 0; width: 8px; height: 8px; border-radius: 2px; background: rgb(var(--annot)); }
 .wb-annot-ref { border-left: 3px solid rgb(var(--annot)); padding-left: 4px; }
+
+/* ======================================================================
+   Card top bar: fold and open on the left, "⋯" menu on the right
+   ====================================================================== */
+.wb-card-grip { padding: 0 3px; gap: 1px; }
+.wb-grip-dots { margin: 0 auto; }
+.wb-card-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    height: 16px;
+    padding: 0 3px;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 16px;
+    cursor: pointer;
+}
+.wb-card:hover .wb-card-btn, .wb-card.selected .wb-card-btn,
+.wb-card-btn.active, .wb-card-fold.folded { display: inline-flex; }
+.wb-card-btn:hover, .wb-card-btn.active { color: var(--text); background: var(--pane); }
+.wb-card.wb-sticky .wb-card-btn { color: rgba(38, 37, 31, 0.55); }
+.wb-card.wb-sticky .wb-card-btn:hover, .wb-card.wb-sticky .wb-card-btn.active { color: #26251f; background: rgba(0, 0, 0, 0.07); }
+
+/* Folded: just the top bar and the title. */
+.wb-card.collapsed { height: auto; }
+.wb-card.collapsed .wb-card-title { padding-bottom: 7px; }
+.wb-card-folded-text {
+    padding: 0 14px 8px;
+    font-size: var(--fs-md);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #26251f;
+}
+.wb-card.wb-obj.collapsed .wb-obj-grip { height: 30px; padding-right: 4px; }
+.wb-card.wb-obj.collapsed .wb-obj-title { font-size: var(--fs-md); color: var(--text); font-weight: var(--fw-semibold); }
+.wb-card.kind-image.collapsed { background: var(--pane); border-color: var(--border); box-shadow: var(--shadow-xs); }
+.wb-card.kind-image.collapsed .wb-obj-grip { position: static; opacity: 1; background: transparent; }
+
+/* Auto height: the card grows and shrinks with its content. */
+.wb-card.auto-height { min-height: 60px; }
+.wb-card.auto-height .wb-card-md { flex: none; }
+
+/* The "⋯" menu (drawn on <body>, outside the board's zoom). */
+.wb-card-menu {
+    position: fixed;
+    z-index: var(--z-menu);
+    width: 220px;
+    box-sizing: border-box;
+    list-style: none;
+    margin: 0;
+    padding: var(--sp-1);
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-md);
+    color: var(--text);
+    font-size: var(--fs-md);
+    animation: bn-pop var(--dur) var(--ease);
+    user-select: none;
+}
+.wb-card-menu-item {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 5px 8px;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.wb-card-menu-item:hover { background: var(--hover); }
+.wb-card-menu-item.danger { color: var(--danger); }
+.wb-card-menu-item.danger:hover { background: var(--danger-soft); }
+.wb-card-menu-icon { display: inline-flex; width: 16px; justify-content: center; font-size: 15px; color: var(--text-2); flex-shrink: 0; }
+.wb-card-menu-item.danger .wb-card-menu-icon { color: inherit; }
+.wb-card-menu-item[aria-checked="true"] .wb-card-menu-icon { color: var(--accent); }
+.wb-card-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wb-card-menu-keys { color: var(--muted); font-size: var(--fs-xs); }
+.wb-card-menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+
+/* Citations on a card: one folded line ("▸ 引用 2 筆文獻 · 1 則註解"), opened on click. */
+.wb-refs-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    align-self: flex-start;
+    max-width: calc(100% - 16px);
+    margin: 0 8px 6px;
+    padding: 1px 6px 1px 3px;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--fs-xs);
+    line-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
+}
+.wb-refs-toggle:hover { background: var(--hover); color: var(--text-2); }
+.wb-refs-toggle .bn-icon { font-size: 11px; flex-shrink: 0; }
+.wb-refs-count + .wb-refs-count::before { content: "·"; margin-right: 4px; }
+.wb-refs-toggle.open { margin-bottom: 4px; }
+.wb-card.wb-sticky .wb-refs-toggle { color: rgba(38, 37, 31, 0.6); }
+.wb-card.wb-sticky .wb-refs-toggle:hover { background: rgba(0, 0, 0, 0.06); }
+
+/* Foldable lists in the right column and side panel (links, cited items, cited annotations). */
+.wb-fold-title { margin-left: -4px; }
+.wb-fold-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px 1px 2px;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+.wb-fold-btn:hover { background: var(--hover); }
+.wb-fold-btn .bn-icon { font-size: 13px; color: var(--muted); }

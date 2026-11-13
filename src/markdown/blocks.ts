@@ -884,6 +884,11 @@ export function parseDocument(input: string, options: ParseOptions = {}): Docume
             }
             case "paragraph":
             case "heading":
+                // `::bibliography` alone in a paragraph: the list of works cited.
+                if (b.type === "paragraph" && opts.bfm && /^::bibliography(?:\{[^}\n]*\})?$/.test(b.content.trim())) {
+                    node.type = "bibliography";
+                    return node;
+                }
                 if (b.type === "heading") node.level = b.level;
                 node.children = p.inline.parse(b.content, ctx, (i) => mapIndex(b, i));
                 return node;

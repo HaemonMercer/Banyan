@@ -164,9 +164,13 @@ function App() {
         const onCard = (e: Event) => openCard((e as CustomEvent<number>).detail, 0);
         window.addEventListener("banyan:open-annotation", onAnnotation);
         window.addEventListener("banyan:open-card", onCard);
+        // A citation or `[[@key]]` clicked: the cited item in Drawer.
+        const onItem = (e: Event) => openItem((e as CustomEvent<number>).detail);
+        window.addEventListener("banyan:open-item", onItem);
         return () => {
             window.removeEventListener("banyan:open-annotation", onAnnotation);
             window.removeEventListener("banyan:open-card", onCard);
+            window.removeEventListener("banyan:open-item", onItem);
         };
     });
 

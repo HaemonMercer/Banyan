@@ -125,3 +125,21 @@ export function extractTags(source: string): string[] {
     walk(parse(source).children);
     return [...seen];
 }
+
+/**
+ * Keys cited in a document (`[@key]`, `@key`, `[[@key]]`, `![[@key]]`), each once, in order of
+ * first appearance. Annotation keys (`key:h3`) are kept as written.
+ */
+export function extractCitations(source: string): string[] {
+    const seen = new Set<string>();
+    const walk = (nodes: MdNode[] | undefined) => {
+        for (const n of nodes ?? []) {
+            if (n.type === "citation") for (const c of n.cites ?? []) seen.add(c.key);
+            if (n.type === "wikiLink" && n.target?.startsWith("@")) seen.add(n.target.slice(1));
+            walk(n.children);
+            walk(n.titleChildren);
+        }
+    };
+    walk(parse(source).children);
+    return [...seen];
+}

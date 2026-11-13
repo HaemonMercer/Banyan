@@ -122,6 +122,8 @@ export interface ItemDetail extends ItemFields {
     attachments: Attachment[];
     /** Sorted by title. */
     related: RelatedItem[];
+    /** BibTeX-style citation key (`kahneman2011`), cited as `[@kahneman2011]`. */
+    citeKey: string;
     createdAt: number;
     updatedAt: number;
 }

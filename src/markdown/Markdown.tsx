@@ -13,7 +13,11 @@ import { memo, type ReactNode } from "react";
 import { Icon } from "../icons/Icon";
 import type { IconName } from "../icons/icons";
 import type { MdNode } from "./ast.ts";
-import { parse } from "./index.ts";
+import { bibtexCiteData } from "./bibtex.ts";
+import type { CiteData } from "./cite.ts";
+import { Bibliography, BibtexBlock, CitationView, CiteEmbed, CiteLink } from "./Citations";
+import { useCiteData } from "./citeStore";
+import { extractCitations, parse } from "./index.ts";
 import { useWikiLinkHandler } from "./links";
 import "./markdown.css";
 
@@ -76,6 +80,17 @@ function Markdown({ source, className, onWikiLink: onWikiLinkProp, onTag }: Mark
     const fromContext = useWikiLinkHandler();
     const onWikiLink = onWikiLinkProp ?? fromContext ?? undefined;
     const doc = parse(source);
+
+    // Citations: entries written in the document (```bibtex) win over Drawer's.
+    const local = new Map<string, CiteData>();
+    for (const b of doc.children) {
+        if (b.type === "codeBlock" && /^(bibtex|bib|biblatex)$/i.test((b.info ?? "").split(/\s+/)[0])) {
+            for (const d of bibtexCiteData(b.value ?? "")) local.set(d.key, d);
+        }
+    }
+    const citedKeys = extractCitations(source);
+    const fromStore = useCiteData(citedKeys.filter((k) => !local.has(k)));
+    const lookup = (key: string) => local.get(key) ?? fromStore(key);
 
     const inline = (nodes: MdNode[] | undefined): ReactNode[] =>
         (nodes ?? []).map((n, i) => {
@@ -150,7 +165,12 @@ function Markdown({ source, className, onWikiLink: onWikiLinkProp, onTag }: Mark
                             dangerouslySetInnerHTML={{ __html: renderMath(n.value ?? "", !!n.display) }}
                         />
                     );
+                case "citation":
+                    return <CitationView key={i} node={n} lookup={lookup} />;
                 case "wikiLink": {
+                    if (n.target?.startsWith("@")) {
+                        return n.embed ? <CiteEmbed key={i} node={n} lookup={lookup} /> : <CiteLink key={i} node={n} lookup={lookup} />;
+                    }
                     const text = n.label || n.target || "";
                     return (
                         <a
@@ -269,8 +289,11 @@ function Markdown({ source, className, onWikiLink: onWikiLinkProp, onTag }: Mark
                     <ul key={i}>{items}</ul>
                 );
             }
+            case "bibliography":
+                return <Bibliography key={i} keys={citedKeys} lookup={lookup} />;
             case "codeBlock": {
                 const lang = (n.info ?? "").split(/\s+/)[0];
+                if (/^(bibtex|bib|biblatex)$/i.test(lang)) return <BibtexBlock key={i} source={n.value ?? ""} start={n.start} />;
                 if (lang === "math") {
                     return (
                         <div

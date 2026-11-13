@@ -39,6 +39,11 @@ fn v15_library(dir: &Path) {
          DROP TABLE card_annotations;
          DROP TABLE annotations;
          ALTER TABLE attachments DROP COLUMN mirror_of;
+         ALTER TABLE board_cards DROP COLUMN collapsed;
+         ALTER TABLE board_cards DROP COLUMN auto_height;
+         DROP INDEX idx_items_cite_key;
+         ALTER TABLE items DROP COLUMN cite_key;
+         ALTER TABLE items DROP COLUMN cite_key_manual;
          PRAGMA user_version = 15;",
     )
     .unwrap();
@@ -50,7 +55,7 @@ fn upgrade_makes_a_backup_and_says_so() {
     v15_library(&root);
     let mut lib = Library::open(&root).unwrap();
     let notice = lib.notice.take().expect("upgrade is reported");
-    assert!(notice.contains("第 15 版升級到第 18 版"), "{notice}");
+    assert!(notice.contains(&format!("第 15 版升級到第 {SCHEMA_VERSION} 版")), "{notice}");
 
     let backups = db::list_backups(&lib.backup_dir());
     assert_eq!(backups.len(), 1);
@@ -67,6 +72,15 @@ fn upgrade_makes_a_backup_and_says_so() {
     assert_eq!(title, "SICP");
     // The database itself is current.
     assert_eq!(version(&root.join("banyan.db")), SCHEMA_VERSION);
+    assert!(!has_column(&backups[0], "board_cards", "collapsed"));
+    assert!(has_column(&root.join("banyan.db"), "board_cards", "collapsed"));
+    assert!(has_column(&root.join("banyan.db"), "board_cards", "auto_height"));
+    // v20: existing items get citation keys.
+    let key: String = Connection::open(root.join("banyan.db"))
+        .unwrap()
+        .query_row("SELECT cite_key FROM items", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(key, "sicp");
     drop(lib);
 
     // Opening an up-to-date database neither reports nor backs up anything.
@@ -177,7 +191,7 @@ fn restoring_a_backup_brings_back_the_old_data() {
     assert_eq!(backups[0].version, 15);
     assert!(!backups[0].before_restore);
     let message = lib.restore_backup(&backups[0].name).unwrap();
-    assert!(message.contains("第 15 版") && message.contains("升級到第 18 版"), "{message}");
+    assert!(message.contains("第 15 版") && message.contains(&format!("升級到第 {SCHEMA_VERSION} 版")), "{message}");
     assert_eq!(lib.notice.as_deref(), Some(message.as_str()));
 
     // The backup's data, upgraded to the current schema.
