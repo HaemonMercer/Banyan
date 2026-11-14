@@ -181,7 +181,8 @@ fn unique_key(conn: &Connection, base: &str, except: i64) -> rusqlite::Result<St
 /// Whether any card's text mentions `@key`.
 fn key_used(conn: &Connection, key: &str) -> rusqlite::Result<bool> {
     conn.query_row(
-        r"SELECT EXISTS (SELECT 1 FROM cards WHERE content LIKE ?1 ESCAPE '\')",
+        r"SELECT EXISTS (SELECT 1 FROM cards WHERE content LIKE ?1 ESCAPE '\')
+                OR EXISTS (SELECT 1 FROM desk_documents WHERE markdown LIKE ?1 ESCAPE '\')",
         [like_pattern(&format!("@{key}"))],
         |r| r.get(0),
     )
@@ -559,14 +560,25 @@ pub fn set_cite_key(state: State<'_, DrawerState>, item_id: i64, key: String) ->
     let tx = conn.transaction()?;
     tx.execute("UPDATE items SET cite_key = ?1, cite_key_manual = 1 WHERE id = ?2", params![key, item_id])?;
     if !old.is_empty() && old != key {
+        let pattern = like_pattern(&format!("@{old}"));
         let cards = tx
             .prepare(r"SELECT id, content FROM cards WHERE content LIKE ?1 ESCAPE '\'")?
-            .query_map([like_pattern(&format!("@{old}"))], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .query_map([&pattern], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, content) in cards {
             let updated = rewrite_key(&content, &old, &key);
             if updated != content {
                 tx.execute("UPDATE cards SET content = ?1 WHERE id = ?2", params![updated, id])?;
+            }
+        }
+        let documents = tx
+            .prepare(r"SELECT id, markdown FROM desk_documents WHERE markdown LIKE ?1 ESCAPE '\'")?
+            .query_map([&pattern], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, markdown) in documents {
+            let updated = rewrite_key(&markdown, &old, &key);
+            if updated != markdown {
+                tx.execute("UPDATE desk_documents SET markdown = ?1 WHERE id = ?2", params![updated, id])?;
             }
         }
     }

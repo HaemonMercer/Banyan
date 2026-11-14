@@ -2,6 +2,7 @@ pub mod annotations;
 pub mod citations;
 pub mod card_files;
 pub mod db;
+pub mod desk;
 pub mod drawer;
 pub mod file_protocol;
 pub mod history;
@@ -74,6 +75,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             update_endpoints,
+            desk::list_desk_documents,
+            desk::create_desk_document,
+            desk::update_desk_document,
+            desk::delete_desk_document,
+            desk::import_desk_markdown,
+            desk::export_desk_markdown,
+            desk::export_desk_word,
             drawer::list_collections,
             drawer::create_collection,
             drawer::rename_collection,

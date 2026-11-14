@@ -30,7 +30,7 @@ function LibraryPanel() {
         const ok = await ask({
             title: `還原 ${formatTime(b.createdAt)} 的備份？`,
             message:
-                "資料庫會回到那時的內容，之後新增或修改的條目、卡片、白板與註解都會消失。\n" +
+                "資料庫會回到那時的內容，之後新增或修改的條目、卡片、白板、註解與 Desk 檔案都會消失。\n" +
                 "還原前，目前的資料庫會先另存一份到備份資料夾，需要時可以再還原回來。\n" +
                 "附件檔案（storage 資料夾）不會變動：之後才加入的附件檔案會留在資料夾中，但不再出現在 Banyan 裡。",
             confirm: "還原",

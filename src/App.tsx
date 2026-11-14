@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import DrawerView from "./components/DrawerView.tsx";
+import DeskView from "./components/desk/DeskView.tsx";
 import WhiteboardView from "./components/WhiteboardView.tsx";
 import AnnotatorView from "./components/annotator/AnnotatorView.tsx";
 import AnnotationUndo from "./annotator/AnnotationUndo.tsx";
@@ -14,12 +15,13 @@ import TabBar from "./components/tabs/TabBar.tsx";
 import FileTab from "./components/tabs/FileTab.tsx";
 import { OPEN_TAB_EVENT, setHomeActive, type FileTabInfo } from "./tabs";
 
-type Module = "drawer" | "whiteboard" | "annotator" | "settings";
+type Module = "drawer" | "whiteboard" | "annotator" | "desk" | "settings";
 
 const MODULES: { id: Module; icon: IconName; label: string }[] = [
     { id: "drawer", icon: "drawer", label: "Drawer" },
     { id: "whiteboard", icon: "whiteboard", label: "Whiteboard" },
     { id: "annotator", icon: "annotator", label: "Annotator" },
+    { id: "desk", icon: "file", label: "Desk" },
 ];
 
 const STORAGE_KEY = "banyan.module";
@@ -27,7 +29,7 @@ const STORAGE_KEY = "banyan.module";
 function savedModule(): Module {
     try {
         const v = localStorage.getItem(STORAGE_KEY);
-        if (v === "drawer" || v === "whiteboard" || v === "annotator" || v === "settings") return v;
+        if (v === "settings" || MODULES.some((module) => module.id === v)) return v as Module;
     } catch {
         /* storage unavailable */
     }
@@ -50,6 +52,7 @@ function savedTabs(): { tabs: FileTabInfo[]; active: number | null } {
 
 function App() {
     const [module, setModule] = useState<Module>(savedModule);
+    const beforeLeavingDesk = useRef<(() => Promise<boolean>) | null>(null);
     const [theme, setTheme] = useTheme();
     /** Settings stays mounted once opened, so an update download survives switching modules. */
     const [settingsOpened, setSettingsOpened] = useState(module === "settings");
@@ -133,7 +136,8 @@ function App() {
         return () => window.removeEventListener("keydown", onKey, true);
     }, [tabs, activeTab, closeTabs]);
 
-    const choose = (m: Module) => {
+    const choose = async (m: Module) => {
+        if (m !== "desk" && beforeLeavingDesk.current && !await beforeLeavingDesk.current()) return;
         setActiveTab(null);
         setModule(m);
         if (m === "settings") setSettingsOpened(true);
@@ -233,6 +237,8 @@ function App() {
                     />
                 ) : module === "annotator" ? (
                     <AnnotatorView key={nav.key} initialAnnotationId={nav.annotationId ?? null} onOpenItem={openItem} />
+                ) : module === "desk" ? (
+                    <DeskView beforeLeave={beforeLeavingDesk} />
                 ) : (
                     <WhiteboardView key={nav.key} initialCard={nav.card} onOpenItem={openItem} />
                 )}

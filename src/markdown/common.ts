@@ -60,9 +60,11 @@ export function normalizeReference(label: string): string {
 
 const reUrlSafe = /[A-Za-z0-9;/?:@&=+$,\-_.!~*'()#]/;
 const reHex2 = /^[0-9A-Fa-f]{2}/;
+const reAllUrlSafe = /^[A-Za-z0-9;/?:@&=+$,\-_.!~*'()#]*$/;
 
 /** Percent-encodes a URL the way commonmark.js does (existing `%XX` kept). */
 export function normalizeURI(uri: string): string {
+    if (reAllUrlSafe.test(uri)) return uri;
     let out = "";
     for (let i = 0; i < uri.length; i++) {
         const ch = uri[i];

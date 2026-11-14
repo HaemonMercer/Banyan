@@ -844,7 +844,7 @@ function listsMatch(a: ListData, b: ListData): boolean {
 // ---- phase 2: convert to the public tree and parse inlines --------------------------------------
 
 export function parseDocument(input: string, options: ParseOptions = {}): Document {
-    const opts: Required<ParseOptions> = { gfm: options.gfm ?? true, bfm: options.bfm ?? true };
+    const opts: Required<ParseOptions> = { gfm: options.gfm ?? true, bfm: options.bfm ?? true, deskDecorations: options.deskDecorations ?? false };
     const p = new BlockParser(opts);
     const root = p.parse(input);
     const ctx: InlineContext = { refmap: p.refmap, footnotes: p.footnoteLabels, footnoteOrder: [] };

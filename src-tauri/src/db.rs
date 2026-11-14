@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 
 /// Bump this and append a migration step whenever the schema changes.
-pub const SCHEMA_VERSION: i32 = 20;
+pub const SCHEMA_VERSION: i32 = 22;
 /// Folder next to the database file that holds the copies made before upgrades.
 pub const BACKUP_DIR: &str = "backups";
 /// How many pre-upgrade copies are kept (the oldest are removed).
@@ -586,6 +586,18 @@ fn migrate_steps(conn: &Connection, version: i32) -> rusqlite::Result<()> {
         )?;
         crate::citations::fill_missing(conn)?;
         conn.execute_batch("CREATE UNIQUE INDEX idx_items_cite_key ON items(cite_key) WHERE cite_key <> '';")?;
+    }
+    // v21 reserved the schema version used by the short-lived Base build.
+    if version < 22 {
+        conn.execute_batch(
+            "CREATE TABLE desk_documents (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 kind TEXT NOT NULL CHECK(kind IN ('document', 'sheet', 'slides')),
+                 title TEXT NOT NULL,
+                 markdown TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );",
+        )?;
     }
     Ok(())
 }

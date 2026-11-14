@@ -195,6 +195,7 @@ fn cards_cite_annotations() {
              ALTER TABLE items DROP COLUMN cite_key;
              ALTER TABLE items DROP COLUMN cite_key_manual;
              ALTER TABLE annotations DROP COLUMN seq;
+             DROP TABLE desk_documents;
              PRAGMA user_version = 17;",
         )
         .unwrap();

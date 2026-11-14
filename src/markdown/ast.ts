@@ -23,9 +23,17 @@ export type BlockType =
     | "tableCell"
     | "footnoteDef"
     | "commentBlock"
-    | "bibliography";
+    | "bibliography"
+    | "layout"
+    | "pageBreak"
+    | "toc";
 
 export type InlineType =
+    | "underline"
+    | "superscript"
+    | "subscript"
+    /** Desk `::style(name){…}`: `name` as written; Desk sets `value` once the style is found. */
+    | "deskStyle"
     | "text"
     | "softBreak"
     | "hardBreak"
@@ -49,6 +57,8 @@ export type NodeType = BlockType | InlineType;
 export type Align = "left" | "center" | "right" | null;
 
 export interface MdNode {
+    /** Relative widths of Desk columns, in source order. */
+    columnWidths?: number[];
     type: NodeType;
     /** Source offsets (inline offsets inside escapes/entities are approximate). */
     start: number;
@@ -112,6 +122,8 @@ export interface LinkRef {
 }
 
 export interface ParseOptions {
+    /** Desk named styles in running text. */
+    deskDecorations?: boolean;
     /** GFM extensions: tables, strikethrough, task lists, extended autolinks, footnotes. Default true. */
     gfm?: boolean;
     /** Banyan extensions: `==`, `[[ ]]`, `#tag`, `$math$`, `%% %%`, `> [!note]`. Default true. */

@@ -359,6 +359,7 @@ fn old_authors_migrate_to_creators() {
              DROP INDEX idx_items_cite_key;
              ALTER TABLE items DROP COLUMN cite_key;
              ALTER TABLE items DROP COLUMN cite_key_manual;
+             DROP TABLE desk_documents;
              PRAGMA user_version = 3;",
         )
         .unwrap();
@@ -423,6 +424,7 @@ fn old_notes_become_cards() {
              DROP INDEX idx_items_cite_key;
              ALTER TABLE items DROP COLUMN cite_key;
              ALTER TABLE items DROP COLUMN cite_key_manual;
+             DROP TABLE desk_documents;
              PRAGMA user_version = 5;",
         )
         .unwrap();
@@ -917,6 +919,7 @@ fn upgrade_copies_existing_literature_attachments() {
              DROP INDEX idx_items_cite_key;
              ALTER TABLE items DROP COLUMN cite_key;
              ALTER TABLE items DROP COLUMN cite_key_manual;
+             DROP TABLE desk_documents;
              PRAGMA user_version = 15;",
         )
         .unwrap();

@@ -1,11 +1,11 @@
 ﻿# Banyan Flavored Markdown
 Banyan Flavored Markdown（BFM）以 Obsidian 的 Markdown 為基礎（CommonMark ＋ GFM ＋ Obsidian 擴充），再加上兩類東西：
 1. **引用 Banyan 的物件**：文獻、檔案、註解都有 BibTeX 式的**引用鍵**（`@kahneman2011`），用同一套 `@` 語法引用；卡片與白板用內部 id。
-2. **進階排版**：字型、分欄、分頁、注音、直排、圖表編號、文獻引用，給之後的 Writer、Publisher、Slides 使用。
+2. **進階排版**：字型、分欄、分頁、注音、直排、圖表編號、文獻引用，Desk 已提供文件及簡報排版，其他擴充見後文。
 
 使用者看到的是 **Notion 風格的所見即所得編輯器**（見「編輯器」）：由區塊組成、打字時自動轉成格式，不需要看到原始符號。BFM 是編輯器**存檔的格式**，也是匯出、貼上、進階使用者切換「原始碼」時看到的文字。
 
-> 狀態（2026-11-13）：引擎核心（企劃書 P0a）與所見即所得編輯器（P0b）已實作，程式在 `src/markdown/`。卡片已用它顯示與編輯：基礎語法、GFM（表格、刪除線、待辦、自動連結、腳註）、螢光筆與顏色、`[[ ]]`（卡片，存檔時建立卡片連結）、`#標籤`、數學式、提示框、`%% %%`、中文規則；編輯器有打字時自動轉換、快速鍵、`[[` 與 `@` 建議、雙擊編輯原文、貼上 Markdown。**引用鍵與書目已實作**：條目與註解的引用鍵（資料庫 v20）、`[@…]`／`@鍵`（APA）、`[[@鍵]]`、`![[@鍵]]`（條目卡片與引文；檔案的預覽尚未）、`::bibliography`、```` ```bibtex ```` 文件內書目、`.bib` 匯入匯出；引用格式只有 APA，`bibliography:` 文件屬性與「鍵轉成拼音」尚未。尚未實作：「編輯器」一章的 `/` 選單、區塊把手與拖曳分欄、浮動工具列、原始碼模式、`![[card:…]]`／`![[file…]]` 真正嵌入、屬性 `{…}` 與指令、上下標、`^段落標記`、行內腳註 `^[…]`、進階排版、交互參照、文件屬性、投影片、匯出。
+> 狀態（2026-11-13）：引擎核心（企劃書 P0a）與所見即所得編輯器（P0b）已實作，程式在 `src/markdown/`。卡片已用它顯示與編輯：基礎語法、GFM（表格、刪除線、待辦、自動連結、腳註）、螢光筆與顏色、`[[ ]]`（卡片，存檔時建立卡片連結）、`#標籤`、數學式、提示框、`%% %%`、中文規則；編輯器有打字時自動轉換、快速鍵、`[[` 與 `@` 建議、雙擊編輯原文、貼上 Markdown。**引用鍵與書目已實作**：條目與註解的引用鍵（資料庫 v20）、`[@…]`／`@鍵`（APA）、`[[@鍵]]`、`![[@鍵]]`（條目卡片與引文；檔案的預覽尚未）、`::bibliography`、```` ```bibtex ```` 文件內書目、`.bib` 匯入匯出；引用格式只有 APA，`bibliography:` 文件屬性與「鍵轉成拼音」尚未。尚未實作：「編輯器」一章的 `/` 選單、區塊把手與拖曳分欄、浮動工具列、原始碼模式、`![[card:…]]`／`![[file…]]` 真正嵌入、屬性 `{…}` 與指令、上下標、`^段落標記`、行內腳註 `^[…]`、部分進階排版與交互參照。Desk 現行支援見「Desk 已實作語法」。
 
 ---
 
@@ -376,8 +376,170 @@ CommonMark 0.31 ＋ GFM，加上 Obsidian 常用的擴充。
 
 ---
 
-# 進階排版
-這些語法主要給 Writer、Publisher、Slides 使用；在卡片中也能用，但有些（分頁、分欄）只在排版輸出時有效果，卡片上以提示線表示。
+# Desk 已實作語法
+
+Desk 的文件與簡報共用 BFM。從檔名列切換「Markdown」與「預覽／放映」。以下排版指令由 Desk 的預覽與放映解析。
+
+## 文件開頭的 YAML
+
+~~~yaml
+---
+mode: writer
+page:
+  paper: a4
+  orientation: landscape
+  padding: (20, 18, 20, 18)
+  columns: 2
+  columnGap: 10
+  columnRule: true
+  color: "#ffffff"
+  header:
+    left: [研究報告]
+    center: []
+    right: [草稿]
+  footer:
+    center: [pageNumber]
+  pageNumbers: true
+  differentFirstPage: true
+---
+~~~
+
+- `mode: writer` 開啟紙張預覽與文件匯出。`mode: slides` 開啟簡報放映，正文用獨立的 `---` 分隔投影片。缺少模式時沿用原檔案類型。
+- `orientation: landscape` 橫向，省略或 `portrait` 為直向。
+- `columns`（1～4）把整份文件的正文分成多欄，由左到右填滿後換頁；`columnGap` 是欄距（mm，預設 8），`columnRule: true` 在欄間畫分隔線。只想讓一段內容分欄，用 `::Col`。
+- `differentFirstPage: true` 讓第一頁不顯示頁首與頁尾（封面）。
+- 和預設相同的方向、欄數、欄距、分隔線與首頁設定不寫進 YAML。
+- `paper` 支援 `a3`、`a4`、`a5`、`b5`（JIS B5）、`letter`、`legal`。`padding` 以 mm 計，`18` 表示四邊相同，`(20, 18, 20, 18)` 依上、右、下、左排列，也可用 `top`、`right`、`bottom`、`left` 對照表。
+- 頁首和頁尾各有左、中、右三區。各區可寫文字或文字清單。`pageNumber` 會帶入目前頁碼，`pageNumbers: false` 可停用。頁首和頁尾會隨留白移動。
+
+## 樣式組
+
+在 YAML 的 `Style:` 下定義樣式組，`Default Style:` 指定其中一組為文件的預設樣式。正文用 `::push(樣式組)` 開始套用，`::pop()` 回到上一層。樣式組裡只寫要改的部分，沒寫的沿用外層，像 CSS 一樣繼承。每個樣式通常寫成一行。
+
+~~~markdown
+---
+Default Style: Default
+Style:
+  Default:
+    normal: 11pt "Microsoft JhengHei" line-height 1.6 after 6pt
+    h1: 22pt
+  Report:
+    normal: "Noto Serif TC" indent 2em justify
+    bold: #c0392b
+    h1: 24pt bold center
+    Key Point: 14pt #2f7a55 bold shortcut Ctrl+Alt+1
+  Appendix:
+    based-on: Report
+    normal: 10pt
+---
+
+::push(Report)
+**粗體** 與 ::style(Key Point){重點文字}
+::pop()
+~~~
+
+### 一行寫法
+
+| 寫法 | 意思 |
+|---|---|
+| `11pt`、`11`、`1.2em`、`120%` | 字級（純數字以 pt 計） |
+| `#c0392b`、`#333` | 文字色，不必加引號；`#c0392b80`、`#f008` 為半透明（最後兩碼或一碼是不透明度） |
+| `"Noto Serif TC"`、`Microsoft JhengHei` | 字型；含空白的名稱可加引號，連續的一般字詞會合成一個字型名稱 |
+| `bold`／`regular`、`italic`／`upright` | 粗體／一般、斜體／正體 |
+| `underline`、`strike` | 底線、刪除線 |
+| `left`、`center`、`right`、`justify` | 段落對齊 |
+| `uppercase`、`lowercase`、`capitalize`、`small-caps` | 大小寫、小型大寫 |
+| `line-height 1.7`、`spacing 1pt` | 行高（倍數）、字距 |
+| `indent 2em`、`left-indent 12pt`、`right-indent 12pt` | 首行縮排、左右縮排 |
+| `before 6pt`、`after 6pt` | 段前、段後 |
+| `background #fff3a3`、`background transparent`、`weight 300`、`decoration none` | 其他以「名稱 值」寫的屬性；`transparent` 為完全透明 |
+
+### 名稱
+
+- `normal` 是樣式組的正文：字型、字級、顏色、行高套用到全部文字；寫在 `normal` 的對齊、縮排、段前段後套用到段落。
+- 內建標記：`bold`、`italic`、`underline`、`strike`、`highlight`、`code`、`link`、`superscript`、`subscript`。
+- 段落：`h1`～`h6`（或 `heading1`～`heading6`）、`heading`（所有標題）、`quote`（引言）、`list`（清單項目）、`table`。
+- 其他名稱都是自訂文字樣式，用 `::style(名稱){文字}` 套用。
+- 自訂文字樣式可加快捷鍵：一行寫法寫 `shortcut Ctrl+Alt+1`，逐行寫法寫 `shortcut: Ctrl+Alt+1`。在 Markdown 原始碼按下時，套用游標所在樣式組中有這個快捷鍵的樣式：有選取時包成 `::style(名稱){…}`，沒有選取時插入 `::style(名稱){}`。快捷鍵要包含 Ctrl、Alt 或 Meta，Banyan 與編輯器已用的組合（Ctrl+B、Ctrl+1 等）會被忽略。
+- `based-on: 另一個樣式組` 先沿用那一組的全部設定，再用這一組寫的覆寫。可以一層接一層沿用；互相沿用形成迴圈時會在迴圈處停止。
+- 樣式組與樣式名稱忽略空白與大小寫：`style A`、`styleA`、`Style a` 是同一個。
+- 名稱建議用英文（中文也可以）：新文件的預設樣式組叫 `Default`，面板新增的樣式組與自訂樣式依序叫 `Style 1`、`Custom 1`。
+
+### 套用
+
+- `::push(…)`、`::pop()` 各佔一行，前後不必空行；可巢狀，也可跨越 `::page`。內層樣式組優先，沒寫到的沿用外層。寫在 `::box`、分欄等區塊裡的 `::push` 只作用到該區塊結束。
+- `::style(名稱){文字}` 套用**目前樣式組**的自訂文字樣式，大括號內可寫行內 Markdown。目前樣式組沒有這個名稱時，文字照常顯示，並在編輯器標出警告。
+- 多出來的 `::pop()` 會保留為文字；沒有 `::pop()` 的 `::push` 會套用到文件結尾。
+- `Default Style: 樣式組名稱` 指定文件的預設樣式：那一組不用 `::push` 就套用到整份文件，其他 `::push` 疊在它上面；在任何 `::push` 外，`::style(名稱)` 也在這一組裡找。任何樣式組都可以設為預設；目前的預設樣式不能刪除（先把其他樣式組設為預設），改名時 `Default Style:` 會一起更新。新文件會寫好 `Default Style: Default` 和一組常用設定。沒有 `Default Style:` 時，名為 `Default`（或舊的 `預設`）的樣式組視為預設，`based-on: 預設`、`::push(預設)` 也仍找得到預設樣式組；之前寫在頂層 `Default:` 區塊的設定仍然有效，第一次在面板修改時會改成 `Style:` 下的 `Default` 樣式組加上 `Default Style: Default`。
+- 也可以在「常用」功能區調整：「樣式」群組跟著游標，直接改字型、字級與文字色，或切換、移除段落的樣式組；新增樣式組、基於（`based-on`）與其他設定按設定按鈕開啟彈窗。面板會直接改寫上面的 YAML，新寫的項目用一行寫法。
+
+### 舊寫法
+
+以下寫法仍可讀取：分成 `text:`、`paragraph:` 兩層，或每個屬性各佔一行。
+
+~~~yaml
+Style:
+  報告:
+    text:
+      bold:
+        color: "#c0392b"
+        size: 12
+    paragraph:
+      heading1:
+        size: 24
+        align: center
+~~~
+
+長寫法的屬性名稱可用簡寫、連字號或駝峰寫法：`size`／`font-size`、`font`／`font-family`、`weight`、`bold: true`、`italic: true`、`underline: true`、`color`、`background`／`highlightColor`、`line-height`、`letter-spacing`、`word-spacing`、`align`、`indent`、`margin-top`、`margin-bottom`、`margin-left`、`margin-right`、`transform`、`variant`、`vertical-align`。含分號、大括號、引號或 `url(…)` 的值會被略過。
+
+## 區塊排版
+
+~~~markdown
+::left{靠左}
+
+::center{置中}
+
+::right{靠右}
+
+::justify{左右對齊}
+
+::box{
+# 框內標題
+
+框內可寫 **Markdown**。
+}
+
+::Col(3:1:1)
+{主欄
+## 欄內標題
+},
+{第二欄}
+{第三欄}
+
+::page
+
+::toc
+
+::refs
+~~~
+
+- 對齊用 `::left{}`、`::center{}`、`::right{}`、`::justify{}` 包住段落；常用的對齊按鈕有選取時只包住選取的文字（前後文字各自成段；剛好選取整個對齊區塊的內容時原地切換），沒有選取時包住游標所在段落，在已對齊的區塊內則原地切換。縮排、段前段後與行高請在樣式組的 `paragraph` 設定（常用段落格式的設定按鈕會開啟「更多樣式」並選好游標所在段落的項目）。
+- `::Col()` 的每組外層大括號代表一欄，逗號可省略，欄位可分行。比例省略時等寬，指定比例時數字須為正，個數須與欄數相同。
+- `::page` 建立手動分頁，`::toc` 產生到第三級的目錄，`::refs` 列出參考文獻。相容寫法包含 `::pagebreak`、`::toc{depth=3}` 和 `::bibliography`。
+- 舊版 `::box`、對齊與分欄的多行區塊仍可使用。未關閉的區塊標記會保留為文字，後續指令仍可解析。
+
+## 素材、編輯與匯出
+
+- 「插入」可嵌入本機或 Drawer 檔案庫圖片，圖片會隨 Markdown 匯出。也可用 `![替代文字](網址)`。本機與 Drawer 圖片支援 PNG、JPEG、GIF、WebP、BMP、AVIF，單張上限 10 MB。
+- Drawer 文獻可用 `[@引用鍵]` 插入 APA 引用。用 `![[@引用鍵]]` 插入來源卡或 Annotator 標註，點擊可回到來源。
+- 在「Markdown」可用 Ctrl＋Space 開啟補全（含樣式組與樣式名稱）、Ctrl＋B／Ctrl＋I 切換粗體與斜體，以及 Alt＋Shift＋F 整理 YAML、Markdown 標題與 JSON 程式碼區塊。
+- 清單縮排：在清單項目上按 Tab 會把項目（連同它底下的內容與子項目）移到上一個項目的文字開頭，成為子項目——`- ` 縮 2 格、`2. ` 縮 3 格、`10. ` 縮 4 格，所以有序清單也能正確分層；新的有序子清單從 1 開始，留下的項目接著編號。Shift＋Tab 移回上一層，原本在它後面的同層項目變成它的子清單並從 1 編號。選取多個項目可一起縮排。清單第一項沒有可以放在底下的項目，Tab 不動作。Enter 會延續清單並自動編號。YAML 與程式碼區塊內的 Tab 維持一般縮排。
+- PDF 透過列印視窗另存。Word 匯出保留可編輯文字與表格，圖片目前以替代文字呈現。預覽按手動分頁顯示，PDF 和 Word 會依輸出結果分頁。
+
+---
+
+# 進階排版規劃
+以下記錄較早的通用 BFM 排版提案。Desk 可用寫法見上方「Desk 已實作語法」。
 
 ## 文字樣式（行內區段）
 `[文字]{屬性}` 可以用的屬性：
@@ -498,7 +660,7 @@ LaTeX 語法，使用 KaTeX 顯示。
 
 ---
 
-# 文件屬性
+# 文件屬性規劃
 文件最開頭用 `---` 包住的 YAML。卡片通常不需要；Writer／Publisher／Slides 文件用它設定整份文件。
 
 ```yaml
@@ -523,7 +685,9 @@ number-headings: false
 
 ---
 
-# 投影片
+# 投影片規劃
+Desk 的現行模式設定為 `mode: slides`。下方保留早期的講者備忘稿與版面提案。
+
 文件屬性 `type: slides` 時：
 
 ```markdown

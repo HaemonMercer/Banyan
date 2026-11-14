@@ -29,6 +29,7 @@ export interface CiteHit {
 export const citeApi = {
     resolve: (keys: string[]) => invoke<CiteEntry[]>("resolve_cite_keys", { keys }),
     search: (query: string, limit = 12) => invoke<CiteHit[]>("search_citables", { query, limit }),
+    annotationKey: (id: number) => invoke<string | null>("annotation_cite_key", { id }),
     setKey: (itemId: number, key: string) => invoke<string>("set_cite_key", { itemId, key }),
     items: (ids: number[] | null, library: string | null) => invoke<CiteItem[]>("list_cite_items", { ids, library }),
     import: (entries: ImportItem[], collectionId: number | null) =>

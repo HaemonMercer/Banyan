@@ -30,6 +30,38 @@ export interface InlineContext {
     footnoteOrder: string[];
 }
 
+
+export function closingBrace(source: string, start: number, literalBlocks: MdNode[] = []) {
+    let depth = 1;
+    let block = 0;
+    for (let at = start; at < source.length; at++) {
+        while (block < literalBlocks.length && literalBlocks[block].end <= at) block++;
+        if (literalBlocks[block]?.start === at) {
+            at = literalBlocks[block].end - 1;
+            continue;
+        }
+        if (source[at] === "\\") at++;
+        else if (source[at] === "`") {
+            let end = at + 1;
+            while (source[end] === "`") end++;
+            const width = end - at;
+            for (let next = source.indexOf("`", end); next >= 0; next = source.indexOf("`", next)) {
+                let close = next + 1;
+                while (source[close] === "`") close++;
+                if (close - next === width) {
+                    end = close;
+                    break;
+                }
+                next = close;
+            }
+            at = end - 1;
+        }
+        else if (source[at] === "{") depth++;
+        else if (source[at] === "}" && --depth === 0) return at;
+    }
+    return -1;
+}
+
 /** Inline node while parsing: a doubly linked tree, so emphasis can re-parent runs cheaply. */
 class INode {
     type: NodeType;
@@ -116,6 +148,9 @@ const reLinkTitle = new RegExp(
 );
 const reLinkDestinationBraces = /^(?:<(?:[^<>\n\\\x00]|\\.)*>)/;
 const reEscapableChar = new RegExp("^" + ESCAPABLE);
+// Characters `parseLinkDestination` steps over one at a time: not `\`, `(`, `)`, whitespace or controls.
+const rePlainDestination = /[^\\()\x00-\x20\x7f]+/y;
+const reDeskStyle = /::style\([ \t]*([^()\r\n]*?)[ \t]*\)\{/y;
 const reTicksHere = /^`+/;
 const reTicks = /`+/m;
 const reEmailAutolink =
@@ -145,12 +180,14 @@ export class InlineParser {
     refmap: Record<string, LinkRef> = {};
     ctx: InlineContext | null = null;
     reMain: RegExp;
+    decorationDepth = 0;
 
     constructor(opts: Required<ParseOptions>) {
         this.opts = opts;
         let special = "\\n`\\[\\]\\\\!<&*_";
         if (opts.gfm) special += "~";
         if (opts.bfm) special += "=$%#@";
+        if (opts.deskDecorations) special += "+^:";
         this.reMain = new RegExp("^[^" + special + "]+", "m");
     }
 
@@ -221,7 +258,14 @@ export class InlineParser {
                 res = this.handleDelim(c, block);
                 break;
             case "~":
-                res = this.opts.gfm && this.handleDelim(c, block);
+                res = (this.opts.deskDecorations && this.parseDeskDecoration(block, "~", "subscript")) || (this.opts.gfm && this.handleDelim(c, block));
+                break;
+            case "+":
+            case "^":
+                res = this.opts.deskDecorations && this.parseDeskDecoration(block, c === "+" ? "++" : "^", c === "+" ? "underline" : "superscript");
+                break;
+            case ":":
+                res = this.opts.deskDecorations && this.parseDeskStyle(block);
                 break;
             case "=":
                 res = this.opts.bfm && this.handleDelim(c, block);
@@ -262,6 +306,40 @@ export class InlineParser {
             block.append(this.text(this.pos, ch));
             this.pos += ch.length;
         }
+        return true;
+    }
+
+    parseDeskDecoration(block: INode, marker: string, type: NodeType): boolean {
+        if (this.decorationDepth >= 32 || !this.subject.startsWith(marker, this.pos) ||
+            (marker === "~" && (this.subject[this.pos - 1] === "~" || this.subject[this.pos + 1] === "~"))) return false;
+        const start = this.pos + marker.length;
+        const end = this.subject.indexOf(marker, start);
+        if (end <= start || /\s/.test(this.subject[start]) || /\s/.test(this.subject[end - 1]) ||
+            this.subject.slice(start, end).includes("\n") || (marker === "~" && this.subject[end + 1] === "~")) return false;
+        const node = new INode(type, this.pos, end + marker.length);
+        const nested = new InlineParser(this.opts);
+        nested.decorationDepth = this.decorationDepth + 1;
+        node.props = { children: nested.parse(this.subject.slice(start, end), this.ctx!, (i) => i + start) };
+        block.append(node);
+        this.pos = node.e;
+        return true;
+    }
+
+    /** Desk `::style(name){text}`; the braces may hold any inline Markdown, nested braces included. */
+    parseDeskStyle(block: INode): boolean {
+        if (this.decorationDepth >= 32) return false;
+        reDeskStyle.lastIndex = this.pos;
+        const open = reDeskStyle.exec(this.subject);
+        if (!open) return false;
+        const start = this.pos + open[0].length;
+        const end = closingBrace(this.subject, start);
+        if (end < 0) return false;
+        const node = new INode("deskStyle", this.pos, end + 1);
+        const nested = new InlineParser(this.opts);
+        nested.decorationDepth = this.decorationDepth + 1;
+        node.props = { name: open[1].trim(), children: nested.parse(this.subject.slice(start, end), this.ctx!, (i) => i + start) };
+        block.append(node);
+        this.pos = node.e;
         return true;
     }
 
@@ -762,6 +840,12 @@ export class InlineParser {
         let openparens = 0;
         let c: string | undefined;
         while ((c = this.peek()) !== undefined) {
+            // Skip runs of ordinary characters at once (data: URLs of embedded images can be megabytes long).
+            rePlainDestination.lastIndex = this.pos;
+            if (rePlainDestination.test(this.subject)) {
+                this.pos = rePlainDestination.lastIndex;
+                continue;
+            }
             if (c === "\\" && reEscapableChar.test(this.subject.charAt(this.pos + 1))) {
                 this.pos += 1;
                 if (this.peek() !== undefined) this.pos += 1;
@@ -1046,9 +1130,14 @@ function toNodes(parent: INode, map: (i: number) => number): MdNode[] {
         }
         if (n.type === "text") node.verbatim = n.verbatim;
         if (n.first) node.children = toNodes(n, map);
+        else if (n.props.children) node.children = node.children?.map((child) => mapNode(child, map));
         else if (n.type === "emphasis" || n.type === "strong" || n.type === "strike" || n.type === "highlight" || n.type === "link" || n.type === "image" || n.type === "tag")
             node.children = [];
         out.push(node);
     }
     return out;
+}
+
+function mapNode(node: MdNode, map: (i: number) => number): MdNode {
+    return { ...node, start: map(node.start), end: map(node.end), children: node.children?.map((child) => mapNode(child, map)) };
 }

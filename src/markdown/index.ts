@@ -130,7 +130,7 @@ export function extractTags(source: string): string[] {
  * Keys cited in a document (`[@key]`, `@key`, `[[@key]]`, `![[@key]]`), each once, in order of
  * first appearance. Annotation keys (`key:h3`) are kept as written.
  */
-export function extractCitations(source: string): string[] {
+export function extractCitations(source: string | Document): string[] {
     const seen = new Set<string>();
     const walk = (nodes: MdNode[] | undefined) => {
         for (const n of nodes ?? []) {
@@ -140,6 +140,8 @@ export function extractCitations(source: string): string[] {
             walk(n.titleChildren);
         }
     };
-    walk(parse(source).children);
+    const document = typeof source === "string" ? parse(source) : source;
+    walk(document.children);
+    walk(document.footnotes);
     return [...seen];
 }

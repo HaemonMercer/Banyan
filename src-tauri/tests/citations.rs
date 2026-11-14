@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use banyan_lib::annotations::create_annotation;
 use banyan_lib::citations::*;
+use banyan_lib::desk::{create_desk_document, list_desk_documents};
 use banyan_lib::drawer::*;
 use banyan_lib::library::Library;
 use banyan_lib::whiteboard::{create_card, create_whiteboard, sync_wiki_links, update_card};
@@ -56,6 +57,10 @@ fn keys_follow_data_until_cited_and_can_be_renamed() {
     set(other, "Attention and Effort", "2011");
     set_item_creators(s(), other, vec![Creator { role: "author".into(), name: "Daniel Kahneman".into() }]).unwrap();
     assert_eq!(j(get_item(s(), other).unwrap())["citeKey"], "kahneman2011a");
+    create_desk_document(s(), "desk-cites".into(), "document".into(), "研究".into(),
+        "[@kahneman2011] ![[@kahneman2011:h1]]".into()).unwrap();
+    set(book, "Thinking, Fast and Slow", "2012");
+    assert_eq!(j(get_item(s(), book).unwrap())["citeKey"], "kahneman2011");
 
     // Once a card cites it, the key no longer follows the data.
     let board = j(create_whiteboard(s(), "板".into(), None).unwrap())["id"].as_i64().unwrap();
@@ -68,6 +73,7 @@ fn keys_follow_data_until_cited_and_can_be_renamed() {
     assert!(set_cite_key(s(), other, "kahneman2011".into()).is_err());
     assert!(set_cite_key(s(), other, "有 空格".into()).is_err());
     assert_eq!(set_cite_key(s(), book, "@tfs".into()).unwrap(), "tfs");
+    assert_eq!(j(list_desk_documents(s()).unwrap())[0]["markdown"], "[@tfs] ![[@tfs:h1]]");
     let resolved = j(resolve_cite_keys(s(), vec!["tfs".into(), "@kahneman2011a".into(), "nope".into()]).unwrap());
     assert_eq!(resolved.as_array().unwrap().len(), 2);
     assert_eq!(resolved[0]["item"]["title"], "Thinking, Fast and Slow");

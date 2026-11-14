@@ -9,20 +9,23 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import katex from "katex";
 import "katex/contrib/mhchem";
 import "katex/dist/katex.min.css";
-import { memo, type ReactNode } from "react";
+import { memo, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../icons/Icon";
 import type { IconName } from "../icons/icons";
-import type { MdNode } from "./ast.ts";
+import type { Document as MarkdownDocument, MdNode } from "./ast.ts";
 import { bibtexCiteData } from "./bibtex.ts";
 import type { CiteData } from "./cite.ts";
 import { Bibliography, BibtexBlock, CitationView, CiteEmbed, CiteLink } from "./Citations";
 import { useCiteData } from "./citeStore";
-import { extractCitations, parse } from "./index.ts";
+import { extractCitations, parse, plainText } from "./index.ts";
 import { useWikiLinkHandler } from "./links";
 import "./markdown.css";
 
 export interface MarkdownProps {
     source: string;
+    document?: MarkdownDocument;
+    headingPrefix?: string;
+    outlineDocument?: MarkdownDocument;
     className?: string;
     /** `[[target]]` / `![[target]]` was clicked. Defaults to the nearest `WikiLinkProvider`; without one, links are inert. */
     onWikiLink?: (target: string) => void;
@@ -76,10 +79,14 @@ function stop(e: { preventDefault(): void; stopPropagation(): void }) {
     e.stopPropagation();
 }
 
-function Markdown({ source, className, onWikiLink: onWikiLinkProp, onTag }: MarkdownProps) {
+function Markdown({ source, document, headingPrefix, outlineDocument, className, onWikiLink: onWikiLinkProp, onTag }: MarkdownProps) {
     const fromContext = useWikiLinkHandler();
     const onWikiLink = onWikiLinkProp ?? fromContext ?? undefined;
-    const doc = parse(source);
+    const doc = document ?? parse(source);
+    const headingId = (node: MdNode) => `${headingPrefix}-${node.start}`;
+    const headings = (nodes: MdNode[]): MdNode[] => nodes.flatMap((node) =>
+        node.type === "heading" && (node.level ?? 1) <= 3 ? [node]
+            : node.type === "layout" ? headings(node.children ?? []) : []);
 
     // Citations: entries written in the document (```bibtex) win over Drawer's.
     const local = new Map<string, CiteData>();
@@ -88,13 +95,20 @@ function Markdown({ source, className, onWikiLink: onWikiLinkProp, onTag }: Mark
             for (const d of bibtexCiteData(b.value ?? "")) local.set(d.key, d);
         }
     }
-    const citedKeys = extractCitations(source);
+    const citedKeys = extractCitations(outlineDocument ?? doc);
     const fromStore = useCiteData(citedKeys.filter((k) => !local.has(k)));
     const lookup = (key: string) => local.get(key) ?? fromStore(key);
 
     const inline = (nodes: MdNode[] | undefined): ReactNode[] =>
         (nodes ?? []).map((n, i) => {
             switch (n.type) {
+                case "underline": return <u key={i}>{inline(n.children)}</u>;
+                case "superscript": return <sup key={i}>{inline(n.children)}</sup>;
+                case "subscript": return <sub key={i}>{inline(n.children)}</sub>;
+                case "deskStyle":
+                    return n.value
+                        ? <span key={i} data-desk-text={n.value}>{inline(n.children)}</span>
+                        : <span key={i} className="desk-style-missing" title={`目前的樣式組沒有「${n.name ?? ""}」`}>{inline(n.children)}</span>;
                 case "text":
                     return (
                         <span key={i} data-o={n.start} data-v={n.verbatim ? "" : undefined}>
@@ -232,15 +246,50 @@ function Markdown({ source, className, onWikiLink: onWikiLinkProp, onTag }: Mark
                     </p>
                 );
             case "heading": {
-                const H = `h${Math.min(6, Math.max(1, n.level ?? 1))}` as "h1";
+                const level = Math.min(6, Math.max(1, n.level ?? 1));
+                const H = `h${level}` as "h1";
                 return (
-                    <H key={i} data-o={n.start}>
+                    <H key={i} id={headingPrefix ? headingId(n) : undefined} data-o={n.start}>
                         {inline(n.children)}
                     </H>
                 );
             }
             case "thematicBreak":
                 return <hr key={i} />;
+            case "layout":
+                if (n.kind === "columns") {
+                    const widths = n.columnWidths ?? (n.value === "wide" ? [2, 1] : undefined);
+                    const total = widths?.reduce((sum, width) => sum + width, 0);
+                    const style = widths ? { "--desk-column-tracks": widths.map((width) => `minmax(0, ${width}fr)`).join(" ") } as CSSProperties : undefined;
+                    return <div key={i} className="desk-layout-columns" data-column-widths={widths?.join(":")} style={style}>
+                        {n.children?.map((child, index) => (
+                            <div className="desk-layout-column" key={index}
+                                style={total ? { "--desk-column-width": `${widths![index] / total * 100}%` } as CSSProperties : undefined}>
+                                {blocks(child.children)}
+                            </div>
+                        ))}
+                    </div>;
+                }
+                if (n.kind === "styleScope") return <div key={i} className="desk-style-scope" data-desk-scope={n.value}>{blocks(n.children)}</div>;
+                if (n.kind === "stylePush" || n.kind === "stylePop") return null;
+                if (n.kind === "left" || n.kind === "center" || n.kind === "right" || n.kind === "justify") {
+                    return <div key={i} style={{ textAlign: n.kind }}>{blocks(n.children)}</div>;
+                }
+                return <div key={i} className={`desk-layout-${n.kind}`}>{blocks(n.children)}</div>;
+            case "pageBreak":
+                return <hr key={i} className="desk-page-break" aria-label="分頁" />;
+            case "toc":
+                return <nav key={i} className="desk-toc" aria-label="目錄">
+                    <strong>目錄</strong>
+                    <ol>{headings((outlineDocument ?? doc).children).map((heading) => (
+                        <li key={heading.start} className={`desk-toc-level-${heading.level}`}>
+                            <a href={`#${headingId(heading)}`} onClick={(e) => {
+                                e.preventDefault();
+                                window.document.getElementById(headingId(heading))?.scrollIntoView({ block: "start" });
+                            }}>{plainText(heading.children)}</a>
+                        </li>
+                    ))}</ol>
+                </nav>;
             case "blockquote":
                 return (
                     <blockquote key={i} data-o={n.start}>

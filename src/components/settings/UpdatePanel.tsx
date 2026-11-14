@@ -19,6 +19,8 @@ type State =
     | { kind: "upToDate" }
     | { kind: "available"; update: Update }
     | { kind: "downloading"; update: Update; done: number; total: number | null }
+    | { kind: "ready"; update: Update; error?: string }
+    | { kind: "installing"; update: Update }
     | { kind: "installed"; update: Update }
     | { kind: "error"; message: string; detail: string };
 
@@ -35,8 +37,8 @@ function formatDate(raw: string | undefined): string | null {
 }
 
 /** Turns the plugin's English errors into something the user can act on. */
-function explain(e: unknown): { message: string; detail: string } {
-    const detail = typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
+function explain(e: unknown, fallback: string): { message: string; detail: string } {
+    const detail = e instanceof Error ? e.message : String(e);
     const d = detail.toLowerCase();
     if (d.includes("signature"))
         return { message: "下載的更新檔簽章不符，已停止安裝。這可能是更新檔損壞或不是官方發布的版本。", detail };
@@ -44,7 +46,7 @@ function explain(e: unknown): { message: string; detail: string } {
         return { message: "找不到更新資訊（latest.json）。可能還沒有發布任何版本，或更新來源的網址不正確。", detail };
     if (d.includes("network") || d.includes("dns") || d.includes("connect") || d.includes("timed out") || d.includes("request"))
         return { message: "無法連線到更新伺服器，請確認網路連線後再試一次。", detail };
-    return { message: "檢查更新時發生錯誤。", detail };
+    return { message: fallback, detail };
 }
 
 function UpdatePanel() {
@@ -56,6 +58,8 @@ function UpdatePanel() {
     const runCheck = useCallback(async () => {
         setState({ kind: "checking" });
         try {
+            await updateRef.current?.close().catch(() => {});
+            updateRef.current = null;
             const list = await invoke<string[]>("update_endpoints");
             setEndpoints(list);
             if (list.length === 0 || list.some((u) => u.includes(PLACEHOLDER))) {
@@ -66,7 +70,7 @@ function UpdatePanel() {
             updateRef.current = update;
             setState(update ? { kind: "available", update } : { kind: "upToDate" });
         } catch (e) {
-            setState({ kind: "error", ...explain(e) });
+            setState({ kind: "error", ...explain(e, "檢查更新時發生錯誤。") });
         }
     }, []);
 
@@ -79,20 +83,29 @@ function UpdatePanel() {
         };
     }, []);
 
-    const install = async (update: Update) => {
+    const download = async (update: Update) => {
         let done = 0;
         let total: number | null = null;
         setState({ kind: "downloading", update, done, total });
         try {
-            await update.downloadAndInstall((ev) => {
+            await update.download((ev) => {
                 if (ev.event === "Started") total = ev.data.contentLength ?? null;
                 else if (ev.event === "Progress") done += ev.data.chunkLength;
                 setState({ kind: "downloading", update, done, total });
             });
-            // On Windows the installer closes the app itself; elsewhere we restart into the new version.
+            setState({ kind: "ready", update });
+        } catch (e) {
+            setState({ kind: "error", ...explain(e, "下載更新時發生錯誤，請再試一次。") });
+        }
+    };
+
+    const install = async (update: Update) => {
+        setState({ kind: "installing", update });
+        try {
+            await update.install();
             setState({ kind: "installed", update });
         } catch (e) {
-            setState({ kind: "error", ...explain(e) });
+            setState({ kind: "ready", update, error: String(e) });
         }
     };
 
@@ -120,7 +133,7 @@ function UpdatePanel() {
 
             {state.kind === "upToDate" && <p className="notice ok">已經是最新版本。</p>}
 
-            {(state.kind === "available" || state.kind === "downloading" || state.kind === "installed") && (
+            {"update" in state && (
                 <div className="update-info">
                     <p>
                         <strong>新版本 {state.update.version}</strong>
@@ -159,9 +172,27 @@ function UpdatePanel() {
 
             {state.kind === "available" && (
                 <div className="settings-actions">
-                    <button className="primary-btn" onClick={() => install(state.update)}>下載並安裝</button>
+                    <button className="primary-btn" onClick={() => download(state.update)}>下載更新</button>
                 </div>
             )}
+            {state.kind === "ready" && (
+                <>
+                    <p className="notice ok">更新已下載。請先儲存工作，安裝時 Banyan 會重新啟動。</p>
+                    {state.error && (
+                        <div className="notice err">
+                            無法啟動安裝程式，請再試一次。
+                            <details className="update-detail">
+                                <summary>詳細資訊</summary>
+                                <code>{state.error}</code>
+                            </details>
+                        </div>
+                    )}
+                    <div className="settings-actions">
+                        <button className="primary-btn" onClick={() => install(state.update)}>安裝更新</button>
+                    </div>
+                </>
+            )}
+            {state.kind === "installing" && <p className="notice ok">正在啟動安裝程式…</p>}
             {state.kind === "installed" && (
                 <div className="settings-actions">
                     <button className="primary-btn" onClick={() => relaunch()}>立即重新啟動</button>

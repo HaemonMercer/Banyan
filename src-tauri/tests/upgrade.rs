@@ -36,6 +36,7 @@ fn v15_library(dir: &Path) {
     let conn = Connection::open(dir.join("banyan.db")).unwrap();
     conn.execute_batch(
         "INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('book', 'SICP', 1, 1);
+         DROP TABLE desk_documents;
          DROP TABLE card_annotations;
          DROP TABLE annotations;
          ALTER TABLE attachments DROP COLUMN mirror_of;
@@ -81,6 +82,8 @@ fn upgrade_makes_a_backup_and_says_so() {
         .query_row("SELECT cite_key FROM items", [], |r| r.get(0))
         .unwrap();
     assert_eq!(key, "sicp");
+    assert!(!has_column(&backups[0], "desk_documents", "markdown"));
+    assert!(has_column(&root.join("banyan.db"), "desk_documents", "markdown"));
     drop(lib);
 
     // Opening an up-to-date database neither reports nor backs up anything.
@@ -124,6 +127,7 @@ fn failed_upgrade_is_rolled_back() {
         .execute_batch(
             "INSERT INTO items (item_type, title, created_at, updated_at) VALUES ('book', 'SICP', 1, 1);
              ALTER TABLE collections DROP COLUMN library;
+             DROP TABLE desk_documents;
              PRAGMA user_version = 14;",
         )
         .unwrap();
