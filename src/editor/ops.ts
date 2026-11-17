@@ -1,3 +1,4 @@
+import { lineTask, setLineTask, taskMark } from "../bujo/tasks";
 import { LineBuf, collapse as collapseBuf, deleteBlock, moveBlock, normalize } from "./layout";
 import { parseDoc, type ParsedDoc, type Unit, type UnitKind } from "./markdown";
 
@@ -32,7 +33,10 @@ export type BlockType =
   | "hr"
   | "image"
   | "video"
-  | "table";
+  | "table"
+  | "task"
+  | "event"
+  | "todo";
 
 const isBlank = (line: string | undefined) => line !== undefined && /^[ \t]*$/.test(line);
 const join = (lines: string[]) => lines.join("\n");
@@ -154,7 +158,10 @@ function nextMarker(firstLine: string): string {
   const m = MARKER.exec(firstLine);
   if (!m) return "- ";
   const [, indent, bullet, num, delim] = m;
-  return num !== undefined ? `${indent}${Number(num) + 1}${delim} ` : `${indent}${bullet} `;
+  const marker = num !== undefined ? `${indent}${Number(num) + 1}${delim} ` : `${indent}${bullet} `;
+  // 任務的下一行還是任務（未完成）；事件的下一行還是事件
+  const task = lineTask(firstLine);
+  return task ? marker + taskMark(task.state === "event" ? "event" : "open") : marker;
 }
 
 function isLooseAt(doc: ParsedDoc, unit: Unit): boolean {
@@ -211,8 +218,9 @@ export function splitBlock(state: EditorState, caret: number): EditorState | nul
 
   if (kind === "item" && unit) {
     const marker = MARKER.exec(text);
-    // 空項目按 Enter：離開清單
-    if (marker && text.trim() === marker[0].trim()) {
+    const task = lineTask(text);
+    // 空項目（或空的任務）按 Enter：離開清單
+    if ((marker && text.trim() === marker[0].trim()) || (task && !text.slice(task.prefix).trim())) {
       lines.splice(region.start, region.end - region.start, "");
       let line = region.start;
       if (line > 0 && !isBlank(lines[line - 1])) {
@@ -269,6 +277,12 @@ export function backspaceAtStart(state: EditorState): EditorState | null {
 
   const unit = regionUnit(doc, region);
   if (unit?.kind === "hr" || unit?.kind === "code") return null;
+  // 任務：先拿掉任務標記（變回一般清單項目）
+  const task = unit?.kind === "item" ? lineTask(text) : null;
+  if (task) {
+    const first = text.split("\n")[0];
+    return applyText(state, setLineTask(first, null) + text.slice(first.length), task.marker.length);
+  }
   if (unit && unit.kind !== "paragraph" && PREFIX.test(text)) {
     return applyText(state, plainContent(text), 0);
   }
@@ -305,7 +319,10 @@ export function plainContent(text: string): string {
   if (!first) return text;
   const indent = " ".repeat(first[0].length);
   const rest = lines.slice(1).map((l) => (l.startsWith(indent) ? l.slice(indent.length) : l.replace(/^[ \t]+/, "")));
-  return [lines[0].slice(first[0].length).replace(/[ \t]+#+[ \t]*$/, ""), ...rest].join("\n");
+  // 清單項目的任務標記也拿掉
+  const task = lineTask(lines[0]);
+  const head = task ? lines[0].slice(task.prefix) : lines[0].slice(first[0].length);
+  return [head.replace(/[ \t]+#+[ \t]*$/, ""), ...rest].join("\n");
 }
 
 /** 把一段區塊原始碼轉成指定類型；回傳新文字與游標位置。 */
@@ -328,6 +345,19 @@ export function turnInto(text: string, type: BlockType): { text: string; caret: 
     case "ordered":
       out = lines.map((l, i) => (i === 0 ? "1. " : l ? "   " : "") + l).join("\n");
       break;
+    case "task":
+    case "event": {
+      // 子彈筆記：任務 `- [ ] `、事件 `- [o] `
+      const mark = "- " + taskMark(type === "task" ? "open" : "event");
+      out = lines.map((l, i) => (i === 0 ? mark : l ? "  " : "") + l).join("\n");
+      break;
+    }
+    case "todo": {
+      // 待辦清單：核取方塊 `* [ ] `（`*` 與子彈筆記的任務 `- [ ] ` 分開）
+      const mark = "* " + taskMark("open");
+      out = lines.map((l, i) => (i === 0 ? mark : l ? "  " : "") + l).join("\n");
+      break;
+    }
     case "quote":
       out = lines.map((l) => (l ? "> " + l : ">")).join("\n");
       if (out === ">") out = "> ";

@@ -25,7 +25,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --ed-text: rgba(255, 255, 255, 0.88);
     --ed-text-soft: rgba(255, 255, 255, 0.72);
     --ed-muted: rgba(255, 255, 255, 0.44);
@@ -45,6 +45,26 @@
     --ed-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 10px rgba(0, 0, 0, 0.35),
       0 14px 32px rgba(0, 0, 0, 0.5);
   }
+}
+:root[data-theme="dark"] {
+  --ed-text: rgba(255, 255, 255, 0.88);
+  --ed-text-soft: rgba(255, 255, 255, 0.72);
+  --ed-muted: rgba(255, 255, 255, 0.44);
+  --ed-faint: rgba(255, 255, 255, 0.11);
+  --ed-hover: rgba(255, 255, 255, 0.055);
+  --ed-bg: #191919;
+  --ed-chrome: #202020;
+  --ed-code-bg: #232323;
+  --ed-inline-code: #ff7b72;
+  --ed-inline-code-bg: rgba(135, 131, 120, 0.22);
+  --ed-accent: #4a9eed;
+  --ed-accent-soft: rgba(74, 158, 237, 0.14);
+  --ed-accent-ring: rgba(74, 158, 237, 0.45);
+  --ed-danger: #ff6b66;
+  --ed-danger-soft: rgba(255, 107, 102, 0.12);
+  --ed-popover: #262626;
+  --ed-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 10px rgba(0, 0, 0, 0.35),
+    0 14px 32px rgba(0, 0, 0, 0.5);
 }
 
 .md-editor {
@@ -616,6 +636,18 @@ kbd {
   width: 320px;
 }
 
+/* 斜線選單、頁面連結選單放在 body，固定在編輯中區塊的下方（Floating） */
+.float-anchor {
+  position: fixed;
+  z-index: 30;
+  width: 0;
+  height: 0;
+}
+.float-anchor.flip > .popover {
+  top: auto;
+  bottom: 6px;
+}
+
 .block-menu {
   position: fixed;
   width: 230px;
@@ -810,7 +842,7 @@ kbd {
   --bg-red: #fdebec;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --tc-gray: #9b9b9b;
     --bg-gray: #2f2f2f;
     --tc-brown: #ba856f;
@@ -830,6 +862,26 @@ kbd {
     --tc-red: #df5452;
     --bg-red: #522e2a;
   }
+}
+:root[data-theme="dark"] {
+  --tc-gray: #9b9b9b;
+  --bg-gray: #2f2f2f;
+  --tc-brown: #ba856f;
+  --bg-brown: #4a3228;
+  --tc-orange: #c77d48;
+  --bg-orange: #5c3b23;
+  --tc-yellow: #ca9849;
+  --bg-yellow: #564328;
+  --tc-green: #529e72;
+  --bg-green: #243d30;
+  --tc-blue: #5e87c9;
+  --bg-blue: #143a4e;
+  --tc-purple: #9d68d3;
+  --bg-purple: #3c2d49;
+  --tc-pink: #d15796;
+  --bg-pink: #4e2c3c;
+  --tc-red: #df5452;
+  --bg-red: #522e2a;
 }
 
 .content mark {
@@ -1377,4 +1429,168 @@ kbd {
 .md-editor.compact .tail {
   min-height: 28px;
   padding-bottom: 0;
+}
+
+/* ─── 子彈筆記：任務、事件的符號 ─── */
+
+.content li.task {
+  position: relative;
+  list-style: none;
+}
+.task-glyph {
+  position: absolute;
+  left: -1.55em;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4em;
+  /* 一行高：符號與第一行文字垂直置中 */
+  height: 1lh;
+  border-radius: 4px;
+  color: var(--ed-text);
+  cursor: pointer;
+  user-select: none;
+}
+.task-icon {
+  display: block;
+  flex: none;
+}
+.task-glyph:hover {
+  background: var(--ed-hover);
+  color: var(--ed-accent);
+}
+.task-glyph.g-done,
+.task-glyph.g-scheduled {
+  color: var(--ed-muted);
+}
+li.task.t-done > div,
+li.task.t-scheduled > div {
+  color: var(--ed-muted);
+}
+li.task.t-cancelled > div {
+  color: var(--ed-muted);
+  text-decoration: line-through;
+}
+li.task.t-cancelled > .task-glyph {
+  color: var(--ed-muted);
+}
+
+.task-menu .task-tile {
+  display: grid;
+  place-items: center;
+}
+.task-menu .task-date {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+.task-menu .task-date:hover {
+  background: var(--ed-hover);
+}
+.task-menu .task-date input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--ed-faint);
+  border-radius: 5px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 2px 4px;
+  color-scheme: light dark;
+}
+
+/* ─── 頁面連結 [[名稱]] ─── */
+
+.page-ref {
+  color: var(--ed-accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.page-ref .pr-b {
+  color: var(--ed-muted);
+  opacity: 0.55;
+}
+.row:not(.editing) .page-ref:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ref-menu .tile {
+  font-size: 12px;
+  color: var(--ed-muted);
+}
+
+/* ─── 待辦清單的核取方塊（* [ ]） ─── */
+
+.task-box {
+  position: absolute;
+  left: -1.35em;
+  top: calc((1lh - 1.05em) / 2);
+  display: grid;
+  place-items: center;
+  width: 1.05em;
+  height: 1.05em;
+  box-sizing: border-box;
+  border: 1.5px solid var(--ed-text-soft);
+  border-radius: 3px;
+  color: #fff;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s, border-color 0.1s;
+}
+.task-box:hover {
+  background: var(--ed-hover);
+}
+.task-box.checked {
+  border-color: var(--ed-accent);
+  background: var(--ed-accent);
+}
+.task-box svg {
+  width: 0.75em;
+  height: 0.75em;
+}
+li.task.check.t-done > div {
+  color: var(--ed-muted);
+  text-decoration: line-through;
+}
+
+/* ─── 日期標籤（行事曆、過期未完成顯示寫在哪天） ─── */
+
+.date-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--ed-hover);
+  color: var(--ed-text-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  text-decoration: none;
+  vertical-align: 1px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.date-chip:hover {
+  color: var(--ed-accent);
+}
+.date-chip.today {
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent);
+}
+.date-chip.overdue {
+  background: var(--ed-danger-soft);
+  color: var(--ed-danger);
+}
+/* 完成、取消的任務：日期也變淡，不跟著刪除線 */
+li.task.t-done .date-chip,
+li.task.t-cancelled .date-chip,
+li.task.t-scheduled .date-chip {
+  opacity: 0.7;
 }

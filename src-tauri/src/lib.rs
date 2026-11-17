@@ -150,6 +150,163 @@ fn journal_write(app: AppHandle, date: String, content: String) -> Result<(), St
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+// ─── 頁面 ────────────────────────────────────────────────────────
+//
+// `[[頁面名稱]]` 連到的頁面，每頁一個 Markdown 檔，存在 App 資料夾的 pages/ 底下。
+// 檔名就是頁面名稱，Windows 不允許的字元（與 `%`）寫成 `%XX`（和 Logseq 一樣是 URL 編碼）。
+
+fn pages_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("pages");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// 頁面名稱 → 檔名。
+fn page_file(name: &str) -> Result<String, String> {
+    encoded_file(name, "md")
+}
+
+/// 名稱 → URL 編碼的檔名（頁面 `.md`、白板 `.json` 共用）。
+fn encoded_file(name: &str, ext: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 200 {
+        return Err("頁面名稱不能是空的或太長".into());
+    }
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        let bad = matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '%')
+            || c.is_control()
+            // 開頭的點（隱藏檔、`..`）
+            || (i == 0 && c == '.');
+        if bad {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    // Windows 會吃掉結尾的點
+    if out.ends_with('.') {
+        out.pop();
+        out.push_str("%2E");
+    }
+    Ok(format!("{out}.{ext}"))
+}
+
+/// 檔名 → 頁面名稱（解開 `%XX`）。
+fn page_name(file: &str) -> Option<String> {
+    decoded_name(file, ".md")
+}
+
+fn decoded_name(file: &str, suffix: &str) -> Option<String> {
+    let stem = file.strip_suffix(suffix)?;
+    let bytes = stem.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let name = String::from_utf8(out).ok()?;
+    if name.trim().is_empty() { None } else { Some(name) }
+}
+
+/// 所有頁面的名稱。
+#[tauri::command]
+fn page_list(app: AppHandle) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = fs::read_dir(pages_root(&app)?)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| page_name(&e.file_name().to_string_lossy()))
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+#[tauri::command]
+fn page_read(app: AppHandle, name: String) -> Result<String, String> {
+    let path = pages_root(&app)?.join(page_file(&name)?);
+    match fs::read_to_string(&path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 寫入頁面；內容只有空白就刪掉檔案。
+#[tauri::command]
+fn page_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
+    let path = pages_root(&app)?.join(page_file(&name)?);
+    if content.trim().is_empty() {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+// ─── 白板 ────────────────────────────────────────────────────────
+//
+// 每個白板一個 JSON 檔（卡片位置、連線、區段），存在 App 資料夾的 whiteboards/ 底下，
+// 檔名的編碼和頁面相同。卡片指向 pages/ 與 journals/ 裡的文件，內容不重複存。
+
+fn boards_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("whiteboards");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+#[tauri::command]
+fn board_list(app: AppHandle) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = fs::read_dir(boards_root(&app)?)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| decoded_name(&e.file_name().to_string_lossy(), ".json"))
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+#[tauri::command]
+fn board_read(app: AppHandle, name: String) -> Result<String, String> {
+    let path = boards_root(&app)?.join(encoded_file(&name, "json")?);
+    match fs::read_to_string(&path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 寫入白板；內容是空的就刪掉檔案（刪除白板）。
+#[tauri::command]
+fn board_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
+    let path = boards_root(&app)?.join(encoded_file(&name, "json")?);
+    if content.trim().is_empty() {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    fs::write(&path, content).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -160,7 +317,13 @@ pub fn run() {
             import_media,
             journal_list,
             journal_read,
-            journal_write
+            journal_write,
+            page_list,
+            page_read,
+            page_write,
+            board_list,
+            board_read,
+            board_write
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -194,5 +357,27 @@ mod tests {
         assert_eq!(journal_date("2026_11_17.md").as_deref(), Some("2026-11-17"));
         assert_eq!(journal_date("notes.md"), None);
         assert_eq!(journal_date("2026_11_17.txt"), None);
+    }
+
+    #[test]
+    fn page_names() {
+        assert_eq!(page_file("讀書筆記").unwrap(), "讀書筆記.md");
+        assert_eq!(page_file("a/b: c?").unwrap(), "a%2Fb%3A c%3F.md");
+        assert_eq!(page_file("..").unwrap(), "%2E%2E.md");
+        assert_eq!(page_file("x.").unwrap(), "x%2E.md");
+        assert!(page_file("  ").is_err());
+        for name in ["讀書筆記", "a/b: c?", "..", "x.", "100%", "C#"] {
+            let file = page_file(name).unwrap();
+            assert_eq!(page_name(&file).as_deref(), Some(name), "{file}");
+        }
+        assert_eq!(page_name("notes.txt"), None);
+    }
+
+    #[test]
+    fn board_names() {
+        assert_eq!(encoded_file("研究/計畫", "json").unwrap(), "研究%2F計畫.json");
+        let file = encoded_file("a: b", "json").unwrap();
+        assert_eq!(decoded_name(&file, ".json").as_deref(), Some("a: b"));
+        assert_eq!(decoded_name("x.md", ".json"), None);
     }
 }

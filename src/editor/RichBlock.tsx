@@ -7,6 +7,8 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { Marks } from "./inline";
+import { TaskGlyph } from "../bujo/TaskGlyph";
+import { stripTaskShortcut, stripTodoShortcut, taskShortcut, todoShortcut, type TaskState } from "../bujo/tasks";
 import type { ListInfo, UnitKind } from "./markdown";
 import {
   caretLine,
@@ -88,7 +90,7 @@ export function textareaSurface(ta: HTMLTextAreaElement): Surface {
   };
 }
 
-export type Shortcut = "h1" | "h2" | "h3" | "bullet" | "ordered" | "quote" | "code";
+export type Shortcut = "h1" | "h2" | "h3" | "bullet" | "ordered" | "quote" | "code" | "task" | "todo";
 
 /** 段落開頭打這些字會轉成對應的區塊（像 Notion）。 */
 const SHORTCUTS: [RegExp, Shortcut][] = [
@@ -114,12 +116,19 @@ interface Props {
   placeholder: string;
   /** 使用者編輯後的新原始碼與游標位置 */
   onText: (text: string, caret: number) => void;
-  /** 段落開頭打了區塊標記：rest 是標記後面剩下的行內內容 */
-  onShortcut: (type: Shortcut, rest: string) => void;
+  /**
+   * 段落開頭打了區塊標記：rest 是標記後面剩下的行內內容；任務、待辦另外帶狀態；
+   * 項目符號帶打的是哪個符號（`*` 要留著，接著打 `[] ` 才會變成待辦清單）
+   */
+  onShortcut: (type: Shortcut, rest: string, state?: TaskState, marker?: string) => void;
   onKeyDown: (e: KeyboardEvent<HTMLElement>) => void;
   onPaste: (e: ClipboardEvent<HTMLElement>) => void;
   onBlur: (el: HTMLElement, related: Element | null) => void;
   onSelect: () => void;
+  /** 點任務符號（切換完成） */
+  onTaskClick?: () => void;
+  /** 在任務符號上按右鍵 */
+  onTaskMenu?: (x: number, y: number) => void;
 }
 
 /** 所見即所得編輯的區塊：可編輯的元素，內容是渲染後的行內 Markdown。 */
@@ -133,6 +142,8 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
   envRef.current = p.env;
   /** 接著打的字要有（on）或沒有的格式；游標移走、重畫時清掉 */
   const pending = useRef<{ spec: FormatSpec; on: boolean } | null>(null);
+  /** 上一次輸入時的純文字（判斷任務快捷是不是這次才打出來的） */
+  const prevPlain = useRef("");
 
   const MARK_OF = { strong: "bold", em: "italic", u: "underline", s: "strike", code: "code", a: "link" } as const;
 
@@ -161,6 +172,7 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     last.current = p.text;
     pending.current = null;
     renderInto(el, p.shape.content, null, envRef.current);
+    prevPlain.current = (el.textContent ?? "").replace(/​/g, "");
     markEmpty();
   });
 
@@ -276,6 +288,52 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     }
     markEmpty();
     const r = current();
+    // 段落或清單項目開頭打 `[] `、`[x] `、`[o] `…（中文輸入法的「」【】、全形空白也算）：
+    // 變成子彈筆記的任務。游標在快捷後面就觸發（輸入法一次送出整串時游標會更後面），
+    // 但這次輸入之前開頭就已經是這樣的不算（例如在既有文字後面打字）。
+    {
+      const plain = (el.textContent ?? "").replace(/​/g, "");
+      // 輸入法組字中不觸發，也不更新「上一次」（選好字時 compositionend 會再檢查一次）
+      const composing = !!ne?.isComposing;
+      const before = prevPlain.current;
+      if (!composing) prevPlain.current = plain;
+      const kind = p.kind ?? "paragraph";
+      // 待辦清單（核取方塊）：段落開頭打 `*[] `、`*[x] `、`＊【】 `…
+      const todo = todoShortcut(plain);
+      if (
+        todo &&
+        !composing &&
+        !todoShortcut(before) &&
+        kind === "paragraph" &&
+        caretPlain(el) >= todo.length
+      ) {
+        const rest = stripTodoShortcut(r.content);
+        if (rest !== null) {
+          last.current = null;
+          p.onShortcut("todo", rest, todo.state);
+          return;
+        }
+      }
+      const tm = taskShortcut(plain);
+      if (
+        tm &&
+        !composing &&
+        !taskShortcut(before) &&
+        (kind === "paragraph" || (kind === "item" && !shapeRef.current.task)) &&
+        caretPlain(el) >= tm.length
+      ) {
+        // 內容裡的方括號是跳脫過的（`\[\] `）
+        const rest = stripTaskShortcut(r.content);
+        if (rest !== null) {
+          last.current = null;
+          // `* ` 項目裡打 `[] `／`[x] `：待辦清單；其他是子彈筆記的任務
+          const star = kind === "item" && /^\s*\*/.test(shapeRef.current.prefixes[0] ?? "");
+          if (star && (tm.state === "open" || tm.state === "done")) p.onShortcut("todo", rest, tm.state);
+          else p.onShortcut("task", rest, tm.state);
+          return;
+        }
+      }
+    }
     // 段落開頭打區塊標記（# 、- 、1. 、> 、```）：轉成對應的區塊
     if (shapeRef.current.kind === "paragraph" && (p.kind ?? "paragraph") === "paragraph") {
       const plain = (el.textContent ?? "").replace(/\u00a0/g, " ").replace(/\u200B/g, "");
@@ -284,7 +342,7 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
         if (m && re.test(m[0]) && caretPlain(el) === m[0].length) {
           const rest = r.content.replace(MARKER_SOURCE, "");
           last.current = null; // 接著一定會重畫
-          p.onShortcut(type, rest);
+          p.onShortcut(type, rest, undefined, m[0][0]);
           return;
         }
       }
@@ -310,6 +368,12 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     onCompositionEnd: (e: React.CompositionEvent<HTMLElement>) => {
       if (pending.current && e.data) {
         applyPending(e.data.length);
+        onInput();
+      } else if (
+        taskShortcut((elRef.current?.textContent ?? "").replace(/\u200B/g, "")) ||
+        todoShortcut((elRef.current?.textContent ?? "").replace(/\u200B/g, ""))
+      ) {
+        // 輸入法一次送出「」 之類的任務快捷
         onInput();
       }
     },
@@ -339,20 +403,16 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
       const H = `h${level}` as "h1";
       return <H {...common} />;
     }
-    case "item":
-      return p.list?.ordered ? (
-        <ol start={p.list.number}>
-          <li>
-            <div {...common} />
-          </li>
-        </ol>
-      ) : (
-        <ul>
-          <li>
-            <div {...common} />
-          </li>
-        </ul>
+    case "item": {
+      const task = p.shape.task;
+      const li = (
+        <li className={task ? `task t-${task}${p.shape.check ? " check" : ""}` : undefined}>
+          {task && <TaskGlyph state={task} box={p.shape.check} onClick={p.onTaskClick} onMenu={p.onTaskMenu} />}
+          <div {...common} />
+        </li>
       );
+      return p.list?.ordered ? <ol start={p.list.number}>{li}</ol> : <ul>{li}</ul>;
+    }
     case "quote":
       return (
         <blockquote>

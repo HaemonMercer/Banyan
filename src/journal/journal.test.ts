@@ -49,13 +49,13 @@ describe("日期", () => {
   });
 
   it("標題、星期、相對日子", () => {
-    expect(dayTitle("2026-11-17", "2026-11-17")).toBe("11 月 17 日");
-    expect(dayTitle("2025-12-31", "2026-11-17")).toBe("2025 年 12 月 31 日");
-    expect(weekday("2026-11-17")).toBe("星期二");
-    expect(relativeLabel("2026-11-17", "2026-11-17")).toBe("今天");
-    expect(relativeLabel("2026-11-16", "2026-11-17")).toBe("昨天");
-    expect(relativeLabel("2026-11-15", "2026-11-17")).toBe("前天");
-    expect(relativeLabel("2026-11-18", "2026-11-17")).toBe("明天");
+    expect(dayTitle("2026-11-17", "2026-11-17")).toBe("Nov 17");
+    expect(dayTitle("2025-12-31", "2026-11-17")).toBe("Dec 31, 2025");
+    expect(weekday("2026-11-17")).toBe("Tuesday");
+    expect(relativeLabel("2026-11-17", "2026-11-17")).toBe("Today");
+    expect(relativeLabel("2026-11-16", "2026-11-17")).toBe("Yesterday");
+    expect(relativeLabel("2026-11-15", "2026-11-17")).toBe("2 days ago");
+    expect(relativeLabel("2026-11-18", "2026-11-17")).toBe("Tomorrow");
     expect(relativeLabel("2026-11-10", "2026-11-17")).toBe("");
   });
 });

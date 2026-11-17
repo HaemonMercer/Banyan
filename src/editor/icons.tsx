@@ -137,3 +137,136 @@ export const ChevronRightIcon = (p: IconProps) => (
     <path d="M6 3.5 10.5 8 6 12.5" />
   </svg>
 );
+
+/* ─── 側邊欄與頂端列 ─── */
+
+/** 側邊欄開關 */
+export const SidebarIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2" y="3" width="12" height="10" rx="1.5" />
+    <path d="M6 3v10" />
+  </svg>
+);
+
+/** 今天（日曆上標一天） */
+export const TodayIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="3.5" width="11" height="10" rx="1.5" />
+    <path d="M2.5 6.5h11M5.5 2v3M10.5 2v3" />
+    <rect x="5.5" y="8.5" width="2.5" height="2.5" rx=".5" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+/** 日記串（一疊紙） */
+export const JournalIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 2.5h6.5l2 2v9h-8.5z" />
+    <path d="M6.5 7h4M6.5 9.5h4M6.5 12h2.5" />
+  </svg>
+);
+
+/** 所有頁面（多張頁面） */
+export const PagesIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="4.5" y="2.5" width="9" height="9" rx="1.5" />
+    <path d="M2.5 5v7a1.5 1.5 0 0 0 1.5 1.5h7" />
+  </svg>
+);
+
+export const StarIcon = (p: IconProps & { filled?: boolean }) => {
+  const { filled, ...rest } = p;
+  return (
+    <svg {...base(rest)}>
+      <path
+        d="m8 2.3 1.75 3.55 3.9.57-2.83 2.76.67 3.89L8 11.24l-3.49 1.83.67-3.89L2.35 6.42l3.9-.57z"
+        fill={filled ? "currentColor" : "none"}
+      />
+    </svg>
+  );
+};
+
+export const ClockIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M8 5v3l2 1.5" />
+  </svg>
+);
+
+export const SunIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="8" cy="8" r="2.75" />
+    <path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1" />
+  </svg>
+);
+
+export const MoonIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M13 9.6A5.5 5.5 0 1 1 6.4 3a4.4 4.4 0 0 0 6.6 6.6z" />
+  </svg>
+);
+
+/** 跟隨系統（螢幕） */
+export const MonitorIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2" y="3" width="12" height="8" rx="1.5" />
+    <path d="M6 14h4M8 11v3" />
+  </svg>
+);
+
+export const KeyboardIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="1.75" y="4" width="12.5" height="8" rx="1.5" />
+    <path d="M4.5 6.75h.01M7 6.75h.01M9.5 6.75h.01M12 6.75h.01M5.5 9.25h5" />
+  </svg>
+);
+
+export const ArrowLeftIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M13 8H3.5M7.5 4 3.5 8l4 4" />
+  </svg>
+);
+
+export const ArrowRightIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 8h9.5M8.5 4l4 4-4 4" />
+  </svg>
+);
+
+/* ─── 白板 ─── */
+
+/** 白板（畫布上兩張卡片連起來） */
+export const WhiteboardIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="1.75" y="2.5" width="6" height="4.5" rx="1" />
+    <rect x="8.25" y="9" width="6" height="4.5" rx="1" />
+    <path d="M7.75 4.75h2.5a1 1 0 0 1 1 1V9" />
+  </svg>
+);
+
+/** 區段（虛線框） */
+export const SectionIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="3.5" width="11" height="10" rx="1.5" strokeDasharray="2 1.6" />
+    <path d="M2.5 3.5h5" />
+  </svg>
+);
+
+export const MinusIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3.5 8h9" />
+  </svg>
+);
+
+/** 符合畫面（四個角） */
+export const FitIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10" />
+  </svg>
+);
+
+/** 開啟（右上箭頭） */
+export const OpenIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6.5 3.5h-3v9h9v-3M9 2.5h4.5V7M13.5 2.5 7.5 8.5" />
+  </svg>
+);

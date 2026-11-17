@@ -216,8 +216,31 @@ button.journal-title:hover {
 .calendar .cal-day {
   display: block;
   padding: 0;
+  /* .popover button 是靠左；日期要置中，才會對齊星期、圓點與滑過的底色 */
+  text-align: center;
 }
 .cal-month,
 .cal-foot span {
   white-space: nowrap;
+}
+
+/* 單日頁面、單一頁面：內容下方留一塊可以點來接著寫的空白，再來是反向連結 */
+.journal-single {
+  padding-bottom: 0;
+}
+.journal-single .md-editor.compact .tail,
+.page-view .md-editor.compact .tail {
+  min-height: 96px;
+}
+.journal-backlinks {
+  max-width: 720px;
+  margin: 0 auto;
+  padding-bottom: 96px;
+}
+
+/* 子彈筆記：日記裡一般的清單項目是「筆記」，用 – 表示（任務是 •、事件是 ○） */
+.journal-stream ul > li:not(.task)::marker,
+.journal-single ul > li:not(.task)::marker {
+  content: "–  ";
+  color: var(--ed-muted);
 }

@@ -20,8 +20,15 @@ body {
 
 .app {
   display: flex;
-  flex-direction: column;
   height: 100%;
+}
+
+/* 側邊欄右邊的主欄：頂端列＋內容 */
+.main-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 /* ─── 頂端列 ─── */
@@ -152,6 +159,19 @@ body {
   }
   .actions .stat {
     display: none;
+  }
+}
+
+/* 行事曆填滿整個內容區（不留白、自己處理捲動） */
+.page.page-cal {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+@media (max-width: 900px) {
+  .page.page-cal {
+    overflow-y: auto;
   }
 }
 

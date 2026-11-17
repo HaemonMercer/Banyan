@@ -12,18 +12,21 @@ export interface BlockTypeItem {
 }
 
 export const BLOCK_TYPES: BlockTypeItem[] = [
-  { type: "paragraph", label: "文字", description: "一般段落", hint: "", icon: "Aa", keywords: "text paragraph p 文字 段落" },
-  { type: "h1", label: "標題 1", description: "大標題", hint: "#", icon: "H1", keywords: "heading h1 title 標題 大標" },
-  { type: "h2", label: "標題 2", description: "中標題", hint: "##", icon: "H2", keywords: "heading h2 標題 中標" },
-  { type: "h3", label: "標題 3", description: "小標題", hint: "###", icon: "H3", keywords: "heading h3 標題 小標" },
-  { type: "bullet", label: "項目清單", description: "用圓點列出項目", hint: "-", icon: "•", keywords: "bullet list ul 清單 項目" },
-  { type: "ordered", label: "編號清單", description: "用數字列出步驟", hint: "1.", icon: "1.", keywords: "numbered ordered list ol 編號 清單" },
-  { type: "quote", label: "引用", description: "引述一段文字", hint: ">", icon: "❝", keywords: "quote blockquote 引用 引言" },
-  { type: "code", label: "程式碼", description: "等寬字的程式碼區塊", hint: "```", icon: "{ }", keywords: "code fence 程式 代碼" },
-  { type: "hr", label: "分隔線", description: "在區塊間畫一條線", hint: "---", icon: "—", keywords: "divider hr rule line 分隔 水平線" },
-  { type: "image", label: "圖片", description: "上傳圖片或 GIF", hint: "", icon: "🖼", keywords: "image picture photo gif 圖片 照片 動圖" },
-  { type: "video", label: "影片", description: "上傳影片", hint: "", icon: "▶", keywords: "video movie mp4 影片 視訊" },
-  { type: "table", label: "表格", description: "簡單的表格", hint: "", icon: "▦", keywords: "table grid 表格 表" },
+  { type: "paragraph", label: "Text", description: "Plain paragraph", hint: "", icon: "Aa", keywords: "text paragraph p plain" },
+  { type: "h1", label: "Heading 1", description: "Large heading", hint: "#", icon: "H1", keywords: "heading h1 title" },
+  { type: "h2", label: "Heading 2", description: "Medium heading", hint: "##", icon: "H2", keywords: "heading h2 subtitle" },
+  { type: "h3", label: "Heading 3", description: "Small heading", hint: "###", icon: "H3", keywords: "heading h3" },
+  { type: "bullet", label: "Bulleted list", description: "A simple bulleted list", hint: "-", icon: "•", keywords: "bullet list ul unordered" },
+  { type: "ordered", label: "Numbered list", description: "A list with numbers", hint: "1.", icon: "1.", keywords: "numbered ordered list ol" },
+  { type: "todo", label: "To-do list", description: "Checkboxes you can tick", hint: "*[]", icon: "☑", keywords: "todo to-do checkbox tickbox check list" },
+  { type: "task", label: "Task", description: "A bullet journal task (click the symbol to finish)", hint: "[]", icon: "□", keywords: "task bujo bullet" },
+  { type: "event", label: "Event", description: "A bullet journal event", hint: "[o]", icon: "○", keywords: "event bujo bullet appointment" },
+  { type: "quote", label: "Quote", description: "Capture a quote", hint: ">", icon: "❝", keywords: "quote blockquote citation" },
+  { type: "code", label: "Code", description: "A monospaced code block", hint: "```", icon: "{ }", keywords: "code fence snippet" },
+  { type: "hr", label: "Divider", description: "Visually divide blocks", hint: "---", icon: "—", keywords: "divider hr rule line separator" },
+  { type: "image", label: "Image", description: "Upload an image or GIF", hint: "", icon: "🖼", keywords: "image picture photo gif" },
+  { type: "video", label: "Video", description: "Upload a video", hint: "", icon: "▶", keywords: "video movie mp4 clip" },
+  { type: "table", label: "Table", description: "A simple table", hint: "", icon: "▦", keywords: "table grid" },
 ];
 
 export function filterBlockTypes(query: string): BlockTypeItem[] {
@@ -36,20 +39,20 @@ export function filterBlockTypes(query: string): BlockTypeItem[] {
 export function kindLabel(kind: string, level?: number): string {
   switch (kind) {
     case "heading":
-      return `標題 ${level ?? 1}`;
+      return `Heading ${level ?? 1}`;
     case "item":
-      return "清單項目";
+      return "List item";
     case "quote":
-      return "引用";
+      return "Quote";
     case "code":
-      return "程式碼";
+      return "Code";
     case "hr":
-      return "分隔線";
+      return "Divider";
     case "html":
       return "HTML";
     case "source":
-      return "參考連結";
+      return "Link reference";
     default:
-      return "文字";
+      return "Text";
   }
 }

@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState } from "react";
+import { DayAgenda } from "../bujo/DayAgenda";
 import { Editor } from "../editor/Editor";
 import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon } from "../editor/icons";
-import { addDays, dayTitle, monthGrid, parseKey, relativeLabel, streamDays, weekday } from "./journal";
-import type { Journals } from "./useJournals";
+import { addDays, dayTitle, monthGrid, monthName, parseKey, relativeLabel, streamDays, weekday, WEEKDAYS_MIN } from "./journal";
+import type { Docs, Journals } from "./useJournals";
 import "./journal.css";
 
 /** 一次多顯示幾天（捲到底再載入下一批） */
 const PAGE = 10;
 
-const PLACEHOLDER = "今天發生了什麼？輸入 / 插入區塊…";
+const PLACEHOLDER = "What happened today? Type / for blocks…";
 
 // ─── 日記串（像 Logseq 的 Journals：今天在最上面，往下是以前寫過的日子） ─────
 
-export function JournalStream(props: { journals: Journals; now: string; onOpenDay: (date: string) => void }) {
+export function JournalStream(props: {
+  journals: Journals;
+  pages: Docs;
+  now: string;
+  onOpenDay: (date: string) => void;
+}) {
   const { journals, now } = props;
   const [shown, setShown] = useState(PAGE);
   const days = journals.dates ? streamDays(journals.dates, now) : [now];
@@ -33,15 +39,28 @@ export function JournalStream(props: { journals: Journals; now: string; onOpenDa
   return (
     <div className="journal-stream">
       {visible.map((date) => (
-        <DaySection key={date} date={date} now={now} journals={journals} onOpenDay={props.onOpenDay} />
+        <DaySection
+          key={date}
+          date={date}
+          now={now}
+          journals={journals}
+          pages={props.pages}
+          onOpenDay={props.onOpenDay}
+        />
       ))}
-      {more && <div ref={sentinel} className="journal-more no-box">載入更早的日記…</div>}
-      {journals.dates && !more && days.length > 1 && <div className="journal-end no-box">以上是所有日記</div>}
+      {more && <div ref={sentinel} className="journal-more no-box">Loading earlier journals…</div>}
+      {journals.dates && !more && days.length > 1 && <div className="journal-end no-box">That's all your journals</div>}
     </div>
   );
 }
 
-function DaySection(props: { date: string; now: string; journals: Journals; onOpenDay: (date: string) => void }) {
+function DaySection(props: {
+  date: string;
+  now: string;
+  journals: Journals;
+  pages: Docs;
+  onOpenDay: (date: string) => void;
+}) {
   const { date, now, journals } = props;
   const { load } = journals;
   useEffect(() => load(date), [date, load]);
@@ -49,14 +68,15 @@ function DaySection(props: { date: string; now: string; journals: Journals; onOp
   return (
     <section className={`journal-day${date === now ? " is-today" : ""}`}>
       <DayHeading date={date} now={now} onOpen={() => props.onOpenDay(date)} />
+      <DayAgenda date={date} now={now} journals={journals} pages={props.pages} />
       {content === undefined ? (
-        <div className="journal-loading">讀取中…</div>
+        <div className="journal-loading">Loading…</div>
       ) : (
         <Editor
           compact
           value={content}
           onChange={(md) => journals.update(date, md)}
-          placeholder={date === now ? PLACEHOLDER : "這天沒有內容"}
+          placeholder={date === now ? PLACEHOLDER : "Nothing written this day"}
         />
       )}
     </section>
@@ -69,14 +89,14 @@ function DayHeading(props: { date: string; now: string; onOpen?: () => void; big
   return (
     <header className={`journal-head no-box${props.big ? " big" : ""}`}>
       {props.onOpen ? (
-        <button className="journal-title" onClick={props.onOpen} title="單獨開啟這一天">
+        <button className="journal-title" onClick={props.onOpen} title="Open this day on its own">
           {title}
         </button>
       ) : (
         <h1 className="journal-title">{title}</h1>
       )}
       <span className="journal-weekday">{weekday(props.date)}</span>
-      {rel && <span className={`journal-rel${rel === "今天" ? " today" : ""}`}>{rel}</span>}
+      {rel && <span className={`journal-rel${rel === "Today" ? " today" : ""}`}>{rel}</span>}
     </header>
   );
 }
@@ -85,6 +105,7 @@ function DayHeading(props: { date: string; now: string; onOpen?: () => void; big
 
 export function JournalDay(props: {
   journals: Journals;
+  pages: Docs;
   date: string;
   now: string;
   onOpenDay: (date: string) => void;
@@ -102,33 +123,35 @@ export function JournalDay(props: {
   return (
     <div className="journal-single">
       <nav className="journal-nav no-box">
-        <button className="icon-btn" onClick={() => onOpenDay(addDays(date, -1))} title="前一天">
+        <button className="icon-btn" onClick={() => onOpenDay(addDays(date, -1))} title="Previous day">
           <ChevronLeftIcon />
         </button>
-        <button className="icon-btn" onClick={() => onOpenDay(addDays(date, 1))} title="後一天">
+        <button className="icon-btn" onClick={() => onOpenDay(addDays(date, 1))} title="Next day">
           <ChevronRightIcon />
         </button>
         {prevWritten && (
           <button className="journal-link" onClick={() => onOpenDay(prevWritten)}>
-            ← 上一篇（{dayTitle(prevWritten, now)}）
+            ← Previous ({dayTitle(prevWritten, now)})
           </button>
         )}
         {nextWritten && (
           <button className="journal-link" onClick={() => onOpenDay(nextWritten)}>
-            下一篇（{dayTitle(nextWritten, now)}）→
+            Next ({dayTitle(nextWritten, now)}) →
           </button>
         )}
-        {!has(date) && date !== now && <span className="journal-note">這天還沒有日記，打字就會建立</span>}
+        {!has(date) && date !== now && <span className="journal-note">No journal for this day yet — start typing to create one</span>}
       </nav>
       <DayHeading date={date} now={now} big />
+      <DayAgenda date={date} now={now} journals={journals} pages={props.pages} />
       {content === undefined ? (
-        <div className="journal-loading">讀取中…</div>
+        <div className="journal-loading">Loading…</div>
       ) : (
         <Editor
           key={date}
+          compact
           value={content}
           onChange={(md) => journals.update(date, md)}
-          placeholder={date === now ? PLACEHOLDER : "點這裡開始寫這天的日記…"}
+          placeholder={date === now ? PLACEHOLDER : "Click here to write this day's journal…"}
         />
       )}
     </div>
@@ -161,9 +184,9 @@ export function CalendarButton(props: {
   }, [open]);
   return (
     <div className="calendar-wrap" ref={ref}>
-      <button className={`tool${open ? " on" : ""}`} onClick={() => setOpen((v) => !v)} title="日曆">
+      <button className={`tool${open ? " on" : ""}`} onClick={() => setOpen((v) => !v)} title="Calendar">
         <CalendarIcon />
-        <span>日曆</span>
+        <span>Calendar</span>
       </button>
       {open && (
         <Calendar
@@ -199,18 +222,18 @@ export function Calendar(props: {
   return (
     <div className="calendar popover">
       <div className="cal-head">
-        <button className="icon-btn" onClick={() => step(-1)} title="上個月">
+        <button className="icon-btn" onClick={() => step(-1)} title="Previous month">
           <ChevronLeftIcon />
         </button>
         <span className="cal-month">
-          {ym.y} 年 {ym.m} 月
+          {monthName(ym.m)} {ym.y}
         </span>
-        <button className="icon-btn" onClick={() => step(1)} title="下個月">
+        <button className="icon-btn" onClick={() => step(1)} title="Next month">
           <ChevronRightIcon />
         </button>
       </div>
       <div className="cal-grid">
-        {["日", "一", "二", "三", "四", "五", "六"].map((w) => (
+        {WEEKDAYS_MIN.map((w) => (
           <span key={w} className="cal-wd">
             {w}
           </span>
@@ -228,16 +251,16 @@ export function Calendar(props: {
               .filter(Boolean)
               .join(" ")}
             onClick={() => props.onPick(d)}
-            title={`${dayTitle(d, props.now)} ${weekday(d)}`}
+            title={`${weekday(d)}, ${dayTitle(d, props.now)}`}
           >
             {Number(d.slice(8))}
           </button>
         ))}
       </div>
       <div className="cal-foot">
-        <span>{count ? `這個月寫了 ${count} 天` : "這個月還沒有日記"}</span>
+        <span>{count ? `${count} day${count > 1 ? "s" : ""} written this month` : "No journals this month"}</span>
         <button className="journal-link" onClick={() => props.onPick(props.now)}>
-          今天
+          Today
         </button>
       </div>
     </div>

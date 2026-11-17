@@ -183,27 +183,27 @@ export const TableEditor = forwardRef<Surface, Props>(function TableEditor(p, re
       }}
     >
       <div className="table-tools" onMouseDown={(e) => e.preventDefault()}>
-        <button onClick={() => act((d, r) => addRow(d, r + 1), (r, c) => [r + 1, c])} title="在下方新增一列">
-          ＋ 列
+        <button onClick={() => act((d, r) => addRow(d, r + 1), (r, c) => [r + 1, c])} title="Add a row below">
+          + Row
         </button>
-        <button onClick={() => act((d, _r, c) => addColumn(d, c + 1), (r, c) => [r, c + 1])} title="在右邊新增一欄">
-          ＋ 欄
+        <button onClick={() => act((d, _r, c) => addColumn(d, c + 1), (r, c) => [r, c + 1])} title="Add a column to the right">
+          + Column
         </button>
-        <button onClick={() => act((d, r) => removeRow(d, r))} disabled={rows.length <= 1} title="刪除這一列">
-          刪除列
+        <button onClick={() => act((d, r) => removeRow(d, r))} disabled={rows.length <= 1} title="Delete this row">
+          Delete row
         </button>
-        <button onClick={() => act((d, _r, c) => removeColumn(d, c))} disabled={cols <= 1} title="刪除這一欄">
-          刪除欄
+        <button onClick={() => act((d, _r, c) => removeColumn(d, c))} disabled={cols <= 1} title="Delete this column">
+          Delete column
         </button>
         <button
           className={data.current.header ? "on" : ""}
           onClick={() => act((d) => ({ ...d, header: !d.header }))}
-          title="第一列當標題列"
+          title="Use the first row as a header"
         >
-          標題列
+          Header row
         </button>
         <span className="table-hint">
-          <kbd>Tab</kbd> 下一格 <kbd>Enter</kbd> 下一列 <kbd>Esc</kbd> 完成
+          <kbd>Tab</kbd> next cell <kbd>Enter</kbd> next row <kbd>Esc</kbd> done
         </span>
       </div>
       <table>

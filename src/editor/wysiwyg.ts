@@ -2,6 +2,8 @@ import DOMPurify from "dompurify";
 import { PURIFY, resolveMedia } from "./media";
 import { COLORS, type Color, type Marks } from "./inline";
 import { md, type UnitKind } from "./markdown";
+import { linkPages } from "../pages/pageRef";
+import { isCheckLine, lineTask, type TaskState } from "../bujo/tasks";
 
 /**
  * 所見即所得（WYSIWYG）編輯的核心：
@@ -31,6 +33,10 @@ export interface Shape {
   suffix: string;
   /** 行內內容（不含區塊語法） */
   content: string;
+  /** 子彈筆記的任務狀態（清單項目有任務標記時） */
+  task?: TaskState;
+  /** 待辦清單的核取方塊 */
+  check?: boolean;
 }
 
 /** 內容是不是只有一段行內文字（沒有其他區塊結構）。 */
@@ -68,8 +74,10 @@ export function decompose(text: string, kind: UnitKind | undefined): Shape | nul
     case "item": {
       const m = /^( {0,3}(?:[-+*]|\d{1,9}[.)]))([ \t]{1,4}|$)/.exec(lines[0]);
       if (!m) return null;
-      const first = m[1] + m[2];
-      const indent = " ".repeat(Math.max(first.length, m[1].length + 1));
+      const indent = " ".repeat(Math.max((m[1] + m[2]).length, m[1].length + 1));
+      // 子彈筆記的任務標記（`[ ] `、`[x] `…）也算區塊語法，畫面上改用符號
+      const task = lineTask(lines[0]);
+      const first = task ? lines[0].slice(0, task.prefix) : m[1] + m[2];
       const prefixes = [first];
       const body = [lines[0].slice(first.length)];
       for (const l of lines.slice(1)) {
@@ -77,7 +85,7 @@ export function decompose(text: string, kind: UnitKind | undefined): Shape | nul
         prefixes.push(p);
         body.push(l.slice(p.length));
       }
-      shape = { kind: "item", prefixes, cont: indent, suffix: "", content: body.join("\n") };
+      shape = { kind: "item", prefixes, cont: indent, suffix: "", content: body.join("\n"), task: task?.state, check: isCheckLine(lines[0]) || undefined };
       break;
     }
     case "quote": {
@@ -157,7 +165,7 @@ export function contentHtml(content: string, env: Record<string, unknown> = {}):
     .renderInline(content, env)
     .replace(/<br\s*\/?>\n/g, "<br>")
     .replace(/\n/g, " ");
-  return DOMPurify.sanitize(resolveMedia(html), PURIFY) as string;
+  return linkPages(DOMPurify.sanitize(resolveMedia(html), PURIFY) as string, true);
 }
 
 // ─── DOM → Markdown ─────────────────────────────────────────────
@@ -185,6 +193,8 @@ function formatKey(el: Element): FormatKey {
     case "CODE":
       return "code";
     case "A":
+      // 頁面連結只是 [[名稱]] 這段文字的樣子，不是格式（整理時拆成文字）
+      if (el.classList.contains("page-ref")) return null;
       return "a:" + (el.getAttribute("href") ?? "");
     case "SPAN":
       return colorClass(el) ? "span:" + colorClass(el) : null;
@@ -242,6 +252,19 @@ function escapeText(s: string): string {
   return s.replace(/[\\`*_[\]<]/g, "\\$&").replace(/&(?=#?[A-Za-z0-9]+;)/g, "\\&");
 }
 
+/** 跳脫文字，但完整的頁面連結 `[[名稱]]` 保留方括號（名稱裡的字照常跳脫）。 */
+export function escapeWithRefs(s: string): string {
+  if (!s.includes("[[")) return escapeText(s);
+  let out = "";
+  let last = 0;
+  for (const m of s.matchAll(/\[\[([^[\]\n]+?)\]\]/g)) {
+    if (!m[1].replace(MARKERS, "").trim()) continue;
+    out += escapeText(s.slice(last, m.index)) + "[[" + escapeText(m[1]) + "]]";
+    last = m.index! + m[0].length;
+  }
+  return out + escapeText(s.slice(last));
+}
+
 /** 行首會變成區塊語法的字元也要跳脫（例如段落文字以 `# `、`- `、`1. `、`> ` 開頭）。 */
 function escapeLineStarts(s: string): string {
   return s
@@ -293,7 +316,7 @@ function wrap(inner: string, open: string, close = open): string {
 
 function serializeNode(node: Node, o: SerOptions): string {
   // 文字裡的換行（Shift+Enter 在 pre-wrap 元素中插入的）是硬換行
-  if (node.nodeType === Node.TEXT_NODE) return (node as Text).data.split("\n").map(escapeText).join("\\\n");
+  if (node.nodeType === Node.TEXT_NODE) return (node as Text).data.split("\n").map(escapeWithRefs).join("\\\n");
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
   const el = node as Element;
   const inner = () => serializeChildren(el, o);

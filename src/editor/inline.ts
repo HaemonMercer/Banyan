@@ -19,15 +19,15 @@ export const COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "pu
 export type Color = (typeof COLORS)[number];
 
 export const COLOR_LABELS: Record<Color, string> = {
-  gray: "灰",
-  brown: "棕",
-  orange: "橘",
-  yellow: "黃",
-  green: "綠",
-  blue: "藍",
-  purple: "紫",
-  pink: "粉紅",
-  red: "紅",
+  gray: "Gray",
+  brown: "Brown",
+  orange: "Orange",
+  yellow: "Yellow",
+  green: "Green",
+  blue: "Blue",
+  purple: "Purple",
+  pink: "Pink",
+  red: "Red",
 };
 
 export interface Marks {
@@ -390,7 +390,7 @@ function toggleLink(text: string, a: number, b: number, active: boolean): Edited
     }
     return { text, a, b };
   }
-  const sel = text.slice(a, b) || "連結";
+  const sel = text.slice(a, b) || "Link";
   const url = "https://";
   const out = text.slice(0, a) + "[" + sel + "](" + url + ")" + text.slice(b);
   const ua = a + sel.length + 3;

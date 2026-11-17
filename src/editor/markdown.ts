@@ -1,4 +1,5 @@
 import MarkdownIt, { type Token } from "markdown-it";
+import { isCheckLine, lineTask, type TaskState } from "../bujo/tasks";
 
 /**
  * CommonMark 解析與渲染。
@@ -40,6 +41,10 @@ export interface Unit {
   list?: ListInfo;
   /** 版面標籤（`<div class="columns">` 等單行 HTML 區塊） */
   tag?: Tag;
+  /** 子彈筆記的任務狀態（清單項目第一行有 `[ ]`、`[x]`… 時） */
+  task?: TaskState;
+  /** 待辦清單的核取方塊（`* [ ]`），不是子彈筆記的任務 */
+  check?: boolean;
 }
 
 // ─── 版面：縮排與多欄 ─────────────────────────────────────────────
@@ -289,6 +294,8 @@ export function parseDoc(source: string): ParsedDoc {
           end: trimEnd(lines, s, e),
           html: inner,
           list: { ordered, number: first + units.length, listStart: map[0], index: units.length },
+          task: lineTask(lines[s] ?? "")?.state,
+          check: isCheckLine(lines[s] ?? "") || undefined,
         });
         j = close;
       }

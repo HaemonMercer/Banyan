@@ -1,0 +1,763 @@
+/* ─── 白板（參考 Heptabase） ─── */
+
+:root {
+  --board-bg: #f4f3f0;
+  --board-dot: rgba(47, 46, 43, 0.16);
+  --board-card: #ffffff;
+  --board-edge: rgba(47, 46, 43, 0.42);
+  --board-section: rgba(47, 46, 43, 0.035);
+}
+:root[data-theme="dark"] {
+  --board-bg: #141414;
+  --board-dot: rgba(255, 255, 255, 0.1);
+  --board-card: #1f1f1f;
+  --board-edge: rgba(255, 255, 255, 0.38);
+  --board-section: rgba(255, 255, 255, 0.03);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --board-bg: #141414;
+    --board-dot: rgba(255, 255, 255, 0.1);
+    --board-card: #1f1f1f;
+    --board-edge: rgba(255, 255, 255, 0.38);
+    --board-section: rgba(255, 255, 255, 0.03);
+  }
+}
+
+/* 內容區整個給白板（不留白、自己處理捲動） */
+.page.page-board {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.board {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  outline: none;
+  background-color: var(--board-bg);
+  background-image: radial-gradient(circle, var(--board-dot) 1px, transparent 1.2px);
+  touch-action: none;
+  user-select: none;
+}
+.board.panning,
+.board.panning * {
+  cursor: grab !important;
+}
+.board.grabbing,
+.board.grabbing * {
+  cursor: grabbing !important;
+}
+.board.dragging .bc-body {
+  pointer-events: none;
+}
+
+.board-loading {
+  padding: 80px;
+  color: var(--ed-muted);
+  text-align: center;
+}
+
+.board-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+/* ─── 卡片 ─── */
+
+.board-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: var(--board-card);
+  border: 1px solid var(--ed-faint);
+  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.06), 0 4px 14px rgba(15, 15, 15, 0.05);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.board-card:hover {
+  box-shadow: 0 1px 3px rgba(15, 15, 15, 0.08), 0 8px 22px rgba(15, 15, 15, 0.08);
+}
+.board-card.selected {
+  border-color: var(--ed-accent);
+  box-shadow: 0 0 0 2px var(--ed-accent-ring), 0 8px 22px rgba(15, 15, 15, 0.08);
+}
+.board-card.link-target {
+  border-color: var(--ed-accent);
+  box-shadow: 0 0 0 4px var(--ed-accent-soft);
+}
+
+.bc-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 6px 14px 4px;
+  border-radius: 10px 10px 0 0;
+  cursor: grab;
+  font-weight: 600;
+  font-size: 14.5px;
+  color: var(--ed-text);
+}
+.bc-icon {
+  display: flex;
+  color: var(--ed-muted);
+}
+.bc-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bc-sub {
+  flex: none;
+  color: var(--ed-muted);
+  font-weight: 400;
+  font-size: 12.5px;
+}
+
+.bc-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 14px 10px 30px;
+  user-select: text;
+  cursor: auto;
+  font-size: 14.5px;
+}
+.bc-loading {
+  padding: 6px 0 4px;
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+/* 卡片裡的編輯器：小一點 */
+.board-card .md-editor {
+  font-size: 14.5px;
+}
+.board-card .md-editor .tail {
+  min-height: 8px;
+}
+.board-card .edit-badge {
+  display: none;
+}
+/* 卡片已有標題列：文件開頭的大標題不再放大成頁面標題，標題上方的空白也收小 */
+.board-card .row.is-title h1,
+.board-card .row.is-title .edit.h1,
+.board-card .content h1,
+.board-card .edit.h1 {
+  font-size: 1.45em;
+}
+.board-card .content h2,
+.board-card .edit.h2 {
+  font-size: 1.25em;
+}
+.board-card .row.is-title {
+  margin: 0 0 6px;
+}
+.board-card .row.kind-heading,
+.board-card .row.kind-heading:has(h1) {
+  margin-top: 0.7em;
+}
+.board-card .md-editor > .row:first-child,
+.board-card .md-editor > .row.kind-heading:first-child {
+  margin-top: 0;
+}
+
+/* 連線用的圓點：滑過卡片時出現在四邊 */
+.bc-dot {
+  position: absolute;
+  z-index: 2;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--board-card);
+  border: 2px solid var(--ed-accent);
+  opacity: 0;
+  cursor: crosshair;
+  transition: opacity 0.12s, transform 0.12s;
+}
+.bc-dot.top {
+  left: 50%;
+  top: 0;
+}
+.bc-dot.bottom {
+  left: 50%;
+  top: 100%;
+}
+.bc-dot.left {
+  left: 0;
+  top: 50%;
+}
+.bc-dot.right {
+  left: 100%;
+  top: 50%;
+}
+.board-card:hover .bc-dot,
+.board-card.selected .bc-dot {
+  opacity: 1;
+}
+.bc-dot:hover {
+  transform: scale(1.3);
+}
+.board.dragging .bc-dot {
+  opacity: 0 !important;
+}
+
+.bc-resize {
+  position: absolute;
+  z-index: 1;
+}
+.bc-resize.width {
+  top: 12px;
+  right: -4px;
+  bottom: 12px;
+  width: 8px;
+  cursor: ew-resize;
+}
+.bc-resize.both {
+  right: -4px;
+  bottom: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+/* ─── 區段 ─── */
+
+.board-section {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 14px;
+  background: var(--board-section);
+  border: 1.5px solid var(--ed-faint);
+  /* 框裡的空白照常可以框選、連按兩下新增卡片 */
+  pointer-events: none;
+}
+.board-section.selected {
+  border-color: var(--ed-accent);
+  box-shadow: 0 0 0 2px var(--ed-accent-soft);
+}
+.bs-head {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  max-width: calc(100% - 24px);
+  padding: 3px 10px;
+  border-radius: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ed-text-soft);
+  cursor: grab;
+  pointer-events: auto;
+}
+.bs-head:hover {
+  background: var(--ed-hover);
+}
+.bs-input,
+.bel-input {
+  font: inherit;
+  color: inherit;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 0;
+  min-width: 4ch;
+}
+.bs-resize {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  pointer-events: auto;
+}
+
+/* ─── 連線 ─── */
+
+.board-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.edge-line {
+  fill: none;
+  stroke: var(--board-edge);
+  stroke-width: 1.8;
+}
+.edge-line.pending {
+  stroke: var(--ed-accent);
+  stroke-dasharray: 6 5;
+}
+.board-edge.on .edge-line {
+  stroke: var(--ed-accent);
+  stroke-width: 2.4;
+}
+.board-edge:hover .edge-line {
+  stroke-width: 2.4;
+}
+.edge-arrow {
+  fill: var(--board-edge);
+}
+.edge-arrow.on {
+  fill: var(--ed-accent);
+}
+.edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.board-edge-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--board-card);
+  border: 1px solid var(--ed-faint);
+  color: var(--ed-text-soft);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.board-edge-label.on {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+
+/* ─── 顏色（卡片標題列、區段底色；九種顏色與編輯器相同） ─── */
+
+.board-card.c-gray .bc-head {
+  background: var(--bg-gray);
+}
+.board-card.c-gray:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-gray) 35%, transparent);
+}
+.board-section.c-gray {
+  background: color-mix(in srgb, var(--bg-gray) 55%, transparent);
+}
+.board-section.c-gray:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-gray) 35%, transparent);
+}
+.board-section.c-gray .bs-head {
+  color: var(--tc-gray);
+}
+.board-card.c-brown .bc-head {
+  background: var(--bg-brown);
+}
+.board-card.c-brown:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-brown) 35%, transparent);
+}
+.board-section.c-brown {
+  background: color-mix(in srgb, var(--bg-brown) 55%, transparent);
+}
+.board-section.c-brown:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-brown) 35%, transparent);
+}
+.board-section.c-brown .bs-head {
+  color: var(--tc-brown);
+}
+.board-card.c-orange .bc-head {
+  background: var(--bg-orange);
+}
+.board-card.c-orange:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-orange) 35%, transparent);
+}
+.board-section.c-orange {
+  background: color-mix(in srgb, var(--bg-orange) 55%, transparent);
+}
+.board-section.c-orange:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-orange) 35%, transparent);
+}
+.board-section.c-orange .bs-head {
+  color: var(--tc-orange);
+}
+.board-card.c-yellow .bc-head {
+  background: var(--bg-yellow);
+}
+.board-card.c-yellow:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-yellow) 35%, transparent);
+}
+.board-section.c-yellow {
+  background: color-mix(in srgb, var(--bg-yellow) 55%, transparent);
+}
+.board-section.c-yellow:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-yellow) 35%, transparent);
+}
+.board-section.c-yellow .bs-head {
+  color: var(--tc-yellow);
+}
+.board-card.c-green .bc-head {
+  background: var(--bg-green);
+}
+.board-card.c-green:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-green) 35%, transparent);
+}
+.board-section.c-green {
+  background: color-mix(in srgb, var(--bg-green) 55%, transparent);
+}
+.board-section.c-green:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-green) 35%, transparent);
+}
+.board-section.c-green .bs-head {
+  color: var(--tc-green);
+}
+.board-card.c-blue .bc-head {
+  background: var(--bg-blue);
+}
+.board-card.c-blue:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-blue) 35%, transparent);
+}
+.board-section.c-blue {
+  background: color-mix(in srgb, var(--bg-blue) 55%, transparent);
+}
+.board-section.c-blue:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-blue) 35%, transparent);
+}
+.board-section.c-blue .bs-head {
+  color: var(--tc-blue);
+}
+.board-card.c-purple .bc-head {
+  background: var(--bg-purple);
+}
+.board-card.c-purple:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-purple) 35%, transparent);
+}
+.board-section.c-purple {
+  background: color-mix(in srgb, var(--bg-purple) 55%, transparent);
+}
+.board-section.c-purple:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-purple) 35%, transparent);
+}
+.board-section.c-purple .bs-head {
+  color: var(--tc-purple);
+}
+.board-card.c-pink .bc-head {
+  background: var(--bg-pink);
+}
+.board-card.c-pink:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-pink) 35%, transparent);
+}
+.board-section.c-pink {
+  background: color-mix(in srgb, var(--bg-pink) 55%, transparent);
+}
+.board-section.c-pink:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-pink) 35%, transparent);
+}
+.board-section.c-pink .bs-head {
+  color: var(--tc-pink);
+}
+.board-card.c-red .bc-head {
+  background: var(--bg-red);
+}
+.board-card.c-red:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-red) 35%, transparent);
+}
+.board-section.c-red {
+  background: color-mix(in srgb, var(--bg-red) 55%, transparent);
+}
+.board-section.c-red:not(.selected) {
+  border-color: color-mix(in srgb, var(--tc-red) 35%, transparent);
+}
+.board-section.c-red .bs-head {
+  color: var(--tc-red);
+}
+
+/* ─── 浮動介面 ─── */
+
+.board-box {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--ed-accent-ring);
+  border-radius: 3px;
+  background: rgba(35, 131, 226, 0.08);
+  pointer-events: none;
+}
+
+.board-toolbar,
+.board-zoom {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
+  padding: 0 4px;
+  border-radius: 10px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  font-size: 13px;
+  color: var(--ed-text-soft);
+}
+.board-toolbar {
+  left: 12px;
+  top: 12px;
+}
+.board-zoom {
+  right: 12px;
+  bottom: 12px;
+}
+.board-toolbar button,
+.board-zoom button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.board-toolbar button:hover,
+.board-zoom button:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.bz-pct {
+  min-width: 52px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.bt-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--ed-faint);
+}
+.bt-count {
+  padding: 0 4px;
+  color: var(--ed-accent);
+  font-weight: 600;
+}
+
+.board-hint {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 4;
+  color: var(--ed-muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+@media (max-width: 900px) {
+  .board-hint {
+    display: none;
+  }
+}
+
+.board-empty {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  text-align: center;
+  pointer-events: none;
+}
+.be-title {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ed-text-soft);
+}
+.be-hint {
+  margin: 0 0 14px;
+  color: var(--ed-muted);
+  font-size: 14px;
+}
+.be-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 8px;
+  background: var(--ed-popover);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.be-btn:hover {
+  background: var(--ed-hover);
+}
+
+/* 選單相對白板定位（不是視窗） */
+.board-menu {
+  position: absolute;
+  z-index: 8;
+}
+
+.board-picker {
+  z-index: 8;
+  width: 340px;
+  overflow: hidden;
+}
+.board-picker input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 11px 12px;
+  border: none;
+  border-bottom: 1px solid var(--ed-faint);
+  outline: none;
+  background: transparent;
+  color: var(--ed-text);
+  font: inherit;
+}
+.bp-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.bp-hint,
+.bp-tag {
+  margin-left: auto;
+  flex: none;
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+.bp-tag {
+  color: var(--ed-accent);
+}
+.board-picker button.create .label {
+  color: var(--ed-accent);
+}
+
+/* ─── 白板清單 ─── */
+
+.boards-view {
+  max-width: 960px;
+  margin: 0 auto;
+  padding-bottom: 96px;
+}
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.board-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--ed-faint);
+  border-radius: 12px;
+  background: var(--ed-bg);
+  overflow: hidden;
+  text-align: left;
+  cursor: pointer;
+  color: var(--ed-text);
+  font: inherit;
+  padding: 0;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.board-tile:hover {
+  box-shadow: 0 6px 18px rgba(15, 15, 15, 0.08);
+}
+.bt-preview {
+  display: block;
+  width: 100%;
+  height: 120px;
+  background-color: var(--board-bg);
+  background-image: radial-gradient(circle, var(--board-dot) 1px, transparent 1.2px);
+  background-size: 14px 14px;
+}
+.bt-preview rect.card {
+  fill: var(--board-card);
+  stroke: var(--ed-faint);
+}
+.bt-preview rect.section {
+  fill: var(--board-section);
+  stroke: var(--ed-faint);
+}
+.bt-preview path {
+  fill: none;
+  stroke: var(--board-edge);
+}
+.bt-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+.bt-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.bt-stat {
+  margin-left: auto;
+  flex: none;
+  color: var(--ed-muted);
+  font-size: 12.5px;
+}
+.bt-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: none;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.board-tile:hover .bt-del {
+  display: flex;
+}
+.bt-del:hover {
+  color: var(--ed-danger);
+}
+
+/* 頁面、日記下方：放在哪些白板上 */
+.on-boards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 28px;
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+.on-boards button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ed-text-soft);
+  font: inherit;
+  cursor: pointer;
+}
+.on-boards button:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}

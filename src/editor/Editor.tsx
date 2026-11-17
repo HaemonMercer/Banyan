@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import { createPortal } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -13,6 +14,19 @@ import {
   type ReactNode,
 } from "react";
 import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
+import { TaskGlyph, TaskIcon } from "../bujo/TaskGlyph";
+import {
+  TASK_LABEL,
+  cycleState,
+  lineTask,
+  lineDate,
+  scheduleAt,
+  setLineTask,
+  setTaskAt,
+  stripTaskHtml,
+  type TaskState,
+} from "../bujo/tasks";
+import { cleanName, getPageNames, linkPages, openPage, pageKey, suggestPages } from "../pages/pageRef";
 import {
   AlignCenterIcon,
   CaptionBottomIcon,
@@ -110,10 +124,20 @@ function clean(html: string): string {
   let out = sanitized.get(html);
   if (out === undefined) {
     if (sanitized.size > 2000) sanitized.clear();
-    out = DOMPurify.sanitize(resolveMedia(html), PURIFY);
+    out = linkPages(DOMPurify.sanitize(resolveMedia(html), PURIFY));
     sanitized.set(html, out);
   }
   return out;
+}
+
+/** 唯讀顯示一個區塊（反向連結用）：與編輯器相同的清理、頁面連結；任務去掉標記。 */
+export function unitDisplayHtml(unit: Unit): string {
+  return clean(taskHtml(unit));
+}
+
+/** 任務區塊顯示用的 HTML：去掉任務標記（改用符號顯示）。 */
+function taskHtml(unit: Unit): string {
+  return unit.task ? stripTaskHtml(unit.html) : unit.html;
 }
 
 async function openLink(href: string) {
@@ -191,7 +215,7 @@ function nearestEditor(y: number): Element | null {
 
 // ─── 編輯器 ────────────────────────────────────────────────────
 
-export function Editor({ value, onChange, compact = false, placeholder = "點這裡開始寫作…" }: EditorProps) {
+export function Editor({ value, onChange, compact = false, placeholder = "Click here to start writing…" }: EditorProps) {
   /** 這個編輯器的識別（比對 currentEditor 用） */
   const me = useRef({}).current;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -221,6 +245,11 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
   const anchorRef = useRef<number | null>(null);
   const focusRef = useRef<number | null>(null);
   const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  /** 子彈筆記符號的右鍵選單（任務所在的行） */
+  const [taskMenu, setTaskMenu] = useState<{ line: number; x: number; y: number } | null>(null);
+  /** 頁面連結的自動完成：目前選到第幾個、按 Esc 關掉的那個 `[[` 的位置 */
+  const [refIndex, setRefIndex] = useState(0);
+  const [refClosed, setRefClosed] = useState<number | null>(null);
 
   const select = useCallback((starts: number[], anchor?: number | null, focus?: number | null) => {
     const sorted = [...new Set(starts)].sort((a, b) => a - b);
@@ -395,6 +424,36 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
   const slashQuery = slash && region ? editText.slice(slash.pos + 1, state.caret) : "";
   const slashItems = slash ? filterBlockTypes(slashQuery) : [];
 
+  // 頁面連結：游標前面是 `[[`（打字時被跳脫成 `\[\[`）加上還沒打完的名稱
+  const refFound =
+    region && !slash && !["code", "html", "source"].includes(editUnit?.kind ?? "paragraph")
+      ? findRefQuery(editText, state.caret)
+      : null;
+  const refAsk = refFound && refFound.from !== refClosed ? refFound : null;
+  const refQuery = refAsk ? cleanName(refAsk.query) : null;
+  const refItems = useMemo(() => {
+    if (refQuery === null) return [];
+    const names = suggestPages(refQuery, getPageNames());
+    const items = names.map((name) => ({ name, create: false }));
+    if (refQuery && !names.some((n) => pageKey(n) === pageKey(refQuery))) items.push({ name: refQuery, create: true });
+    return items;
+  }, [refQuery]);
+
+  /** 選了自動完成的頁面：寫成 `[[名稱]]`，游標放在後面。 */
+  const pickRef = (name: string) => {
+    const s = stateRef.current;
+    if (!refAsk || !s.region) return;
+    const text = regionText(s.source.split("\n"), s.region);
+    let end = s.caret;
+    const close = /^(?:\\?\]){2}/.exec(text.slice(end));
+    if (close) end += close[0].length;
+    const ref = `[[${name.replace(/[\\`*_<]/g, "\\$&")}]]`;
+    const out = text.slice(0, refAsk.from) + ref + text.slice(end);
+    const at = refAsk.from + ref.length;
+    setRefIndex(0);
+    commitFormatted({ text: out, a: at, b: at });
+  };
+
   /** 可以套用行內格式的區塊（程式碼、HTML、參考連結裡的字不是 Markdown 行內語法）。 */
   const formattable = !!region && !["code", "html", "source"].includes(editUnit?.kind ?? "paragraph");
 
@@ -515,11 +574,19 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
   };
 
   /** 段落開頭打了區塊標記：轉成對應的區塊，游標放在內容開頭。 */
-  const onShortcut = (type: Shortcut, rest: string) => {
+  const onShortcut = (type: Shortcut, rest: string, state?: TaskState, marker?: string) => {
     const s = stateRef.current;
     if (!s.region) return;
     setSlash(null);
     const t = turnInto(rest, type);
+    // `* ` 打出來的項目符號留著 `*`（接著打 `[] ` 會變成待辦清單）
+    if (type === "bullet" && marker === "*") t.text = "*" + t.text.slice(1);
+    // 任務、待辦快捷帶了狀態（`[x] `、`[o] `…）：換掉預設的 `[ ]`
+    if ((type === "task" || type === "todo") && state && state !== "open") {
+      const nl = t.text.indexOf("\n");
+      const first = nl < 0 ? t.text : t.text.slice(0, nl);
+      t.text = setLineTask(first, state) + (nl < 0 ? "" : t.text.slice(nl));
+    }
     const caret = type === "code" ? t.caret : t.text.length - rest.length;
     commit(applyText(s, t.text, caret));
   };
@@ -635,7 +702,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
         const src = await saveMedia(f);
         parts.push(mediaMarkdown(src, kind, kind === "image" ? f.name.replace(/\.[^.]+$/, "") : ""));
       } catch (err) {
-        console.error("無法儲存檔案", f.name, err);
+        console.error("Couldn't save the file", f.name, err);
       }
     }
     return parts.join("\n\n");
@@ -668,7 +735,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
         const name = path.split(/[\\/]/).pop() ?? "";
         parts.push(mediaMarkdown(src, kind, kind === "image" ? name.replace(/\.[^.]+$/, "") : ""));
       } catch (err) {
-        console.error("無法匯入檔案", path, err);
+        console.error("Couldn't import the file", path, err);
       }
     }
     if (!parts.length) return;
@@ -753,7 +820,8 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
     }
     if (e.key === "Escape") {
       e.preventDefault();
-      if (slash) setSlash(null);
+      if (refAsk) setRefClosed(refAsk.from);
+      else if (slash) setSlash(null);
       else {
         // 離開編輯並選取這個區塊（再按方向鍵可以移動選取、Delete 刪除…）
         const start = s.region.start;
@@ -774,6 +842,34 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
 
     const kind = editUnit?.kind ?? "paragraph";
     const sync = { ...s, caret: a };
+
+    // 頁面連結的自動完成
+    if (refAsk && refItems.length) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const d = e.key === "ArrowDown" ? 1 : -1;
+        setRefIndex((i) => (i + d + refItems.length) % refItems.length);
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
+        e.preventDefault();
+        pickRef(refItems[Math.min(refIndex, refItems.length - 1)].name);
+        return;
+      }
+    }
+
+    // Ctrl+Enter：清單項目切換任務（任務 ↔ 完成）；段落變成任務
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      if (kind === "item") {
+        e.preventDefault();
+        setTask(s.region.start, "cycle");
+      } else if (kind === "paragraph") {
+        e.preventDefault();
+        const t = turnInto(text, "task");
+        commit(applyText(sync, t.text, a + (t.text.length - text.length)));
+      }
+      return;
+    }
 
     if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       if (e.shiftKey) {
@@ -874,6 +970,40 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
 
   const blocksNow = () => parseDoc(stateRef.current.source).blocks;
 
+  // ─── 子彈筆記 ──────────────────────────────────────────────
+
+  /** 設定某一行的任務狀態（"cycle"：任務 ↔ 完成；null：變回一般清單項目）。 */
+  const setTask = (line: number, to: TaskState | null | "cycle") => {
+    const s = stateRef.current;
+    const lines = s.source.split("\n");
+    const before = lines[line] ?? "";
+    const cur = lineTask(before);
+    const state = to === "cycle" ? (cur ? cycleState(cur.state, !!lineDate(before)) : "open") : to;
+    const source = setTaskAt(s.source, line, state);
+    if (source === s.source) return;
+    // 只改這一行；正在編輯這一行時，游標跟著標記長度的變化位移
+    const delta = source.split("\n")[line].length - before.length;
+    const editing = !!s.region && s.region.start === line;
+    const caret = editing ? Math.max(0, s.caret + delta) : s.caret;
+    if (editing) pendingSel.current = [caret, caret];
+    commit({ ...s, source, caret });
+  };
+
+  /** 排程：任務留在原處，標成 `<` 並在行尾寫上日期（那天的「該做的事」與行事曆會列出它）。 */
+  const sendTask = (line: number, date: string) => {
+    const s = stateRef.current;
+    const source = scheduleAt(s.source, line, date);
+    if (source === s.source) return;
+    // 標記與日期都在內容之外；正在編輯這一行時游標跟著標記長度的變化位移
+    const before = s.source.split("\n")[line] ?? "";
+    const after = source.split("\n")[line] ?? "";
+    const delta = (lineTask(after)?.prefix ?? 0) - (lineTask(before)?.prefix ?? 0);
+    const editing = !!s.region && s.region.start === line;
+    const caret = editing ? Math.max(0, s.caret + delta) : s.caret;
+    if (editing) pendingSel.current = [caret, caret];
+    commit({ ...s, source, caret });
+  };
+
   /** 兩個區塊之間（含）的所有區塊。 */
   const rangeBetween = (a: number, b: number): number[] => {
     const blocks = blocksNow();
@@ -918,6 +1048,11 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
     // 影片的播放控制要能按
     if (!(e.target as HTMLElement).closest("video")) e.preventDefault();
     setMenu(null);
+    // 頁面連結：直接開啟那一頁（像 Logseq）
+    if (link?.classList.contains("page-ref")) {
+      openPage(link.getAttribute("data-page") ?? "");
+      return;
+    }
     if (link && (e.ctrlKey || e.metaKey)) {
       const href = link.getAttribute("href");
       if (href) void openLink(href);
@@ -1080,10 +1215,10 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
         if (!grouped) select([]);
         const kids = groupOf(cur, from).end > from.end;
         const label = grouped
-          ? many.map((m) => (m.whole ? "多欄" : null)).filter(Boolean).length === many.length
-            ? "多欄排版"
-            : `${many.length} 個單位` + (many.some((m) => m.whole) ? "（含多欄）" : "")
-          : regionText(s.source.split("\n"), from).slice(0, 80) + (kids ? "  ＋子區塊" : "");
+          ? many.map((m) => (m.whole ? "Columns" : null)).filter(Boolean).length === many.length
+            ? "Column layout"
+            : `${many.length} items` + (many.some((m) => m.whole) ? " (incl. columns)" : "")
+          : regionText(s.source.split("\n"), from).slice(0, 80) + (kids ? "  + sub-blocks" : "");
         current = { from, many, drop: null, x: 0, y: 0, label };
       }
       current = { ...current, x: ev.clientX, y: ev.clientY, drop: dropAt(ev.clientX, ev.clientY, current.from, current.many) };
@@ -1461,7 +1596,17 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
       key={`edit:${region.start}`}
     >
       <div className="gutter" />
-      <div className="content">
+      <div
+        className="content"
+        onMouseDown={(e) => {
+          // 編輯中按住 Ctrl 點頁面連結：開啟那一頁
+          const a = (e.target as HTMLElement).closest(".page-ref");
+          if (a && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            openPage(a.getAttribute("data-page") ?? "");
+          }
+        }}
+      >
         {shape ? (
           <RichBlock
             ref={surfRef}
@@ -1471,9 +1616,11 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
             level={editUnit?.level}
             list={editUnit?.list}
             env={doc.env}
-            placeholder={editUnit?.kind === "heading" ? "標題" : "輸入文字，或按「/」選擇區塊類型"}
+            placeholder={editUnit?.kind === "heading" ? "Heading" : "Type text, or press “/” for blocks"}
             onText={onTextChange}
             onShortcut={onShortcut}
+            onTaskClick={() => setTask(region.start, "cycle")}
+            onTaskMenu={(x, y) => setTaskMenu({ line: region.start, x, y })}
             onKeyDown={onKeyDown}
             onPaste={onTextPaste}
             onBlur={(el, related) => onBlur(el, region.start, related)}
@@ -1509,7 +1656,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
             value={editText}
             spellCheck={false}
             rows={1}
-            placeholder={editText ? "" : "輸入文字，或按「/」選擇區塊類型"}
+            placeholder={editText ? "" : "Type text, or press “/” for blocks"}
             onChange={(e) => onTextChange(e.target.value, e.target.selectionStart)}
             onSelect={(e) => {
               const c = e.currentTarget.selectionStart;
@@ -1526,12 +1673,24 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
           <kbd>Esc</kbd>
         </span>
         {slash && (
-          <SlashMenu
-            items={slashItems}
-            active={Math.min(slash.index, slashItems.length - 1)}
-            onPick={pickSlash}
-            onHover={(i) => setSlash({ ...slash, index: i })}
-          />
+          <Floating>
+            <SlashMenu
+              items={slashItems}
+              active={Math.min(slash.index, slashItems.length - 1)}
+              onPick={pickSlash}
+              onHover={(i) => setSlash({ ...slash, index: i })}
+            />
+          </Floating>
+        )}
+        {refAsk && !slash && (
+          <Floating>
+            <RefMenu
+              items={refItems}
+              active={Math.min(refIndex, Math.max(0, refItems.length - 1))}
+              onPick={pickRef}
+              onHover={setRefIndex}
+            />
+          </Floating>
         )}
       </div>
     </div>
@@ -1566,6 +1725,9 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
             onCaptionPos={(p) => captionPosBlock(u, p)}
             size={isMediaBlock(regionText(doc.lines, u)) ? blockSize(doc, u) : null}
             onSize={(z) => sizeBlock(u, z)}
+            task={u.task ?? null}
+            onTask={() => setTask(u.start, "cycle")}
+            onTaskMenu={(x, y) => setTaskMenu({ line: u.start, x, y })}
           />
         );
       }
@@ -1577,7 +1739,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
           if (i > 0 && prev.type === "container" && c.type === "container") {
             out.push(
               <div key={`gap:${c.open.start}`} className="col-gap">
-                <div className="grip" title="拖曳調整欄寬" onPointerDown={(e) => onGapPointerDown(e, prev, c)} />
+                <div className="grip" title="Drag to resize columns" onPointerDown={(e) => onGapPointerDown(e, prev, c)} />
               </div>,
             );
           }
@@ -1649,6 +1811,8 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
     <div
       ref={rootRef}
       className={`md-editor${drag ? " is-dragging" : ""}${compact ? " compact" : ""}`}
+      // 不做拼字檢查（WebView2 會在英文以外的字、縮寫下畫紅色虛線）
+      spellCheck={false}
       onPointerDownCapture={() => (currentEditor = me)}
       onFocusCapture={() => (currentEditor = me)}
     >
@@ -1656,6 +1820,8 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
       <div className="tail">
         {doc.units.length === 0 && !region && <span className="empty-hint">{placeholder}</span>}
       </div>
+      {/* 固定在視窗上的浮動元件放到 body：編輯器在縮放的白板裡時（transform）位置才不會跑掉 */}
+      {createPortal(<>
       {box && <div className="select-box" style={box} />}
       {linkAsk && region && (
         <LinkAsk onSubmit={applyLink} onCancel={() => applyLink("")} />
@@ -1673,9 +1839,30 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
       )}
       {drag && (
         <div className="drag-ghost" style={{ left: drag.x + 12, top: drag.y + 8 }}>
-          {drag.label || "（空白）"}
+          {drag.label || "(empty)"}
         </div>
       )}
+      {taskMenu && (() => {
+        const menuLine = state.source.split("\n")[taskMenu.line] ?? "";
+        const t = lineTask(menuLine);
+        if (!t) return null;
+        return (
+          <TaskMenu
+            x={taskMenu.x}
+            y={taskMenu.y}
+            state={t.state}
+            onClose={() => setTaskMenu(null)}
+            onState={(st) => {
+              setTaskMenu(null);
+              setTask(taskMenu.line, st);
+            }}
+            onSend={(date) => {
+              setTaskMenu(null);
+              sendTask(taskMenu.line, date);
+            }}
+          />
+        );
+      })()}
       {menu && menuDoc && (() => {
         const many = selected.length > 1 && selected.includes(menu.unit.start);
         const targets = many ? topLevel(menuDoc, selected.map((st) => ({ start: st, end: st + 1 }))) : [menu.unit];
@@ -1717,7 +1904,44 @@ export function Editor({ value, onChange, compact = false, placeholder = "點這
           />
         );
       })()}
+      </>, document.body)}
     </div>
+  );
+}
+
+/**
+ * 把選單放到 body、固定在所在元素（父元素）的正下方（下面放不下就放上面）。
+ * 編輯器在白板卡片裡時，卡片會捲動、裁切，還可能被縮放；放到 body 才不會被裁掉或跟著變形。
+ */
+function Floating({ children }: { children: ReactNode }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; flip: boolean } | null>(null);
+  useLayoutEffect(() => {
+    let raf = 0;
+    const update = () => {
+      const host = anchor.current?.parentElement;
+      if (host) {
+        const r = host.getBoundingClientRect();
+        const flip = r.bottom + 340 > window.innerHeight && r.top > window.innerHeight - r.bottom;
+        const next = { left: r.left, top: flip ? r.top : r.bottom, flip };
+        setPos((p) => (p && p.left === next.left && p.top === next.top && p.flip === next.flip ? p : next));
+      }
+      raf = requestAnimationFrame(update);
+    };
+    update();
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <>
+      <span ref={anchor} hidden />
+      {pos &&
+        createPortal(
+          <div className={`float-anchor${pos.flip ? " flip" : ""}`} style={{ left: pos.left, top: pos.top }}>
+            {children}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -1744,6 +1968,10 @@ interface UnitRowProps {
   /** 圖片、影片的寬度（null 是原始大小） */
   size: MediaSize | null;
   onSize: (size: MediaSize | null) => void;
+  /** 子彈筆記的任務狀態（清單項目有任務標記時） */
+  task: TaskState | null;
+  onTask: () => void;
+  onTaskMenu: (x: number, y: number) => void;
 }
 
 /** 圖片、影片下方可以直接點來編輯的圖說。Enter 或點別處儲存，Esc 取消。 */
@@ -1765,7 +1993,7 @@ function Caption(props: { value: string; onSave: (text: string) => void }) {
       contentEditable="plaintext-only"
       suppressContentEditableWarning
       spellCheck={false}
-      data-placeholder="加上圖說…"
+      data-placeholder="Add a caption…"
       onMouseDown={(e) => e.stopPropagation()}
       onInput={mark}
       onKeyDown={(e) => {
@@ -1788,22 +2016,22 @@ function Caption(props: { value: string; onSave: (text: string) => void }) {
 }
 
 const ALIGNS: { value: Align; label: string; icon: ReactNode }[] = [
-  { value: "left", label: "靠左", icon: <AlignLeftIcon /> },
-  { value: "center", label: "置中", icon: <AlignCenterIcon /> },
-  { value: "right", label: "靠右", icon: <AlignRightIcon /> },
+  { value: "left", label: "Align left", icon: <AlignLeftIcon /> },
+  { value: "center", label: "Center", icon: <AlignCenterIcon /> },
+  { value: "right", label: "Align right", icon: <AlignRightIcon /> },
 ];
 
 const CAPTION_POS: { value: CaptionPos; label: string; icon: ReactNode }[] = [
-  { value: "top", label: "圖說在上方", icon: <CaptionTopIcon /> },
-  { value: "bottom", label: "圖說在下方", icon: <CaptionBottomIcon /> },
+  { value: "top", label: "Caption above", icon: <CaptionTopIcon /> },
+  { value: "bottom", label: "Caption below", icon: <CaptionBottomIcon /> },
 ];
 
 const SIZES: { value: MediaSize | null; label: string; title: string }[] = [
-  { value: null, label: "原始", title: "原始大小" },
-  { value: "25", label: "25%", title: "版面寬度的 25%" },
-  { value: "50", label: "50%", title: "版面寬度的 50%" },
-  { value: "75", label: "75%", title: "版面寬度的 75%" },
-  { value: "100", label: "100%", title: "與版面同寬" },
+  { value: null, label: "Original", title: "Original size" },
+  { value: "25", label: "25%", title: "25% of page width" },
+  { value: "50", label: "50%", title: "50% of page width" },
+  { value: "75", label: "75%", title: "75% of page width" },
+  { value: "100", label: "100%", title: "Full page width" },
 ];
 
 /** 選取圖片、影片時浮在它上方的選單：對齊、大小、圖說。 */
@@ -1823,7 +2051,7 @@ function MediaMenu(props: {
         e.stopPropagation();
       }}
     >
-      <div className="group" aria-label="對齊">
+      <div className="group" aria-label="Align">
         {ALIGNS.map((a) => (
           <button
             key={a.value}
@@ -1836,7 +2064,7 @@ function MediaMenu(props: {
         ))}
       </div>
       <span className="sep" />
-      <div className="group" aria-label="大小">
+      <div className="group" aria-label="Size">
         {SIZES.map((z) => (
           <button
             key={z.label}
@@ -1849,10 +2077,10 @@ function MediaMenu(props: {
         ))}
       </div>
       <span className="sep" />
-      <div className="group" aria-label="圖說">
+      <div className="group" aria-label="Caption">
         <button
           className="text"
-          title="編輯圖說"
+          title="Edit caption"
           onClick={(e) => {
             const cap = e.currentTarget.closest(".content")?.querySelector<HTMLElement>(".media-caption");
             if (!cap) return;
@@ -1865,7 +2093,7 @@ function MediaMenu(props: {
             sel?.addRange(r);
           }}
         >
-          圖說
+          Caption
         </button>
         {CAPTION_POS.map((c) => (
           <button
@@ -1882,19 +2110,19 @@ function MediaMenu(props: {
   );
 }
 
-function UnitRow({ unit, doc, drop, dragging, selected, align, caption, captionPos, size, ...on }: UnitRowProps) {
+function UnitRow({ unit, doc, drop, dragging, selected, align, caption, captionPos, size, task, ...on }: UnitRowProps) {
   let body: ReactNode;
-  const html = { __html: clean(unit.html) };
+  const html = { __html: clean(task ? taskHtml(unit) : unit.html) };
   if (unit.kind === "item" && unit.list) {
-    body = unit.list.ordered ? (
-      <ol start={unit.list.number}>
-        <li dangerouslySetInnerHTML={html} />
-      </ol>
+    const li = task ? (
+      <li className={`task t-${task}${unit.check ? " check" : ""}`}>
+        <TaskGlyph state={task} box={unit.check} onClick={on.onTask} onMenu={on.onTaskMenu} />
+        <div dangerouslySetInnerHTML={html} />
+      </li>
     ) : (
-      <ul>
-        <li dangerouslySetInnerHTML={html} />
-      </ul>
+      <li dangerouslySetInnerHTML={html} />
     );
+    body = unit.list.ordered ? <ol start={unit.list.number}>{li}</ol> : <ul>{li}</ul>;
   } else if (unit.kind === "source") {
     body = (
       <div className="md-ref">
@@ -1912,10 +2140,10 @@ function UnitRow({ unit, doc, drop, dragging, selected, align, caption, captionP
     >
       {drop && <div className={`drop-indicator ${drop}`} />}
       <div className="gutter">
-        <button className="add" title="在下方新增區塊" onMouseDown={(e) => e.preventDefault()} onClick={on.onAdd}>
+        <button className="add" title="Add a block below" onMouseDown={(e) => e.preventDefault()} onClick={on.onAdd}>
           <PlusIcon />
         </button>
-        <button className="handle" title="拖曳以搬移・點擊開啟選單" onPointerDown={on.onHandlePointerDown}>
+        <button className="handle" title="Drag to move · click for menu" onPointerDown={on.onHandlePointerDown}>
           <GripIcon />
         </button>
       </div>
@@ -1958,7 +2186,7 @@ function blockTypeOf(unit: Unit): BlockType | null {
     case "heading":
       return unit.level && unit.level <= 3 ? (`h${unit.level}` as BlockType) : null;
     case "item":
-      return unit.list?.ordered ? "ordered" : "bullet";
+      return unit.check ? "todo" : unit.task ? (unit.task === "event" ? "event" : "task") : unit.list?.ordered ? "ordered" : "bullet";
     case "quote":
       return "quote";
     case "code":
@@ -1979,7 +2207,7 @@ function LinkAsk(props: { onSubmit: (url: string) => void; onCancel: () => void 
       <LinkIcon />
       <input
         ref={ref}
-        placeholder="貼上或輸入網址，按 Enter"
+        placeholder="Paste or type a URL, then press Enter"
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -2025,12 +2253,12 @@ function placeAtPoint(el: HTMLElement, p: { x: number; y: number }): boolean {
 const INSERT_ONLY = new Set<BlockType>(["image", "video", "table"]);
 
 const FORMATS: { mark: Mark; label: string; key: string; icon: ReactNode }[] = [
-  { mark: "bold", label: "粗體", key: "Ctrl+B", icon: <b>B</b> },
-  { mark: "italic", label: "斜體", key: "Ctrl+I", icon: <i>I</i> },
-  { mark: "underline", label: "底線", key: "Ctrl+U", icon: <u className="fb-u">U</u> },
-  { mark: "strike", label: "刪除線", key: "Ctrl+Shift+X", icon: <s className="fb-s">S</s> },
-  { mark: "code", label: "程式碼", key: "Ctrl+E", icon: <CodeGlyph /> },
-  { mark: "link", label: "連結", key: "Ctrl+K", icon: <LinkIcon /> },
+  { mark: "bold", label: "Bold", key: "Ctrl+B", icon: <b>B</b> },
+  { mark: "italic", label: "Italic", key: "Ctrl+I", icon: <i>I</i> },
+  { mark: "underline", label: "Underline", key: "Ctrl+U", icon: <u className="fb-u">U</u> },
+  { mark: "strike", label: "Strikethrough", key: "Ctrl+Shift+X", icon: <s className="fb-s">S</s> },
+  { mark: "code", label: "Code", key: "Ctrl+E", icon: <CodeGlyph /> },
+  { mark: "link", label: "Link", key: "Ctrl+K", icon: <LinkIcon /> },
 ];
 
 function CodeGlyph() {
@@ -2047,7 +2275,7 @@ function Swatches(props: { kind: "color" | "highlight" | "bg"; value: Color | nu
           className={`swatch ${props.kind}${c ? ` ${props.kind === "color" ? "tc" : props.kind === "highlight" ? "hl" : "bg"}-${c}` : " none"}${
             props.value === c ? " on" : ""
           }`}
-          title={c ? COLOR_LABELS[c] : "預設"}
+          title={c ? COLOR_LABELS[c] : "Default"}
           onClick={() => props.onPick(c)}
         >
           {props.kind === "bg" ? "" : "A"}
@@ -2070,11 +2298,11 @@ function FormatBar(props: {
   const [open, setOpen] = useState(false);
   const m = props.marks;
   const active = FORMATS.filter((f) => m?.[f.mark]).map((f) => f.label);
-  if (m?.color) active.push(`${COLOR_LABELS[m.color]}字`);
-  if (m?.highlight) active.push(`${COLOR_LABELS[m.highlight]}色螢光`);
-  if (props.bg) active.push(`${COLOR_LABELS[props.bg]}底`);
+  if (m?.color) active.push(`${COLOR_LABELS[m.color]} text`);
+  if (m?.highlight) active.push(`${COLOR_LABELS[m.highlight]} highlight`);
+  if (props.bg) active.push(`${COLOR_LABELS[props.bg]} background`);
   return (
-    <div className="format-bar" role="toolbar" aria-label="文字格式" onMouseDown={(e) => e.preventDefault()}>
+    <div className="format-bar" role="toolbar" aria-label="Text formatting" onMouseDown={(e) => e.preventDefault()}>
       <span className="fb-kind">{props.kind}</span>
       <span className="fb-sep" />
       {FORMATS.map((f) => (
@@ -2082,7 +2310,7 @@ function FormatBar(props: {
           key={f.mark}
           className={m?.[f.mark] ? "on" : ""}
           disabled={!props.enabled}
-          title={`${f.label}（${f.key}）`}
+          title={`${f.label} (${f.key})`}
           aria-pressed={!!m?.[f.mark]}
           onClick={() => props.onToggle(f.mark)}
         >
@@ -2091,7 +2319,7 @@ function FormatBar(props: {
       ))}
       <button
         className={`fb-color${open ? " on" : ""}`}
-        title="顏色：文字、螢光、區塊背景"
+        title="Color: text, highlight, block background"
         onClick={() => setOpen((v) => !v)}
       >
         <span className={`fb-a${m?.color ? ` tc-${m.color}` : ""}${m?.highlight ? ` hl-${m.highlight}` : ""}`}>A</span>
@@ -2099,24 +2327,160 @@ function FormatBar(props: {
       </button>
       <span className="fb-sep" />
       <span className={`fb-state${active.length ? " has" : ""}`}>
-        {!props.enabled ? "原始文字" : active.length ? active.join("・") : "一般文字"}
+        {!props.enabled ? "Raw text" : active.length ? active.join("・") : "Plain text"}
       </span>
       {open && (
         <div className="popover color-menu">
           {props.enabled && (
             <>
-              <div className="popover-title">文字顏色</div>
+              <div className="popover-title">Text color</div>
               <Swatches kind="color" value={m?.color ?? null} onPick={(c) => props.onColor("color", c)} />
-              <div className="popover-title">螢光標記</div>
+              <div className="popover-title">Highlight</div>
               <Swatches kind="highlight" value={m?.highlight ?? null} onPick={(c) => props.onColor("highlight", c)} />
             </>
           )}
-          <div className="popover-title">區塊背景</div>
+          <div className="popover-title">Block background</div>
           <Swatches kind="bg" value={props.bg} onPick={props.onBlockBg} />
         </div>
       )}
     </div>
   );
+}
+
+/** 游標前面還沒打完的頁面連結：`[[`（或跳脫過的 `\[\[`）的位置與已經打的名稱。 */
+export function findRefQuery(text: string, caret: number): { from: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const m = /(?:\\?\[){2}((?:\\.|[^[\]\n\\])*)$/.exec(before);
+  if (!m) return null;
+  const query = m[1].replace(/\\(.)/g, "$1");
+  if (query.length > 60) return null;
+  return { from: m.index, query };
+}
+
+/** 輸入 `[[` 後的頁面建議。 */
+function RefMenu(props: {
+  items: { name: string; create: boolean }[];
+  active: number;
+  onPick: (name: string) => void;
+  onHover: (i: number) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector(".active")?.scrollIntoView({ block: "nearest" });
+  }, [props.active]);
+  return (
+    <div className="popover slash-menu ref-menu" onMouseDown={(e) => e.preventDefault()}>
+      <div className="popover-scroll" ref={ref}>
+        <div className="popover-title">Link to page</div>
+        {props.items.length === 0 && <div className="popover-empty">Type a page name</div>}
+        {props.items.map((t, i) => (
+          <button
+            key={(t.create ? "+" : "") + t.name}
+            className={i === props.active ? "active" : ""}
+            onMouseEnter={() => props.onHover(i)}
+            onClick={() => props.onPick(t.name)}
+          >
+            <span className="tile">{t.create ? "+" : "[["}</span>
+            <span className="text">
+              <span className="label">{t.name}</span>
+              <span className="desc">{t.create ? "New page" : "Existing page"}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="popover-footer">
+        <span>
+          <kbd>↑</kbd>
+          <kbd>↓</kbd> Choose
+        </span>
+        <span>
+          <kbd>Enter</kbd> OK
+        </span>
+        <span>
+          <kbd>Esc</kbd> Close
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const STATE_ITEMS: TaskState[] = ["open", "done", "cancelled", "event"];
+
+/** 子彈筆記符號的選單：改狀態、排程。 */
+function TaskMenu(props: {
+  x: number;
+  y: number;
+  state: TaskState;
+  onClose: () => void;
+  onState: (s: TaskState | null) => void;
+  onSend: (date: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: props.x, top: props.y });
+  const { onClose } = props;
+  useEffect(() => {
+    const down = (e: globalThis.MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    const key = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", down);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", down);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+  useLayoutEffect(() => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    setPos({
+      left: Math.max(8, Math.min(props.x, window.innerWidth - r.width - 8)),
+      top: r.bottom > window.innerHeight - 8 ? Math.max(8, props.y - r.height) : props.y,
+    });
+  }, [props.x, props.y]);
+  const today = localDay(0);
+  return (
+    <div className="popover block-menu task-menu" ref={ref} style={pos}>
+      <div className="popover-title">Bullet journal</div>
+      {STATE_ITEMS.map((st) => (
+        <button key={st} className={st === props.state ? "current" : ""} onClick={() => props.onState(st)}>
+          <span className={`tile small task-tile g-${st}`}>
+            <TaskIcon state={st} />
+          </span>
+          <span className="label">{TASK_LABEL[st]}</span>
+          {st === props.state && <span className="check">✓</span>}
+        </button>
+      ))}
+      <button onClick={() => props.onState(null)}>
+        <span className="tile small task-tile">
+          <TaskIcon state="note" />
+        </span>
+        <span className="label">Note (remove symbol)</span>
+      </button>
+      <div className="popover-sep" />
+      <label className="task-date">
+        <span className="tile small task-tile">
+          <TaskIcon state="scheduled" />
+        </span>
+        <span className="label">Schedule to</span>
+        <input
+          type="date"
+          min={today}
+          onChange={(e) => {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) props.onSend(e.target.value);
+          }}
+        />
+      </label>
+    </div>
+  );
+}
+
+/** 今天加上 n 天（當地時間的 YYYY-MM-DD）。 */
+function localDay(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 function SlashMenu(props: {
@@ -2132,8 +2496,8 @@ function SlashMenu(props: {
   return (
     <div className="popover slash-menu" onMouseDown={(e) => e.preventDefault()}>
       <div className="popover-scroll" ref={ref}>
-        <div className="popover-title">基本區塊</div>
-        {props.items.length === 0 && <div className="popover-empty">沒有符合的類型</div>}
+        <div className="popover-title">Basic blocks</div>
+        {props.items.length === 0 && <div className="popover-empty">No matching blocks</div>}
         {props.items.map((t, i) => (
           <button
             key={t.type}
@@ -2153,13 +2517,13 @@ function SlashMenu(props: {
       <div className="popover-footer">
         <span>
           <kbd>↑</kbd>
-          <kbd>↓</kbd> 選擇
+          <kbd>↓</kbd> Choose
         </span>
         <span>
-          <kbd>Enter</kbd> 確認
+          <kbd>Enter</kbd> OK
         </span>
         <span>
-          <kbd>Esc</kbd> 關閉
+          <kbd>Esc</kbd> Close
         </span>
       </div>
     </div>
@@ -2207,8 +2571,8 @@ function BlockMenu(props: {
   }, [props.x, props.y]);
   return (
     <div className="popover block-menu" ref={ref} style={pos} onMouseDown={(e) => e.preventDefault()}>
-      {props.count > 1 && <div className="popover-count">已選取 {props.count} 個區塊</div>}
-      <div className="popover-title">轉換成</div>
+      {props.count > 1 && <div className="popover-count">{props.count} blocks selected</div>}
+      <div className="popover-title">Turn into</div>
       {BLOCK_TYPES.filter((t) => !INSERT_ONLY.has(t.type)).map((t) => (
         <button
           key={t.type}
@@ -2220,7 +2584,7 @@ function BlockMenu(props: {
           {t.type === props.current && <span className="check">✓</span>}
         </button>
       ))}
-      <div className="popover-title">背景顏色</div>
+      <div className="popover-title">Background color</div>
       <Swatches kind="bg" value={props.bg} onPick={props.onBg} />
       <div className="popover-sep" />
       {props.canIndent && (
@@ -2228,7 +2592,7 @@ function BlockMenu(props: {
           <span className="glyph">
             <IndentIcon />
           </span>
-          <span className="label">增加縮排</span>
+          <span className="label">Indent</span>
           <kbd className="hint">Tab</kbd>
         </button>
       )}
@@ -2237,7 +2601,7 @@ function BlockMenu(props: {
           <span className="glyph">
             <OutdentIcon />
           </span>
-          <span className="label">減少縮排</span>
+          <span className="label">Outdent</span>
           <kbd className="hint">⇧Tab</kbd>
         </button>
       )}
@@ -2245,13 +2609,13 @@ function BlockMenu(props: {
         <span className="glyph">
           <CopyIcon />
         </span>
-        <span className="label">建立副本</span>
+        <span className="label">Duplicate</span>
       </button>
       <button className="danger" onClick={props.onDelete}>
         <span className="glyph">
           <TrashIcon />
         </span>
-        <span className="label">刪除</span>
+        <span className="label">Delete</span>
       </button>
     </div>
   );

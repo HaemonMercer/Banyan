@@ -43,22 +43,36 @@ export function daysBetween(a: string, b: string): number {
   return Math.round((parseKey(b).getTime() - parseKey(a).getTime()) / 86_400_000);
 }
 
-const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+/** 星期的縮寫（月曆表頭、日期標籤） */
+export const WEEKDAYS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/** 月曆表頭用的兩字母星期（也當 React key，不能重複） */
+export const WEEKDAYS_MIN = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MONTHS_SHORT = MONTHS.map((m) => m.slice(0, 3));
+
+/** 月份名稱（m 是 1～12） */
+export const monthName = (m: number) => MONTHS[m - 1];
+export const monthShort = (m: number) => MONTHS_SHORT[m - 1];
 
 export function weekday(key: string): string {
-  return `星期${WEEKDAYS[parseKey(key).getDay()]}`;
+  return WEEKDAYS[parseKey(key).getDay()];
 }
 
-/** 日記標題：「11 月 17 日」，不是今年的加上年份。 */
+export function weekdayShort(key: string): string {
+  return WEEKDAYS_SHORT[parseKey(key).getDay()];
+}
+
+/** 日記標題：「Nov 17」，不是今年的加上年份（「Nov 17, 2025」）。 */
 export function dayTitle(key: string, now = today()): string {
   const [y, m, d] = key.split("-").map(Number);
-  const md = `${m} 月 ${d} 日`;
-  return y === Number(now.slice(0, 4)) ? md : `${y} 年 ${md}`;
+  const md = `${monthShort(m)} ${d}`;
+  return y === Number(now.slice(0, 4)) ? md : `${md}, ${y}`;
 }
 
-/** 「今天」「昨天」「前天」「明天」，其他是空字串。 */
+/** 「Today」「Yesterday」「Tomorrow」之類，其他是空字串。 */
 export function relativeLabel(key: string, now = today()): string {
-  return { 0: "今天", [-1]: "昨天", [-2]: "前天", 1: "明天" }[daysBetween(now, key)] ?? "";
+  return { 0: "Today", [-1]: "Yesterday", [-2]: "2 days ago", 1: "Tomorrow" }[daysBetween(now, key)] ?? "";
 }
 
 /** 日記串要顯示的日子：今天（就算還沒寫）加上今天以前有寫的日子，新的在前。 */
