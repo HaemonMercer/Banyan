@@ -12,9 +12,21 @@ import {
   type ReactNode,
 } from "react";
 import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
-import { CopyIcon, GripIcon, LinkIcon, PlusIcon, TrashIcon } from "./icons";
+import { CopyIcon, GripIcon, IndentIcon, LinkIcon, OutdentIcon, PlusIcon, TrashIcon } from "./icons";
 import { caretFromPoint } from "./caret";
-import { parseDoc, type ParsedDoc, type Unit } from "./markdown";
+import {
+  canDrop,
+  canIndent,
+  canOutdent,
+  groupOf,
+  indentBlock,
+  outdentBlock,
+  placeBeside,
+  setColumnWidths,
+  treeWith,
+  type DropPos,
+} from "./layout";
+import { parseDoc, type Container, type ParsedDoc, type TreeNode, type Unit } from "./markdown";
 import {
   activate,
   applyText,
@@ -68,11 +80,16 @@ interface Slash {
 /** 拖曳中的區塊。用指標事件自己做，不用 HTML5 拖放（Tauri 在 Windows 上會攔截它）。 */
 interface Drag {
   from: Unit;
-  /** 放到第幾個區塊之前；等於區塊數表示文件最後 */
-  over: number | null;
+  drop: Drop | null;
   x: number;
   y: number;
   label: string;
+}
+
+/** 放置位置：目標區塊（起始行）與方向；左右表示形成多欄。 */
+interface Drop {
+  start: number;
+  pos: DropPos;
 }
 
 interface History {
@@ -93,6 +110,7 @@ export function Editor({ value, onChange }: EditorProps) {
   const [slash, setSlash] = useState<Slash | null>(null);
   const [menu, setMenu] = useState<{ unit: Unit; x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [resize, setResize] = useState<Record<number, number> | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
   const history = useRef<History>({ past: [], future: [], last: 0 });
@@ -306,6 +324,10 @@ export function Editor({ value, onChange }: EditorProps) {
         }
       } else if (kind === "code") {
         commit(applyText(sync, text.slice(0, a) + "  " + text.slice(b), a + 2));
+      } else {
+        // 其他區塊：Tab 增加縮排、Shift+Tab 減少縮排
+        setSlash(null);
+        shiftIndent(s.region, e.shiftKey, a);
       }
       return;
     }
@@ -387,14 +409,38 @@ export function Editor({ value, onChange }: EditorProps) {
     commit({ ...next, region: null });
   };
 
-  /** 指標位置對應到「放在第幾個區塊之前」。 */
-  const dropIndexAt = (y: number, count: number): number => {
-    const rowsEl = document.querySelectorAll<HTMLElement>(".md-editor .row[data-index]");
+  /** 指標位置對應到放置的位置：最近的區塊，以及上、下、左、右。 */
+  const dropAt = (x: number, y: number, from: Unit): Drop | null => {
+    const fromStart = from.start;
+    const cur = parseDoc(stateRef.current.source);
+    const rowsEl = [...document.querySelectorAll<HTMLElement>(".md-editor .row[data-start]")].filter((el) => {
+      const start = Number(el.dataset.start);
+      const t = cur.blocks.find((u) => u.start === start);
+      // 不能放進自己的子區塊；有子區塊的區塊不能放進縮排
+      return start === fromStart || (t ? canDrop(cur, from, t) : false);
+    });
+    let best: HTMLElement | null = null;
+    let bestD = Infinity;
     for (const el of rowsEl) {
       const r = el.getBoundingClientRect();
-      if (y < r.top + r.height / 2) return Number(el.dataset.index);
+      const dx = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
+      const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      const d = dx * dx + dy * dy * 4;
+      if (d < bestD) {
+        bestD = d;
+        best = el;
+      }
     }
-    return count;
+    if (!best) return null;
+    const start = Number(best.dataset.start);
+    const r = best.getBoundingClientRect();
+    // 指標進入區塊左緣一小段 → 放左邊；右側四分之一 → 放右邊（形成多欄）
+    const edge = Math.min(56, r.width * 0.2);
+    let pos: DropPos;
+    if (x >= r.left && x < r.left + edge && start !== fromStart) pos = "left";
+    else if (x > r.right - Math.max(edge, r.width * 0.25) && start !== fromStart) pos = "right";
+    else pos = y < r.top + r.height / 2 ? "before" : "after";
+    return { start, pos };
   };
 
   const onHandlePointerDown = (e: ReactPointerEvent<HTMLButtonElement>, unit: Unit) => {
@@ -414,16 +460,16 @@ export function Editor({ value, onChange }: EditorProps) {
         if (s.region) {
           const d = deactivate(s);
           s = d.state;
-          const shift = d.removed && unit.start >= d.removedAt ? d.removed : 0;
-          from = parseDoc(s.source).units.find((u) => u.start === unit.start - shift);
+          from = parseDoc(s.source).blocks.find((u) => u.start === d.map(unit.start));
           commit(s);
         }
         if (!from) return cleanup();
         setMenu(null);
-        current = { from, over: null, x: 0, y: 0, label: regionText(s.source.split("\n"), from).slice(0, 80) };
+        const kids = groupOf(parseDoc(s.source), from).end > from.end;
+        const label = regionText(s.source.split("\n"), from).slice(0, 80) + (kids ? "  ＋子區塊" : "");
+        current = { from, drop: null, x: 0, y: 0, label };
       }
-      const count = parseDoc(stateRef.current.source).units.length;
-      current = { ...current, x: ev.clientX, y: ev.clientY, over: dropIndexAt(ev.clientY, count) };
+      current = { ...current, x: ev.clientX, y: ev.clientY, drop: dropAt(ev.clientX, ev.clientY, current.from) };
       setDrag(current);
     };
 
@@ -435,14 +481,19 @@ export function Editor({ value, onChange }: EditorProps) {
         setMenu({ unit, x: r.left, y: r.bottom + 4 });
         return;
       }
-      const { from, over } = current;
+      const { from, drop } = current;
       setDrag(null);
+      if (!drop || drop.start === from.start) return;
       const source = stateRef.current.source;
-      const units = parseDoc(source).units;
-      const index = units.findIndex((u) => u.start === from.start);
-      if (over === null || index === -1 || over === index || over === index + 1) return;
-      const target = over < units.length ? units[over] : null;
-      commit({ source: moveUnit(source, units[index], target), region: null, caret: 0 });
+      const blocks = parseDoc(source).blocks;
+      const x = blocks.find((u) => u.start === from.start);
+      const target = blocks.find((u) => u.start === drop.start);
+      if (!x || !target) return;
+      const next =
+        drop.pos === "left" || drop.pos === "right"
+          ? placeBeside(source, x, target, drop.pos)
+          : moveUnit(source, x, target, drop.pos);
+      if (next !== source) commit({ source: next, region: null, caret: 0 });
     };
 
     const key = (ev: globalThis.KeyboardEvent) => {
@@ -464,10 +515,56 @@ export function Editor({ value, onChange }: EditorProps) {
     window.addEventListener("keydown", key);
   };
 
+  /** 拖曳欄位之間的空隙調整欄寬。 */
+  const onGapPointerDown = (e: ReactPointerEvent<HTMLDivElement>, a: Container, b: Container) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const gap = e.currentTarget.parentElement as HTMLElement;
+    const left = gap.previousElementSibling as HTMLElement | null;
+    const right = gap.nextElementSibling as HTMLElement | null;
+    if (!left || !right) return;
+    const pa = left.getBoundingClientRect().width;
+    const pb = right.getBoundingClientRect().width;
+    const sum = a.width + b.width;
+    const startX = e.clientX;
+    let result: Record<number, number> | null = null;
+    gap.classList.add("active");
+
+    const move = (ev: PointerEvent) => {
+      const min = 64;
+      const na = Math.min(Math.max(pa + ev.clientX - startX, min), pa + pb - min);
+      result = { [a.open.start]: (sum * na) / (pa + pb), [b.open.start]: (sum * (pa + pb - na)) / (pa + pb) };
+      setResize(result);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      gap.classList.remove("active");
+      setResize(null);
+      if (!result) return;
+      const s = stateRef.current;
+      const widths = Object.entries(result).map(([line, width]) => ({ line: Number(line), width }));
+      commit({ ...s, source: setColumnWidths(s.source, widths) });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
+  /** 縮排或減少縮排，完成後繼續編輯同一個區塊。 */
+  const shiftIndent = (r: { start: number; end: number }, outdent: boolean, caret: number | null) => {
+    const s = stateRef.current;
+    const res = outdent ? outdentBlock(s.source, r) : indentBlock(s.source, r);
+    if (!res) return false;
+    const target = { start: res.start, end: res.start + (r.end - r.start) };
+    const next = { source: res.source, region: null, caret: 0 };
+    commit(caret === null ? next : activate(next, target, caret));
+    return true;
+  };
+
   // ─── 畫面 ──────────────────────────────────────────────────
 
-  const rows: ReactNode[] = [];
-  let placed = false;
   const editorRow = region ? (
     <div
       className={`row editing kind-${editUnit?.kind ?? "paragraph"}${editUnit && isTitle(editUnit, doc) ? " is-title" : ""}`}
@@ -506,32 +603,74 @@ export function Editor({ value, onChange }: EditorProps) {
     </div>
   ) : null;
 
-  doc.units.forEach((u, i) => {
-    if (region && u.start < region.end && u.end > region.start) return;
-    if (region && !placed && u.start >= region.end) {
-      rows.push(editorRow);
-      placed = true;
-    }
-    rows.push(
-      <UnitRow
-        key={`${u.start}:${u.kind}`}
-        unit={u}
-        doc={doc}
-        dropBefore={drag?.over === i}
-        index={i}
-        dragging={drag?.from.start === u.start}
-        onMouseDown={(e) => onUnitMouseDown(e, u)}
-        onAdd={() => addAfter(u)}
-        onHandlePointerDown={(e) => onHandlePointerDown(e, u)}
-      />,
-    );
-  });
-  if (region && !placed) rows.push(editorRow);
+  // 編輯區取代與它重疊的區塊，放進樹中對應的位置
+  const view = useMemo(() => (region ? treeWith(doc, region) : { tree: doc.tree, self: null }), [doc, region]);
+
+  const renderNodes = (nodes: TreeNode[]): ReactNode[] =>
+    nodes.map((n) => {
+      if (n.type === "leaf") {
+        const u = n.unit;
+        if (u === view.self) return editorRow;
+        return (
+          <UnitRow
+            key={`${u.start}:${u.kind}`}
+            unit={u}
+            doc={doc}
+            drop={drag?.drop?.start === u.start ? drag.drop.pos : null}
+            dragging={drag?.from.start === u.start}
+            onMouseDown={(e) => onUnitMouseDown(e, u)}
+            onAdd={() => addAfter(u)}
+            onHandlePointerDown={(e) => onHandlePointerDown(e, u)}
+          />
+        );
+      }
+      if (n.kind === "columns") {
+        const cols = n.children;
+        const out: ReactNode[] = [];
+        cols.forEach((c, i) => {
+          const prev = cols[i - 1];
+          if (i > 0 && prev.type === "container" && c.type === "container") {
+            out.push(
+              <div key={`gap:${c.open.start}`} className="col-gap">
+                <div className="grip" title="拖曳調整欄寬" onPointerDown={(e) => onGapPointerDown(e, prev, c)} />
+              </div>,
+            );
+          }
+          if (c.type === "container") {
+            const w = resize?.[c.open.start] ?? c.width;
+            out.push(
+              <div key={`col:${c.open.start}`} className="column" style={{ flex: `${w} 1 0` }}>
+                {renderNodes(c.children)}
+              </div>,
+            );
+          } else {
+            out.push(...renderNodes([c]));
+          }
+        });
+        return (
+          <div key={`cols:${n.open.start}`} className="columns">
+            {out}
+          </div>
+        );
+      }
+      const i = nodes.indexOf(n);
+      const owner = nodes[i - 1];
+      const dragged = n.kind === "indent" && owner?.type === "leaf" && drag?.from.start === owner.unit.start;
+      return (
+        <div
+          key={`${n.kind}:${n.open.start}`}
+          className={n.kind === "indent" ? `indent-block${dragged ? " dragging" : ""}` : "column"}
+        >
+          {renderNodes(n.children)}
+        </div>
+      );
+    });
+
+  const menuDoc = menu ? doc : null;
 
   return (
     <div className={`md-editor${drag ? " is-dragging" : ""}`}>
-      {rows}
-      {drag?.over === doc.units.length && <div className="drop-line" />}
+      {renderNodes(view.tree)}
       <div className="tail" onMouseDown={onTailMouseDown}>
         {doc.units.length === 0 && !region && <span className="empty-hint">點這裡開始寫作…</span>}
       </div>
@@ -540,20 +679,29 @@ export function Editor({ value, onChange }: EditorProps) {
           {drag.label || "（空白）"}
         </div>
       )}
-      {menu && (
+      {menu && menuDoc && (
         <BlockMenu
           x={menu.x}
           y={menu.y}
           current={blockTypeOf(menu.unit)}
+          canIndent={menu.unit.kind !== "item" && canIndent(menuDoc, menu.unit)}
+          canOutdent={menu.unit.kind !== "item" && canOutdent(menuDoc, menu.unit)}
           onClose={() => setMenu(null)}
           onTurn={(t) => turnUnitInto(menu.unit, t)}
+          onIndent={(outdent) => {
+            setMenu(null);
+            shiftIndent(menu.unit, outdent, null);
+          }}
           onDuplicate={() => {
             setMenu(null);
-            commit({ source: duplicateUnit(state.source, menu.unit), region: null, caret: 0 });
+            // 連同子區塊一起複製
+            const g = groupOf(menuDoc, menu.unit);
+            commit({ source: duplicateUnit(state.source, { ...menu.unit, end: g.end }), region: null, caret: 0 });
           }}
           onDelete={() => {
             setMenu(null);
-            commit({ source: deleteUnit(state.source, menu.unit), region: null, caret: 0 });
+            // 連同子區塊一起刪除
+            commit({ source: deleteUnit(state.source, groupOf(menuDoc, menu.unit)), region: null, caret: 0 });
           }}
         />
       )}
@@ -566,15 +714,14 @@ export function Editor({ value, onChange }: EditorProps) {
 interface UnitRowProps {
   unit: Unit;
   doc: ParsedDoc;
-  index: number;
-  dropBefore: boolean;
+  drop: DropPos | null;
   dragging: boolean;
   onMouseDown: (e: MouseEvent<HTMLDivElement>) => void;
   onAdd: () => void;
   onHandlePointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => void;
 }
 
-function UnitRow({ unit, doc, index, dropBefore, dragging, ...on }: UnitRowProps) {
+function UnitRow({ unit, doc, drop, dragging, ...on }: UnitRowProps) {
   let body: ReactNode;
   const html = { __html: clean(unit.html) };
   if (unit.kind === "item" && unit.list) {
@@ -600,10 +747,9 @@ function UnitRow({ unit, doc, index, dropBefore, dragging, ...on }: UnitRowProps
   return (
     <div
       className={`row kind-${unit.kind}${isTitle(unit, doc) ? " is-title" : ""}${dragging ? " dragging" : ""}`}
-      data-index={index}
-      data-line={unit.start}
+      data-start={unit.start}
     >
-      {dropBefore && <div className="drop-line" />}
+      {drop && <div className={`drop-indicator ${drop}`} />}
       <div className="gutter">
         <button className="add" title="在下方新增區塊" onMouseDown={(e) => e.preventDefault()} onClick={on.onAdd}>
           <PlusIcon />
@@ -697,8 +843,11 @@ function BlockMenu(props: {
   x: number;
   y: number;
   current: BlockType | null;
+  canIndent: boolean;
+  canOutdent: boolean;
   onClose: () => void;
   onTurn: (t: BlockType) => void;
+  onIndent: (outdent: boolean) => void;
   onDuplicate: () => void;
   onDelete: () => void;
 }) {
@@ -741,6 +890,24 @@ function BlockMenu(props: {
         </button>
       ))}
       <div className="popover-sep" />
+      {props.canIndent && (
+        <button onClick={() => props.onIndent(false)}>
+          <span className="glyph">
+            <IndentIcon />
+          </span>
+          <span className="label">增加縮排</span>
+          <kbd className="hint">Tab</kbd>
+        </button>
+      )}
+      {props.canOutdent && (
+        <button onClick={() => props.onIndent(true)}>
+          <span className="glyph">
+            <OutdentIcon />
+          </span>
+          <span className="label">減少縮排</span>
+          <kbd className="hint">⇧Tab</kbd>
+        </button>
+      )}
       <button onClick={props.onDuplicate}>
         <span className="glyph">
           <CopyIcon />

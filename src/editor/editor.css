@@ -141,21 +141,96 @@ kbd {
   opacity: 0.35;
 }
 
-.drop-line {
+/* 拖曳時的放置提示：上、下是橫線；左、右是直線（形成多欄） */
+.drop-indicator {
   position: absolute;
-  left: -6px;
-  right: -6px;
-  top: -3px;
-  height: 3px;
+  z-index: 3;
   border-radius: 2px;
   background: var(--ed-accent);
   pointer-events: none;
-  z-index: 2;
 }
-.md-editor > .drop-line {
-  position: relative;
+.drop-indicator.before,
+.drop-indicator.after {
+  left: -6px;
+  right: -6px;
+  height: 3px;
+}
+.drop-indicator.before {
+  top: -3px;
+}
+.drop-indicator.after {
+  bottom: -3px;
+}
+.drop-indicator.left,
+.drop-indicator.right {
   top: 0;
-  margin: 2px 0;
+  bottom: 0;
+  width: 3px;
+}
+.drop-indicator.left {
+  left: -10px;
+}
+.drop-indicator.right {
+  right: -10px;
+}
+
+/* ─── 多欄與縮排 ─── */
+
+.columns {
+  display: flex;
+  align-items: flex-start;
+  margin: 4px 0;
+}
+.column {
+  min-width: 0;
+}
+.col-gap {
+  position: relative;
+  flex: none;
+  width: 44px;
+  align-self: stretch;
+  pointer-events: none;
+}
+/* 調整欄寬的把手：空隙左半邊的一條（右半邊留給區塊的拖曳鈕） */
+.col-gap .grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 14px;
+  cursor: col-resize;
+  touch-action: none;
+  pointer-events: auto;
+}
+.col-gap .grip::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.col-gap .grip:hover::after,
+.col-gap.active .grip::after {
+  background: var(--ed-accent-ring);
+}
+/* 欄位裡空間有限：把手只留拖曳鈕，往內收 */
+.column .row .gutter {
+  left: -22px;
+  width: 20px;
+}
+.column .row .gutter .add {
+  display: none;
+}
+.column .edit-badge {
+  display: none;
+}
+
+.indent-block {
+  padding-left: 1.65em;
 }
 
 .tail {
@@ -587,4 +662,8 @@ kbd {
   opacity: 0.92;
   pointer-events: none;
   transform: rotate(-1deg);
+}
+
+.indent-block.dragging {
+  opacity: 0.35;
 }

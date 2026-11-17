@@ -71,3 +71,15 @@ export const LinkIcon = (p: IconProps) => (
     <path d="M9.25 6.75a2.5 2.5 0 0 0-3.5 0l-2 2a2.5 2.5 0 0 0 3.5 3.5l.5-.5" />
   </svg>
 );
+
+export const IndentIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 3.5h11M7.5 6.5h6M7.5 9.5h6M2.5 12.5h11M2.5 6l2.5 2-2.5 2" />
+  </svg>
+);
+
+export const OutdentIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 3.5h11M7.5 6.5h6M7.5 9.5h6M2.5 12.5h11M5 6 2.5 8 5 10" />
+  </svg>
+);

@@ -38,6 +38,134 @@ export interface Unit {
   html: string;
   level?: number;
   list?: ListInfo;
+  /** 版面標籤（`<div class="columns">` 等單行 HTML 區塊） */
+  tag?: Tag;
+}
+
+// ─── 版面：縮排與多欄 ─────────────────────────────────────────────
+//
+// CommonMark 沒有欄位與縮排，用 HTML 區塊包起來（每個標籤自成一行、前後空行，
+// 中間的內容照常當 Markdown 解析）：
+//
+//   <div class="columns">          <div class="indent">
+//                                  
+//   <div class="column">           內容
+//                                  
+//   內容                            </div>
+//
+//   </div>
+//
+//   </div>
+//
+// 標籤仍是 CommonMark 的 HTML 區塊，渲染結果與規格一致；編輯器只是把它們藏起來，
+// 改用欄位與縮排顯示。
+
+export type ContainerKind = "columns" | "column" | "indent";
+
+export type Tag = { type: "open"; kind: ContainerKind | "div"; width?: number } | { type: "close" };
+
+const LAYOUT_OPEN = /^<div class="(columns|column|indent)"(?: style="flex: ?(\d+(?:\.\d+)?)")?>[ \t]*$/;
+const DIV_OPEN = /^<div\b[^>]*>[ \t]*$/i;
+const DIV_CLOSE = /^<\/div>[ \t]*$/i;
+
+export function parseTag(line: string): Tag | undefined {
+  const m = LAYOUT_OPEN.exec(line);
+  if (m) return { type: "open", kind: m[1] as ContainerKind, width: m[2] ? Number(m[2]) : undefined };
+  if (DIV_OPEN.test(line)) return { type: "open", kind: "div" };
+  if (DIV_CLOSE.test(line)) return { type: "close" };
+  return undefined;
+}
+
+export function openTag(kind: ContainerKind, width?: number): string {
+  return width !== undefined && Math.abs(width - 1) > 0.005
+    ? `<div class="${kind}" style="flex: ${+width.toFixed(2)}">`
+    : `<div class="${kind}">`;
+}
+
+export interface Container {
+  type: "container";
+  kind: ContainerKind;
+  open: Unit;
+  close: Unit;
+  /** 欄寬比例（flex-grow），預設 1 */
+  width: number;
+  children: TreeNode[];
+}
+
+export interface Leaf {
+  type: "leaf";
+  unit: Unit;
+}
+
+export type TreeNode = Container | Leaf;
+
+/** 依標籤把區塊組成樹；沒配對的標籤當一般 HTML 區塊。 */
+export function buildTree(units: Unit[]): TreeNode[] {
+  interface Frame {
+    kind: ContainerKind | "div";
+    open: Unit | null;
+    width: number;
+    children: TreeNode[];
+  }
+  const stack: Frame[] = [{ kind: "div", open: null, width: 1, children: [] }];
+  const leaf = (unit: Unit): Leaf => ({ type: "leaf", unit });
+  for (const u of units) {
+    const top = stack[stack.length - 1];
+    if (u.tag?.type === "open") {
+      stack.push({ kind: u.tag.kind, open: u, width: u.tag.width ?? 1, children: [] });
+    } else if (u.tag?.type === "close" && stack.length > 1) {
+      stack.pop();
+      const parent = stack[stack.length - 1];
+      if (top.kind === "div") parent.children.push(leaf(top.open!), ...top.children, leaf(u));
+      else
+        parent.children.push({
+          type: "container",
+          kind: top.kind,
+          open: top.open!,
+          close: u,
+          width: top.width,
+          children: top.children,
+        });
+    } else {
+      top.children.push(leaf(u));
+    }
+  }
+  while (stack.length > 1) {
+    const f = stack.pop()!;
+    stack[stack.length - 1].children.push(leaf(f.open!), ...f.children);
+  }
+  return stack[0].children;
+}
+
+/** 樹中所有看得到的區塊（不含版面標籤），依文件順序。 */
+export function leaves(nodes: TreeNode[], out: Unit[] = []): Unit[] {
+  for (const n of nodes) {
+    if (n.type === "leaf") out.push(n.unit);
+    else leaves(n.children, out);
+  }
+  return out;
+}
+
+export interface Located {
+  leaf: Leaf;
+  siblings: TreeNode[];
+  index: number;
+  /** 由外到內的容器 */
+  ancestors: Container[];
+}
+
+/** 找出起始行為 start 的區塊在樹中的位置。 */
+export function locate(nodes: TreeNode[], start: number, ancestors: Container[] = []): Located | null {
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.type === "leaf") {
+      if (n.unit.start === start) return { leaf: n, siblings: nodes, index: i, ancestors };
+    } else {
+      const found = locate(n.children, start, [...ancestors, n]);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 export interface ListInfo {
@@ -57,7 +185,12 @@ interface TopBlock {
 
 export interface ParsedDoc {
   lines: string[];
+  /** 所有區塊，包含版面標籤 */
   units: Unit[];
+  /** 依版面標籤組成的樹 */
+  tree: TreeNode[];
+  /** 看得到的區塊（不含版面標籤），依文件順序 */
+  blocks: Unit[];
   /** 與 md.render(source) 完全相同的 HTML，由區塊組回來 */
   html: string;
 }
@@ -163,7 +296,11 @@ export function parseDoc(source: string): ParsedDoc {
   }
 
   const all = extra.length ? [...units, ...extra].sort((a, b) => a.start - b.start) : units;
-  return { lines, units: all, html: tops.map((b) => b.html).join("") };
+  for (const u of all) {
+    if (u.kind === "html" && u.end - u.start === 1) u.tag = parseTag(lines[u.start]);
+  }
+  const tree = buildTree(all);
+  return { lines, units: all, tree, blocks: leaves(tree), html: tops.map((b) => b.html).join("") };
 }
 
 /** 直接用 CommonMark 渲染整份文件（給匯出／測試對照用）。 */

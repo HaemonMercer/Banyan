@@ -18,6 +18,33 @@ const WELCOME = `# 歡迎使用 Banyan
 - 滑到區塊左邊，用 ⋮⋮ 拖曳搬移，或點它刪除、複製、轉換類型
 - \`Enter\` 新增區塊，\`Shift+Enter\` 換行，\`Ctrl+Z\` 復原
 - 按住 \`Ctrl\` 點連結可以用瀏覽器開啟
+- \`Tab\` 增加縮排、\`Shift+Tab\` 減少縮排
+
+<div class="indent">
+
+縮排的段落。編輯時按 \`Shift+Tab\` 可以移出來。
+
+</div>
+
+<div class="columns">
+
+<div class="column">
+
+### 多欄
+
+把區塊拖到另一個區塊的**右邊或左邊**，就會分成多欄。
+
+</div>
+
+<div class="column">
+
+### 調整
+
+拖曳欄位之間的空隙調整欄寬；把欄裡的區塊全拖出去，那一欄就會消失。
+
+</div>
+
+</div>
 
 > CommonMark 的 652 個規格範例全部通過。
 
@@ -41,7 +68,9 @@ function load(): string {
 }
 
 /** 字數：中日韓文字每字算一個，其他以空白分隔的詞算一個。 */
-function countWords(md: string): number {
+function countWords(source: string): number {
+  // 版面標籤（欄位、縮排）不算字
+  const md = source.replace(/^<\/?div\b[^>]*>[ \t]*$/gim, "");
   const cjk = md.match(/[㐀-鿿豈-﫿぀-ヿ가-힯]/g)?.length ?? 0;
   const words = md.replace(/[㐀-鿿豈-﫿぀-ヿ가-힯]/g, " ").match(/[\p{L}\p{N}]+/gu);
   return cjk + (words?.length ?? 0);

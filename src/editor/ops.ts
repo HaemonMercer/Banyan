@@ -1,3 +1,4 @@
+import { LineBuf, collapse as collapseBuf, deleteBlock, moveBlock, normalize } from "./layout";
 import { parseDoc, type ParsedDoc, type Unit, type UnitKind } from "./markdown";
 
 /**
@@ -68,20 +69,6 @@ function offsetOfLine(lines: string[], line: number) {
   return n;
 }
 
-/** 移除第 at 行附近多出來的空白行（刪掉區塊後兩個分隔空行會相鄰）。 */
-function collapse(lines: string[], at: number): number {
-  while (at > 0 && isBlank(lines[at - 1]) && (at >= lines.length || isBlank(lines[at]))) {
-    // 文件結尾保留一個換行
-    if (at >= lines.length && at - 1 === 0) break;
-    if (at >= lines.length && lines.length >= 2 && !isBlank(lines[at - 2])) break;
-    lines.splice(at - 1, 1);
-    at--;
-  }
-  // 文件開頭的空白行沒有意義
-  if (at === 0) while (lines.length > 1 && isBlank(lines[0])) lines.shift();
-  return at;
-}
-
 /** 空白、或只有清單標記（如 Enter 產生的 `- `）的區塊，離開時會被刪掉。 */
 export function isEmptyBlock(text: string): boolean {
   return /^\s*$/.test(text) || /^[ \t]*([-+*]|\d{1,9}[.)])[ \t]*$/.test(text);
@@ -89,37 +76,35 @@ export function isEmptyBlock(text: string): boolean {
 
 // ─── 進入／離開編輯 ───────────────────────────────────────────────
 
-/** 離開編輯區；若編輯區是空的就把它刪掉。回傳被刪掉的行（供呼叫端位移其他行號）。 */
-export function deactivate(state: EditorState): { state: EditorState; removedAt: number; removed: number } {
+/** 舊行號 → 新行號 */
+export type LineMap = (line: number) => number;
+const identity: LineMap = (l) => l;
+
+/** 離開編輯區；若編輯區是空的就把它刪掉（連同因此變空的欄位、縮排）。回傳行號對照。 */
+export function deactivate(state: EditorState): { state: EditorState; map: LineMap } {
   const { region } = state;
-  const none = { state: { ...state, region: null }, removedAt: 0, removed: 0 };
+  const none = { state: { ...state, region: null }, map: identity };
   if (!region) return none;
-  const lines = state.source.split("\n");
-  if (!isEmptyBlock(regionText(lines, region))) return none;
-  const before = lines.length;
-  lines.splice(region.start, region.end - region.start);
-  collapse(lines, region.start);
-  if (lines.length === 1 && lines[0] === "") lines.length = 0;
-  const removed = before - lines.length;
-  return {
-    state: { source: join(lines), region: null, caret: 0 },
-    removedAt: Math.max(0, region.start - (removed - (region.end - region.start))),
-    removed,
-  };
+  const buf = new LineBuf(state.source);
+  if (!isEmptyBlock(regionText(buf.lines, region))) return none;
+  buf.splice(region.start, region.end - region.start);
+  collapseBuf(buf, region.start);
+  normalize(buf);
+  return { state: { source: buf.source, region: null, caret: 0 }, map: (l) => buf.map(l) };
 }
 
 /** 開始編輯 target（以目前的行號表示）；會先關閉舊的編輯區。 */
 export function activate(state: EditorState, target: Region, caret: number | "end"): EditorState {
-  const { state: s, removedAt, removed } = deactivate(state);
-  let t = target;
-  if (removed && target.start >= removedAt) t = { start: target.start - removed, end: target.end - removed };
+  const { state: s, map } = deactivate(state);
+  const start = map(target.start);
+  let t: Region = { start, end: start + Math.max(1, target.end - target.start) };
   const lines = s.source.split("\n");
   if (s.source === "") {
     return { source: "", region: { start: 0, end: 1 }, caret: 0 };
   }
   t = settle(parseDoc(s.source), {
     start: Math.min(t.start, lines.length - 1),
-    end: Math.min(Math.max(t.end, t.start + 1), lines.length),
+    end: Math.min(t.end, lines.length),
   });
   const text = regionText(lines, t);
   return { source: s.source, region: t, caret: caret === "end" ? text.length : Math.min(caret, text.length) };
@@ -177,10 +162,9 @@ function insertBlock(lines: string[], at: number, text: string[], tight: boolean
 
 /** 在 afterLine 之後新增一個空白區塊並進入編輯。 */
 export function insertEmptyAfter(state: EditorState, afterLine: number, initial = ""): EditorState {
-  const { state: s, removedAt, removed } = deactivate(state);
+  const { state: s, map } = deactivate(state);
   const lines = s.source === "" ? [] : s.source.split("\n");
-  let at = afterLine;
-  if (removed && at > removedAt) at -= removed;
+  let at = afterLine > 0 ? map(afterLine - 1) + 1 : 0;
   at = Math.min(at, lines.length);
   const line = insertBlock(lines, at, [initial], false);
   return { source: join(lines), region: { start: line, end: line + 1 }, caret: initial.length };
@@ -240,10 +224,20 @@ export function backspaceAtStart(state: EditorState): EditorState | null {
   const doc = parseDoc(state.source);
   const lines = doc.lines.slice();
   const text = regionText(lines, region);
-  const prev = [...doc.units].reverse().find((u) => u.end <= region.start);
+  const prev = prevUnit(doc, region);
+  // 中間隔著欄位或縮排的標籤：不能直接合併
+  const apart = !!prev && doc.units.some((u) => u.tag && u.start >= prev.end && u.start < region.start);
 
   if (/^\s*$/.test(text)) {
     if (!prev) return null;
+    if (apart) {
+      const buf = new LineBuf(state.source);
+      buf.splice(region.start, region.end - region.start);
+      collapseBuf(buf, region.start);
+      normalize(buf);
+      const start = buf.map(prev.start);
+      return activate({ source: buf.source, region: null, caret: 0 }, { start, end: start + prev.end - prev.start }, "end");
+    }
     lines.splice(prev.end, region.end - prev.end);
     const source = join(lines);
     return activate({ source, region: null, caret: 0 }, { start: prev.start, end: prev.end }, "end");
@@ -255,7 +249,7 @@ export function backspaceAtStart(state: EditorState): EditorState | null {
     return applyText(state, plainContent(text), 0);
   }
 
-  if (!prev) return null;
+  if (!prev || apart) return null;
   if (prev.kind === "hr") {
     lines.splice(prev.start, region.start - prev.start);
     const shift = region.start - prev.start;
@@ -338,11 +332,7 @@ export function turnRegionInto(state: EditorState, text: string, type: BlockType
 // ─── 區塊操作（拖曳、刪除、複製）──────────────────────────────────
 
 export function deleteUnit(source: string, unit: Region): string {
-  const lines = source.split("\n");
-  lines.splice(unit.start, unit.end - unit.start);
-  collapse(lines, unit.start);
-  if (lines.length === 1 && lines[0] === "") return "";
-  return join(lines);
+  return deleteBlock(source, unit);
 }
 
 export function duplicateUnit(source: string, unit: Unit): string {
@@ -353,35 +343,19 @@ export function duplicateUnit(source: string, unit: Unit): string {
   return join(lines);
 }
 
-/** 把 unit 搬到 target 之前（target 為 null 表示搬到文件最後）。 */
-export function moveUnit(source: string, unit: Unit, target: Unit | null): string {
-  if (target && target.start === unit.start) return source;
-  const doc = parseDoc(source);
-  const lines = doc.lines.slice();
-  const block = lines.slice(unit.start, unit.end);
-  const count = unit.end - unit.start;
-  lines.splice(unit.start, count);
-  collapse(lines, unit.start);
-  const removed = doc.lines.length - lines.length;
-  const shift = (l: number) => (l >= unit.end ? l - removed : l);
-
-  if (!target) {
-    let end = lines.length;
-    while (end > 0 && isBlank(lines[end - 1])) end--;
-    lines.splice(end, 0, "", ...block);
-    return join(lines);
-  }
-  const at = shift(target.start);
-  insertBlock(lines, at, block, unit.kind === "item" && target.kind === "item");
-  return join(lines);
+/** 把 unit 搬到 target 之前或之後（target 為 null 表示搬到文件最後）。 */
+export function moveUnit(source: string, unit: Unit, target: Unit | null, pos: "before" | "after" = "before"): string {
+  return moveBlock(source, unit, target, pos);
 }
 
 // ─── 導覽 ────────────────────────────────────────────────────────
 
+/** 上一個看得到的區塊（跳過版面標籤）。 */
 export function prevUnit(doc: ParsedDoc, r: Region): Unit | undefined {
-  return [...doc.units].reverse().find((u) => u.end <= r.start);
+  return [...doc.blocks].reverse().find((u) => u.end <= r.start);
 }
 
+/** 下一個看得到的區塊（跳過版面標籤）。 */
 export function nextUnit(doc: ParsedDoc, r: Region): Unit | undefined {
-  return doc.units.find((u) => u.start >= r.end);
+  return doc.blocks.find((u) => u.start >= r.end);
 }
