@@ -60,13 +60,14 @@ export interface Unit {
 // 標籤仍是 CommonMark 的 HTML 區塊，渲染結果與規格一致；編輯器只是把它們藏起來，
 // 改用欄位與縮排顯示。
 
-export type ContainerKind = "columns" | "column" | "indent" | "bg";
+export type ContainerKind = "columns" | "column" | "indent" | "bg" | "align" | "cap" | "size";
 
 export type Tag =
   | { type: "open"; kind: ContainerKind | "div"; width?: number; color?: string }
   | { type: "close" };
 
-const LAYOUT_OPEN = /^<div class="(columns|column|indent|bg-([a-z]+))"(?: style="flex: ?(\d+(?:\.\d+)?)")?>[ \t]*$/;
+const LAYOUT_OPEN =
+  /^<div class="(columns|column|indent|bg-([a-z]+)|align-(left|center|right)|caption-(top)|width-(25|50|75|100))"(?: style="flex: ?(\d+(?:\.\d+)?)")?>[ \t]*$/;
 const DIV_OPEN = /^<div\b[^>]*>[ \t]*$/i;
 const DIV_CLOSE = /^<\/div>[ \t]*$/i;
 
@@ -75,7 +76,13 @@ export function parseTag(line: string): Tag | undefined {
   if (m) {
     // 區塊背景：<div class="bg-blue">
     if (m[2]) return { type: "open", kind: "bg", color: m[2] };
-    return { type: "open", kind: m[1] as ContainerKind, width: m[3] ? Number(m[3]) : undefined };
+    // 對齊：<div class="align-center">（color 欄位放對齊方式）
+    if (m[3]) return { type: "open", kind: "align", color: m[3] };
+    // 圖說位置：<div class="caption-top">（圖說在圖片上方；沒有就是下方）
+    if (m[4]) return { type: "open", kind: "cap", color: m[4] };
+    // 圖片、影片的寬度：<div class="width-50">（佔版面寬度的百分比；沒有就是原始大小）
+    if (m[5]) return { type: "open", kind: "size", color: m[5] };
+    return { type: "open", kind: m[1] as ContainerKind, width: m[6] ? Number(m[6]) : undefined };
   }
   if (DIV_OPEN.test(line)) return { type: "open", kind: "div" };
   if (DIV_CLOSE.test(line)) return { type: "close" };
@@ -84,6 +91,9 @@ export function parseTag(line: string): Tag | undefined {
 
 export function openTag(kind: ContainerKind, width?: number, color?: string): string {
   if (kind === "bg") return `<div class="bg-${color ?? "gray"}">`;
+  if (kind === "align") return `<div class="align-${color ?? "center"}">`;
+  if (kind === "size") return `<div class="width-${color ?? "100"}">`;
+  if (kind === "cap") return `<div class="caption-${color ?? "top"}">`;
   return width !== undefined && Math.abs(width - 1) > 0.005
     ? `<div class="${kind}" style="flex: ${+width.toFixed(2)}">`
     : `<div class="${kind}">`;

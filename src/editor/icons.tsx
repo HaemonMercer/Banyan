@@ -83,3 +83,57 @@ export const OutdentIcon = (p: IconProps) => (
     <path d="M2.5 3.5h11M7.5 6.5h6M7.5 9.5h6M2.5 12.5h11M5 6 2.5 8 5 10" />
   </svg>
 );
+
+export const AlignLeftIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 3.5h11M2.5 6.5h7M2.5 9.5h11M2.5 12.5h7" />
+  </svg>
+);
+
+export const AlignCenterIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 3.5h11M4.5 6.5h7M2.5 9.5h11M4.5 12.5h7" />
+  </svg>
+);
+
+export const AlignRightIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 3.5h11M6.5 6.5h7M2.5 9.5h11M6.5 12.5h7" />
+  </svg>
+);
+
+/** 圖說在上方：橫線在圖片框上面 */
+export const CaptionTopIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4.5 2.5h7" />
+    <rect x="2.5" y="5.5" width="11" height="8" rx="1.5" />
+  </svg>
+);
+
+/** 圖說在下方：橫線在圖片框下面 */
+export const CaptionBottomIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="2.5" width="11" height="8" rx="1.5" />
+    <path d="M4.5 13.5h7" />
+  </svg>
+);
+
+/** 日曆（日記） */
+export const CalendarIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="3.5" width="11" height="10" rx="1.5" />
+    <path d="M2.5 6.5h11M5.5 2v3M10.5 2v3" />
+  </svg>
+);
+
+export const ChevronLeftIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M10 3.5 5.5 8l4.5 4.5" />
+  </svg>
+);
+
+export const ChevronRightIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6 3.5 10.5 8 6 12.5" />
+  </svg>
+);

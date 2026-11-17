@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import { PURIFY, resolveMedia } from "./media";
 import { COLORS, type Color, type Marks } from "./inline";
 import { md, type UnitKind } from "./markdown";
 
@@ -156,7 +157,7 @@ export function contentHtml(content: string, env: Record<string, unknown> = {}):
     .renderInline(content, env)
     .replace(/<br\s*\/?>\n/g, "<br>")
     .replace(/\n/g, " ");
-  return DOMPurify.sanitize(html);
+  return DOMPurify.sanitize(resolveMedia(html), PURIFY) as string;
 }
 
 // ─── DOM → Markdown ─────────────────────────────────────────────
@@ -333,7 +334,9 @@ function serializeNode(node: Node, o: SerOptions): string {
     }
     case "IMG": {
       const alt = escapeText(el.getAttribute("alt") ?? "");
-      return `![${alt}](${el.getAttribute("src") ?? ""})`;
+      // 顯示用的網址換回原本的 media/… 路徑
+      const src = el.getAttribute("data-src") ?? el.getAttribute("src") ?? "";
+      return `![${alt}](${/[\s()<>]/.test(src) ? `<${src}>` : src})`;
     }
     default:
       return inner();

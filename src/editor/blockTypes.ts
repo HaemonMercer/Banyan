@@ -21,6 +21,9 @@ export const BLOCK_TYPES: BlockTypeItem[] = [
   { type: "quote", label: "引用", description: "引述一段文字", hint: ">", icon: "❝", keywords: "quote blockquote 引用 引言" },
   { type: "code", label: "程式碼", description: "等寬字的程式碼區塊", hint: "```", icon: "{ }", keywords: "code fence 程式 代碼" },
   { type: "hr", label: "分隔線", description: "在區塊間畫一條線", hint: "---", icon: "—", keywords: "divider hr rule line 分隔 水平線" },
+  { type: "image", label: "圖片", description: "上傳圖片或 GIF", hint: "", icon: "🖼", keywords: "image picture photo gif 圖片 照片 動圖" },
+  { type: "video", label: "影片", description: "上傳影片", hint: "", icon: "▶", keywords: "video movie mp4 影片 視訊" },
+  { type: "table", label: "表格", description: "簡單的表格", hint: "", icon: "▦", keywords: "table grid 表格 表" },
 ];
 
 export function filterBlockTypes(query: string): BlockTypeItem[] {

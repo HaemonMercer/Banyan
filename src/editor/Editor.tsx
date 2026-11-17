@@ -13,11 +13,39 @@ import {
   type ReactNode,
 } from "react";
 import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
-import { CopyIcon, GripIcon, IndentIcon, LinkIcon, OutdentIcon, PlusIcon, TrashIcon } from "./icons";
+import {
+  AlignCenterIcon,
+  CaptionBottomIcon,
+  CaptionTopIcon,
+  AlignLeftIcon,
+  AlignRightIcon,
+  CopyIcon,
+  GripIcon,
+  IndentIcon,
+  LinkIcon,
+  OutdentIcon,
+  PlusIcon,
+  TrashIcon,
+} from "./icons";
 import { COLORS, COLOR_LABELS, marksAt, setColor, toggleMark, type Color, type Mark, type Marks } from "./inline";
 import { caretFromPoint } from "./caret";
 import { RichBlock, textareaSurface, type Shortcut, type Surface } from "./RichBlock";
 import { decompose, type FormatSpec } from "./wysiwyg";
+import { isTauri } from "@tauri-apps/api/core";
+import {
+  PURIFY,
+  importMediaPath,
+  isMediaBlock,
+  kindOf,
+  mediaCaption,
+  mediaMarkdown,
+  setMediaCaption,
+  resolveMedia,
+  saveMedia,
+  type MediaKind,
+} from "./media";
+import { isTableBlock, newTable } from "./table";
+import { TableEditor } from "./TableEditor";
 import {
   blocksMarkdown,
   canDrop,
@@ -37,7 +65,16 @@ import {
   topLevel,
   outdentBlock,
   placeBeside,
+  blockAlign,
   blockBg,
+  setBlockAlign,
+  setCaptionPos,
+  setBlockSize,
+  blockSize,
+  type MediaSize,
+  captionPos,
+  type CaptionPos,
+  type Align,
   setBlockBg,
   setBlocksBg,
   setColumnWidths,
@@ -73,7 +110,7 @@ function clean(html: string): string {
   let out = sanitized.get(html);
   if (out === undefined) {
     if (sanitized.size > 2000) sanitized.clear();
-    out = DOMPurify.sanitize(html);
+    out = DOMPurify.sanitize(resolveMedia(html), PURIFY);
     sanitized.set(html, out);
   }
   return out;
@@ -124,11 +161,48 @@ interface History {
 export interface EditorProps {
   value: string;
   onChange: (markdown: string) => void;
+  /** 精簡模式（日記等一頁有好幾個編輯器時）：文件下方不留大片空白 */
+  compact?: boolean;
+  /** 文件是空的時候的提示 */
+  placeholder?: string;
+}
+
+// ─── 好幾個編輯器並存 ──────────────────────────────────────────
+//
+// 日記一頁有好幾天，每天一個編輯器。復原、選取按鍵、剪貼簿、Ctrl＋A 這些掛在
+// window／document 上的處理，只交給最後操作的編輯器（在裡面按下滑鼠或取得焦點）。
+
+let currentEditor: object | null = null;
+
+/** 離 y 最近的編輯器（點在頁面左右空白處、從檔案總管拖進檔案時，用來決定是哪一個）。 */
+function nearestEditor(y: number): Element | null {
+  let best: Element | null = null;
+  let bestD = Infinity;
+  document.querySelectorAll(".md-editor").forEach((el) => {
+    const r = el.getBoundingClientRect();
+    const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+    if (d < bestD) {
+      bestD = d;
+      best = el;
+    }
+  });
+  return best;
 }
 
 // ─── 編輯器 ────────────────────────────────────────────────────
 
-export function Editor({ value, onChange }: EditorProps) {
+export function Editor({ value, onChange, compact = false, placeholder = "點這裡開始寫作…" }: EditorProps) {
+  /** 這個編輯器的識別（比對 currentEditor 用） */
+  const me = useRef({}).current;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const isCurrent = () => currentEditor === me;
+  const rowEls = () => rootRef.current?.querySelectorAll<HTMLElement>(".row[data-start]") ?? [];
+  useEffect(() => {
+    if (!currentEditor) currentEditor = me;
+    return () => {
+      if (currentEditor === me) currentEditor = null;
+    };
+  }, [me]);
   const [state, setStateRaw] = useState<EditorState>({ source: value, region: null, caret: 0 });
   const [slash, setSlash] = useState<Slash | null>(null);
   const [menu, setMenu] = useState<{ unit: Unit; x: number; y: number } | null>(null);
@@ -217,6 +291,7 @@ export function Editor({ value, onChange }: EditorProps) {
       const k = e.key.toLowerCase();
       if (k === "z" || k === "y") {
         if ((e.target as HTMLElement)?.closest?.(".md-source-panel")) return;
+        if (currentEditor !== me) return;
         e.preventDefault();
         undo(k === "y" || e.shiftKey);
       }
@@ -245,8 +320,8 @@ export function Editor({ value, onChange }: EditorProps) {
       setMarks(null);
       return;
     }
-    if (!surf.rich) {
-      const ta = surf.el as HTMLTextAreaElement;
+    if (surf.el instanceof HTMLTextAreaElement) {
+      const ta = surf.el;
       ta.style.height = "0px";
       ta.style.height = ta.scrollHeight + "px";
     }
@@ -276,8 +351,11 @@ export function Editor({ value, onChange }: EditorProps) {
     // 編輯區涵蓋多個區塊（例如剛打開程式碼區塊）時用原始碼
     const units = doc.units.filter((u) => u.start < region.end && u.end > region.start);
     if (units.length > 1) return null;
+    if (isMediaBlock(editText)) return null; // 圖片、影片用原始碼編輯（改說明、路徑）
     return decompose(editText, kind);
   }, [region, editText, editUnit, doc]);
+  /** 編輯中的區塊是表格：用表格編輯器 */
+  const tableMode = !!region && !shape && editUnit?.kind === "html" && isTableBlock(editText);
 
   // ─── 編輯區事件 ────────────────────────────────────────────
 
@@ -451,8 +529,184 @@ export function Editor({ value, onChange }: EditorProps) {
     const s = stateRef.current;
     const text = editText.slice(0, slash.pos) + editText.slice(s.caret);
     setSlash(null);
+    if (type === "table") {
+      // 空白區塊直接變成表格；有文字就在下面加一個表格
+      if (!text.trim()) commit(applyText(s, newTable(), 0));
+      else {
+        const res = pasteAfter(applyText(s, text, text.length).source, s.region!, newTable());
+        commit(activate({ source: res.source, region: null, caret: 0 }, { start: res.starts[0], end: res.starts[0] + 1 }, 0));
+      }
+      return;
+    }
+    if (type === "image" || type === "video") {
+      // 先拿掉「/指令」，離開編輯（選檔案時焦點會離開），選好檔案後放在這個區塊
+      commit(applyText(s, text, text.length));
+      const start = s.region!.start;
+      const map = leaveEditing();
+      pickFiles(type, map(start));
+      return;
+    }
     commit(turnRegionInto(s, text, type));
   };
+
+  // ─── 圖片、GIF、影片 ───────────────────────────────────────
+
+  /** 改圖片、影片的圖說（寫在圖片標題、影片的 title 屬性），改完選取它。 */
+  const captionBlock = (unit: Unit, caption: string) => {
+    const map = leaveEditing();
+    const source = stateRef.current.source;
+    const cur = parseDoc(source);
+    const u = cur.blocks.find((b) => b.start === map(unit.start));
+    if (!u) return;
+    const old = regionText(cur.lines, u);
+    const next = setMediaCaption(old, caption);
+    if (next === old) return;
+    const lines = source.split("\n");
+    lines.splice(u.start, u.end - u.start, ...next.split("\n"));
+    commit({ source: lines.join("\n"), region: null, caret: 0 });
+    select([u.start], u.start, u.start);
+  };
+
+  /** 設定圖片、影片（或任何區塊）的對齊，設定後選取它。 */
+  const alignBlock = (unit: Unit, a: Align) => {
+    const map = leaveEditing();
+    const source = stateRef.current.source;
+    const cur = parseDoc(source).blocks.find((b) => b.start === map(unit.start));
+    if (!cur) return;
+    const res = setBlockAlign(source, cur, a);
+    if (res.source !== source) commit({ source: res.source, region: null, caret: 0 });
+    if (res.start >= 0) select([res.start], res.start, res.start);
+  };
+
+  /** 設定圖片、影片的寬度，設定後選取它。 */
+  const sizeBlock = (unit: Unit, size: MediaSize | null) => {
+    const map = leaveEditing();
+    const source = stateRef.current.source;
+    const cur = parseDoc(source).blocks.find((b) => b.start === map(unit.start));
+    if (!cur) return;
+    const res = setBlockSize(source, cur, size);
+    if (res.source !== source) commit({ source: res.source, region: null, caret: 0 });
+    if (res.start >= 0) select([res.start], res.start, res.start);
+  };
+
+  /** 設定圖說在圖片、影片的上方或下方，設定後選取它。 */
+  const captionPosBlock = (unit: Unit, pos: CaptionPos) => {
+    const map = leaveEditing();
+    const source = stateRef.current.source;
+    const cur = parseDoc(source).blocks.find((b) => b.start === map(unit.start));
+    if (!cur) return;
+    const res = setCaptionPos(source, cur, pos);
+    if (res.source !== source) commit({ source: res.source, region: null, caret: 0 });
+    if (res.start >= 0) select([res.start], res.start, res.start);
+  };
+
+  /**
+   * 放媒體區塊：at 是空白區塊時直接換掉它，否則放在 at 這個區塊後面（null 表示文件最後）。
+   * 放好後選取新的區塊。
+   */
+  const placeMedia = (markdown: string, at: number | null) => {
+    if (!markdown) return;
+    const s = stateRef.current;
+    const map = s.region ? leaveEditing() : (l: number) => l;
+    const source = stateRef.current.source;
+    const cur = parseDoc(source);
+    const target = at === null ? null : (cur.blocks.find((b) => b.start === map(at)) ?? null);
+    if (target && target.end - target.start === 1 && /^\s*(&nbsp;)?\s*$/.test(cur.lines[target.start])) {
+      const lines = source.split("\n");
+      lines.splice(target.start, 1, ...markdown.split("\n"));
+      const next = lines.join("\n");
+      commit({ source: next, region: null, caret: 0 });
+      const starts = parseDoc(next)
+        .blocks.filter((b) => b.start >= target.start && b.start < target.start + markdown.split("\n").length)
+        .map((b) => b.start);
+      select(starts, starts[0] ?? null, starts[starts.length - 1] ?? null);
+      return;
+    }
+    applyMany(pasteAfter(source, target, markdown));
+  };
+
+  /** 存好檔案並轉成 Markdown（多個檔案之間空一行）。 */
+  const filesToMarkdown = async (files: File[]): Promise<string> => {
+    const parts: string[] = [];
+    for (const f of files) {
+      const kind = kindOf(f.name, f.type);
+      if (!kind) continue;
+      try {
+        const src = await saveMedia(f);
+        parts.push(mediaMarkdown(src, kind, kind === "image" ? f.name.replace(/\.[^.]+$/, "") : ""));
+      } catch (err) {
+        console.error("無法儲存檔案", f.name, err);
+      }
+    }
+    return parts.join("\n\n");
+  };
+
+  /** 開啟選擇檔案的視窗，選好的圖片或影片放在 at 這個區塊。 */
+  const pickFiles = (kind: MediaKind, at: number | null) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = kind === "image" ? "image/*" : "video/*";
+    input.multiple = true;
+    input.onchange = async () => {
+      const md = await filesToMarkdown([...(input.files ?? [])]);
+      placeMedia(md, at);
+    };
+    input.click();
+  };
+
+  /** 從檔案總管拖進來的檔案（Tauri 會攔截拖放，給的是檔案路徑）。 */
+  const dropPaths = useRef<(paths: string[], y: number) => void>(() => {});
+  dropPaths.current = async (paths, y) => {
+    // 好幾個編輯器時，由離放開位置最近的那個處理
+    if (nearestEditor(y) !== rootRef.current) return;
+    const parts: string[] = [];
+    for (const path of paths) {
+      const kind = kindOf(path);
+      if (!kind) continue;
+      try {
+        const src = await importMediaPath(path);
+        const name = path.split(/[\\/]/).pop() ?? "";
+        parts.push(mediaMarkdown(src, kind, kind === "image" ? name.replace(/\.[^.]+$/, "") : ""));
+      } catch (err) {
+        console.error("無法匯入檔案", path, err);
+      }
+    }
+    if (!parts.length) return;
+    // 放在滑鼠位置最近的區塊後面
+    let best: number | null = null;
+    let bestD = Infinity;
+    rowEls().forEach((row) => {
+      const r = row.getBoundingClientRect();
+      const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      if (d < bestD) {
+        bestD = d;
+        best = Number(row.dataset.start);
+      }
+    });
+    placeMedia(parts.join("\n\n"), best);
+  };
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let off: (() => void) | undefined;
+    let alive = true;
+    void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) =>
+      getCurrentWebview()
+        .onDragDropEvent((ev) => {
+          if (ev.payload.type !== "drop") return;
+          const y = ev.payload.position.y / window.devicePixelRatio;
+          dropPaths.current(ev.payload.paths, y);
+        })
+        .then((fn) => {
+          if (alive) off = fn;
+          else fn();
+        }),
+    );
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, []);
 
   const go = (unit: Unit | undefined, caret: number | "end") => {
     if (!unit) return false;
@@ -661,7 +915,8 @@ export function Editor({ value, onChange }: EditorProps) {
   const onUnitMouseDown = (e: MouseEvent<HTMLDivElement>, unit: Unit) => {
     if (e.button !== 0) return;
     const link = (e.target as HTMLElement).closest("a");
-    e.preventDefault();
+    // 影片的播放控制要能按
+    if (!(e.target as HTMLElement).closest("video")) e.preventDefault();
     setMenu(null);
     if (link && (e.ctrlKey || e.metaKey)) {
       const href = link.getAttribute("href");
@@ -671,8 +926,20 @@ export function Editor({ value, onChange }: EditorProps) {
     if (e.shiftKey) return extendTo(unit);
     if (e.ctrlKey || e.metaKey) return toggle(unit);
 
-    // 一般按下：放開時開始編輯；按著拖到別的區塊則改成選取一段區塊
     const src = regionText(doc.lines, unit);
+    // 圖片、影片：點一下選取（可以拖曳、刪除），連按兩下才編輯原始碼；影片的播放控制照常可以按
+    if (isMediaBlock(src)) {
+      if (e.detail >= 2) {
+        go(unit, "end");
+        return;
+      }
+      const map = leaveEditing();
+      const st = map(unit.start);
+      select([st], st, st);
+      return;
+    }
+
+    // 一般按下：放開時開始編輯；按著拖到別的區塊則改成選取一段區塊
     const caret = caretFromPoint(e.currentTarget, e.clientX, e.clientY, src);
     let origin = unit.start;
     let ranging = false;
@@ -754,7 +1021,7 @@ export function Editor({ value, onChange }: EditorProps) {
     const cur = parseDoc(stateRef.current.source);
     // 正在搬的範圍（多欄整組、區塊連同子區塊）裡的區塊都不能當目標
     const ranges = many.map((m) => rangeOf(cur, m));
-    const rowsEl = [...document.querySelectorAll<HTMLElement>(".md-editor .row[data-start]")].filter((el) => {
+    const rowsEl = [...rowEls()].filter((el) => {
       const start = Number(el.dataset.start);
       if (start === fromStart) return true;
       if (ranges.some((r) => start >= r.start && start < r.end)) return false;
@@ -981,6 +1248,15 @@ export function Editor({ value, onChange }: EditorProps) {
     const s = stateRef.current;
     const surf = surfRef.current;
     if (!s.region || !surf) return;
+    // 貼上圖片（截圖、複製的圖片檔）：放在目前的區塊後面（空白區塊就直接換掉）
+    const files = [...e.clipboardData.files].filter((f) => kindOf(f.name, f.type));
+    if (files.length) {
+      e.preventDefault();
+      const at = s.region.start;
+      const map = leaveEditing();
+      void filesToMarkdown(files).then((md) => placeMedia(md, map(at)));
+      return;
+    }
     const kind = editUnit?.kind;
     const blocks = e.clipboardData.getData(BLOCKS_MIME);
     const text = blocks || e.clipboardData.getData("text/plain");
@@ -1005,7 +1281,8 @@ export function Editor({ value, onChange }: EditorProps) {
   const selectionKeys = useRef<(e: globalThis.KeyboardEvent) => void>(() => {});
   selectionKeys.current = (e) => {
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.("textarea, input, .md-source-panel")) return;
+    if (target?.closest?.("textarea, input, [contenteditable], .md-source-panel")) return;
+    if (!isCurrent()) return;
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.key.toLowerCase() === "a") {
       e.preventDefault();
@@ -1049,7 +1326,7 @@ export function Editor({ value, onChange }: EditorProps) {
         } else {
           select([next.start], next.start, next.start);
         }
-        next && document.querySelector(`.row[data-start="${next.start}"]`)?.scrollIntoView({ block: "nearest" });
+        next && rootRef.current?.querySelector(`.row[data-start="${next.start}"]`)?.scrollIntoView({ block: "nearest" });
         return;
       }
     }
@@ -1062,9 +1339,17 @@ export function Editor({ value, onChange }: EditorProps) {
   const clipboard = useRef<(e: ClipboardEvent) => void>(() => {});
   clipboard.current = (e) => {
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.("textarea, input, .md-source-panel") || !selRef.current.length) return;
+    if (target?.closest?.("textarea, input, [contenteditable], .md-source-panel") || !selRef.current.length) return;
+    if (!isCurrent()) return;
     const xs = selectedBlocks();
     if (e.type === "paste") {
+      const files = [...(e.clipboardData?.files ?? [])].filter((f) => kindOf(f.name, f.type));
+      if (files.length) {
+        e.preventDefault();
+        const after = xs[xs.length - 1]?.start ?? null;
+        void filesToMarkdown(files).then((md) => placeMedia(md, after));
+        return;
+      }
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!text) return;
       e.preventDefault();
@@ -1085,6 +1370,20 @@ export function Editor({ value, onChange }: EditorProps) {
     if (e.button !== 0) return;
     const t = e.target as HTMLElement;
     if (!t.closest?.(".page, .md-editor")) return;
+    const root = rootRef.current;
+    if (!root) return;
+    // 好幾個編輯器時：按在別的編輯器裡（或頁面空白處離別的編輯器比較近），這裡只結束編輯、取消選取
+    const inside = t.closest(".md-editor");
+    const owner = inside ?? (t.closest(".no-box") ? null : nearestEditor(e.clientY));
+    if (owner !== root) {
+      if (stateRef.current.region || selRef.current.length) {
+        leaveEditing();
+        select([], null, null);
+      }
+      setMenu(null);
+      return;
+    }
+    currentEditor = me;
     if (t.closest(".row .content, .gutter, .popover, .grip, textarea, .md-source-panel, .format-bar")) return;
     e.preventDefault();
     const x0 = e.clientX;
@@ -1104,7 +1403,7 @@ export function Editor({ value, onChange }: EditorProps) {
       const height = Math.abs(ev.clientY - y0);
       setBox({ left, top, width, height });
       const hits: number[] = [];
-      document.querySelectorAll<HTMLElement>(".md-editor .row[data-start]").forEach((row) => {
+      rowEls().forEach((row) => {
         const r = row.querySelector(".content")!.getBoundingClientRect();
         if (r.right >= left && r.left <= left + width && r.bottom >= top && r.top <= top + height) {
           hits.push(Number(row.dataset.start));
@@ -1187,6 +1486,20 @@ export function Editor({ value, onChange }: EditorProps) {
               refreshMarks();
             }}
           />
+        ) : tableMode ? (
+          <TableEditor
+            ref={surfRef}
+            text={editText}
+            point={pendingPoint.current}
+            onChange={(text) => onTextChange(text, 0)}
+            onLeave={() => {
+              const start = region.start;
+              const map = leaveEditing();
+              const st = map(start);
+              select([st], st, st);
+            }}
+            onBlur={(el, related) => onBlur(el, region.start, related)}
+          />
         ) : (
           <textarea
             ref={(el) => {
@@ -1245,6 +1558,14 @@ export function Editor({ value, onChange }: EditorProps) {
             onMouseDown={(e) => onUnitMouseDown(e, u)}
             onAdd={() => addAfter(u)}
             onHandlePointerDown={(e) => onHandlePointerDown(e, u)}
+            align={isMediaBlock(regionText(doc.lines, u)) ? blockAlign(doc, u) : null}
+            onAlign={(a) => alignBlock(u, a)}
+            caption={mediaCaption(regionText(doc.lines, u))}
+            onCaption={(t) => captionBlock(u, t)}
+            captionPos={isMediaBlock(regionText(doc.lines, u)) ? captionPos(doc, u) : "bottom"}
+            onCaptionPos={(p) => captionPosBlock(u, p)}
+            size={isMediaBlock(regionText(doc.lines, u)) ? blockSize(doc, u) : null}
+            onSize={(z) => sizeBlock(u, z)}
           />
         );
       }
@@ -1283,7 +1604,28 @@ export function Editor({ value, onChange }: EditorProps) {
         (n.kind === "indent" &&
           owner?.type === "leaf" &&
           dragRanges.some((r) => owner.unit.start >= r.start && owner.unit.start < r.end)) ||
-        (n.kind === "bg" && dragRanges.some((r) => n.open.start >= r.start && n.open.start < r.end));
+        ((n.kind === "bg" || n.kind === "align" || n.kind === "cap" || n.kind === "size") && dragRanges.some((r) => n.open.start >= r.start && n.open.start < r.end));
+      if (n.kind === "align") {
+        return (
+          <div key={`align:${n.open.start}`} className={`block-align align-${n.color}${dragged ? " dragging" : ""}`}>
+            {renderNodes(n.children)}
+          </div>
+        );
+      }
+      if (n.kind === "size") {
+        return (
+          <div key={`size:${n.open.start}`} className={`block-size width-${n.color}${dragged ? " dragging" : ""}`}>
+            {renderNodes(n.children)}
+          </div>
+        );
+      }
+      if (n.kind === "cap") {
+        return (
+          <div key={`cap:${n.open.start}`} className={`block-cap cap-${n.color}${dragged ? " dragging" : ""}`}>
+            {renderNodes(n.children)}
+          </div>
+        );
+      }
       if (n.kind === "bg") {
         return (
           <div key={`bg:${n.open.start}`} className={`block-bg bg-${n.color}${dragged ? " dragging" : ""}`}>
@@ -1304,10 +1646,15 @@ export function Editor({ value, onChange }: EditorProps) {
   const menuDoc = menu ? doc : null;
 
   return (
-    <div className={`md-editor${drag ? " is-dragging" : ""}`}>
+    <div
+      ref={rootRef}
+      className={`md-editor${drag ? " is-dragging" : ""}${compact ? " compact" : ""}`}
+      onPointerDownCapture={() => (currentEditor = me)}
+      onFocusCapture={() => (currentEditor = me)}
+    >
       {renderNodes(view.tree)}
       <div className="tail">
-        {doc.units.length === 0 && !region && <span className="empty-hint">點這裡開始寫作…</span>}
+        {doc.units.length === 0 && !region && <span className="empty-hint">{placeholder}</span>}
       </div>
       {box && <div className="select-box" style={box} />}
       {linkAsk && region && (
@@ -1385,9 +1732,157 @@ interface UnitRowProps {
   onMouseDown: (e: MouseEvent<HTMLDivElement>) => void;
   onAdd: () => void;
   onHandlePointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => void;
+  /** 圖片、影片的對齊（null 表示不是媒體區塊，不顯示對齊工具） */
+  align: Align | null;
+  onAlign: (a: Align) => void;
+  /** 圖片、影片的圖說（null 表示不是媒體區塊） */
+  caption: string | null;
+  onCaption: (text: string) => void;
+  /** 圖說在圖片上方或下方 */
+  captionPos: CaptionPos;
+  onCaptionPos: (pos: CaptionPos) => void;
+  /** 圖片、影片的寬度（null 是原始大小） */
+  size: MediaSize | null;
+  onSize: (size: MediaSize | null) => void;
 }
 
-function UnitRow({ unit, doc, drop, dragging, selected, ...on }: UnitRowProps) {
+/** 圖片、影片下方可以直接點來編輯的圖說。Enter 或點別處儲存，Esc 取消。 */
+function Caption(props: { value: string; onSave: (text: string) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const read = () => (ref.current?.innerText ?? "").replace(/\s+/g, " ").trim();
+  const mark = () => {
+    if (ref.current) ref.current.dataset.empty = read() ? "" : "1";
+  };
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && document.activeElement !== el && read() !== props.value) el.innerText = props.value;
+    mark();
+  });
+  return (
+    <div
+      ref={ref}
+      className="media-caption"
+      contentEditable="plaintext-only"
+      suppressContentEditableWarning
+      spellCheck={false}
+      data-placeholder="加上圖說…"
+      onMouseDown={(e) => e.stopPropagation()}
+      onInput={mark}
+      onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.currentTarget.innerText = props.value;
+          e.currentTarget.blur();
+        }
+      }}
+      onBlur={() => {
+        const text = read();
+        if (text !== props.value) props.onSave(text);
+      }}
+    />
+  );
+}
+
+const ALIGNS: { value: Align; label: string; icon: ReactNode }[] = [
+  { value: "left", label: "靠左", icon: <AlignLeftIcon /> },
+  { value: "center", label: "置中", icon: <AlignCenterIcon /> },
+  { value: "right", label: "靠右", icon: <AlignRightIcon /> },
+];
+
+const CAPTION_POS: { value: CaptionPos; label: string; icon: ReactNode }[] = [
+  { value: "top", label: "圖說在上方", icon: <CaptionTopIcon /> },
+  { value: "bottom", label: "圖說在下方", icon: <CaptionBottomIcon /> },
+];
+
+const SIZES: { value: MediaSize | null; label: string; title: string }[] = [
+  { value: null, label: "原始", title: "原始大小" },
+  { value: "25", label: "25%", title: "版面寬度的 25%" },
+  { value: "50", label: "50%", title: "版面寬度的 50%" },
+  { value: "75", label: "75%", title: "版面寬度的 75%" },
+  { value: "100", label: "100%", title: "與版面同寬" },
+];
+
+/** 選取圖片、影片時浮在它上方的選單：對齊、大小、圖說。 */
+function MediaMenu(props: {
+  align: Align;
+  size: MediaSize | null;
+  captionPos: CaptionPos;
+  onAlign: (a: Align) => void;
+  onSize: (s: MediaSize | null) => void;
+  onCaptionPos: (p: CaptionPos) => void;
+}) {
+  return (
+    <div
+      className={`media-menu at-${props.align}`}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      <div className="group" aria-label="對齊">
+        {ALIGNS.map((a) => (
+          <button
+            key={a.value}
+            className={a.value === props.align ? "on" : ""}
+            title={a.label}
+            onClick={() => props.onAlign(a.value)}
+          >
+            {a.icon}
+          </button>
+        ))}
+      </div>
+      <span className="sep" />
+      <div className="group" aria-label="大小">
+        {SIZES.map((z) => (
+          <button
+            key={z.label}
+            className={`text${z.value === props.size ? " on" : ""}`}
+            title={z.title}
+            onClick={() => props.onSize(z.value)}
+          >
+            {z.label}
+          </button>
+        ))}
+      </div>
+      <span className="sep" />
+      <div className="group" aria-label="圖說">
+        <button
+          className="text"
+          title="編輯圖說"
+          onClick={(e) => {
+            const cap = e.currentTarget.closest(".content")?.querySelector<HTMLElement>(".media-caption");
+            if (!cap) return;
+            cap.focus();
+            const r = document.createRange();
+            r.selectNodeContents(cap);
+            r.collapse(false);
+            const sel = window.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(r);
+          }}
+        >
+          圖說
+        </button>
+        {CAPTION_POS.map((c) => (
+          <button
+            key={c.value}
+            className={c.value === props.captionPos ? "on" : ""}
+            title={c.label}
+            onClick={() => props.onCaptionPos(c.value)}
+          >
+            {c.icon}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function UnitRow({ unit, doc, drop, dragging, selected, align, caption, captionPos, size, ...on }: UnitRowProps) {
   let body: ReactNode;
   const html = { __html: clean(unit.html) };
   if (unit.kind === "item" && unit.list) {
@@ -1425,7 +1920,24 @@ function UnitRow({ unit, doc, drop, dragging, selected, ...on }: UnitRowProps) {
         </button>
       </div>
       <div className="content" onMouseDown={on.onMouseDown}>
-        {body}
+        {align ? (
+          <div className="media-frame">
+            {body}
+            {caption !== null && <Caption value={caption} onSave={on.onCaption} />}
+          </div>
+        ) : (
+          body
+        )}
+        {align && selected && (
+          <MediaMenu
+            align={align}
+            size={size}
+            captionPos={captionPos}
+            onAlign={on.onAlign}
+            onSize={on.onSize}
+            onCaptionPos={on.onCaptionPos}
+          />
+        )}
       </div>
     </div>
   );
@@ -1508,6 +2020,9 @@ function placeAtPoint(el: HTMLElement, p: { x: number; y: number }): boolean {
   sel?.addRange(range);
   return true;
 }
+
+/** 只能插入、不能拿來「轉換成」的區塊類型 */
+const INSERT_ONLY = new Set<BlockType>(["image", "video", "table"]);
 
 const FORMATS: { mark: Mark; label: string; key: string; icon: ReactNode }[] = [
   { mark: "bold", label: "粗體", key: "Ctrl+B", icon: <b>B</b> },
@@ -1694,7 +2209,7 @@ function BlockMenu(props: {
     <div className="popover block-menu" ref={ref} style={pos} onMouseDown={(e) => e.preventDefault()}>
       {props.count > 1 && <div className="popover-count">已選取 {props.count} 個區塊</div>}
       <div className="popover-title">轉換成</div>
-      {BLOCK_TYPES.map((t) => (
+      {BLOCK_TYPES.filter((t) => !INSERT_ONLY.has(t.type)).map((t) => (
         <button
           key={t.type}
           className={t.type === props.current ? "current" : ""}

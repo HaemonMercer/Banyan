@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canDrop,
   canIndent,
+  blockAlign,
   blockBg,
   blocksMarkdown,
   canOutdent,
@@ -19,6 +20,7 @@ import {
   moveBlock,
   outdentBlock,
   placeBeside,
+  setBlockAlign,
   setBlockBg,
   setBlocksBg,
   setColumnWidths,
@@ -446,5 +448,85 @@ describe("區塊背景顏色", () => {
     const r = setBlocksBg(src, parseDoc(src).blocks, "yellow");
     expect(r.source).toBe('<div class="bg-yellow">\n\na\n\n</div>\n\n<div class="bg-yellow">\n\nb\n\n</div>\n');
     expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["a", "b"]);
+  });
+});
+
+describe("對齊", () => {
+  const IMG = "![圖](media/a.png)";
+
+  it("置中、靠右、改回靠左", () => {
+    const src = `a\n\n${IMG}\n`;
+    const c = setBlockAlign(src, find(src, IMG), "center");
+    expect(c.source).toBe(`a\n\n<div class="align-center">\n\n${IMG}\n\n</div>\n`);
+    expect(c.source.split("\n")[c.start]).toBe(IMG);
+    expect(renderMarkdown(c.source)).toContain('<div class="align-center">\n<p><img src="media/a.png" alt="圖" /></p>\n</div>');
+    expect(blockAlign(parseDoc(c.source), find(c.source, IMG))).toBe("center");
+    const r = setBlockAlign(c.source, find(c.source, IMG), "right");
+    expect(r.source).toBe(`a\n\n<div class="align-right">\n\n${IMG}\n\n</div>\n`);
+    expect(setBlockAlign(r.source, find(r.source, IMG), "left").source).toBe(src);
+  });
+
+  it("可以同時有背景色與對齊，兩者互不影響", () => {
+    const src = `${IMG}\n`;
+    const a = setBlockAlign(src, find(src, IMG), "center");
+    const b = setBlockBg(a.source, find(a.source, IMG), "blue");
+    const doc = parseDoc(b.source);
+    expect(blockAlign(doc, find(b.source, IMG))).toBe("center");
+    expect(blockBg(doc, find(b.source, IMG))).toBe("blue");
+    const back = setBlockBg(b.source, find(b.source, IMG), null);
+    expect(back.source).toBe(a.source);
+  });
+
+  it("搬移時對齊跟著走", () => {
+    const src = `x\n\n<div class="align-center">\n\n${IMG}\n\n</div>\n\ny\n`;
+    expect(moveBlock(src, find(src, IMG), find(src, "y"), "after")).toBe(
+      `x\n\ny\n\n<div class="align-center">\n\n${IMG}\n\n</div>\n`,
+    );
+  });
+});
+
+describe("圖說位置", () => {
+  const IMG = '![圖](media/a.png "說明")';
+  const at = (s: string) => {
+    const lines = s.split("\n");
+    const i = lines.indexOf(IMG);
+    return { start: i, end: i + 1 };
+  };
+  it("上方是 caption-top 容器，下方拿掉，和對齊可以同時存在", async () => {
+    const { captionPos, setCaptionPos } = await import("./layout");
+    const src = `a\n\n${IMG}\n`;
+    expect(captionPos(parseDoc(src), at(src))).toBe("bottom");
+    const top = setCaptionPos(src, at(src), "top").source;
+    expect(top).toBe(`a\n\n<div class="caption-top">\n\n${IMG}\n\n</div>\n`);
+    expect(captionPos(parseDoc(top), at(top))).toBe("top");
+    const both = setBlockAlign(top, at(top), "center").source;
+    expect(blockAlign(parseDoc(both), at(both))).toBe("center");
+    expect(captionPos(parseDoc(both), at(both))).toBe("top");
+    const back = setCaptionPos(both, at(both), "bottom").source;
+    expect(back).toBe(`a\n\n<div class="align-center">\n\n${IMG}\n\n</div>\n`);
+  });
+});
+
+describe("圖片大小", () => {
+  const IMG = "![圖](media/a.png)";
+  const at = (s: string) => {
+    const i = s.split("\n").indexOf(IMG);
+    return { start: i, end: i + 1 };
+  };
+  it("寬度是 width-N 容器，原始大小拿掉，和對齊、圖說位置並存", async () => {
+    const { blockSize, setBlockSize, setCaptionPos, captionPos } = await import("./layout");
+    const src = `${IMG}\n`;
+    expect(blockSize(parseDoc(src), at(src))).toBeNull();
+    let s = setBlockSize(src, at(src), "50").source;
+    expect(s).toBe(`<div class="width-50">\n\n${IMG}\n\n</div>\n`);
+    s = setBlockAlign(s, at(s), "center").source;
+    s = setCaptionPos(s, at(s), "top").source;
+    s = setBlockSize(s, at(s), "75").source;
+    const d = parseDoc(s);
+    expect([blockSize(d, at(s)), blockAlign(d, at(s)), captionPos(d, at(s))]).toEqual(["75", "center", "top"]);
+    expect(renderMarkdown(s)).toContain('<div class="width-75">');
+    s = setBlockSize(s, at(s), null).source;
+    expect(s).not.toContain("width-");
+    expect(blockAlign(parseDoc(s), at(s))).toBe("center");
   });
 });

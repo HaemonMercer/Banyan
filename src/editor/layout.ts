@@ -192,29 +192,35 @@ export function treeWith(doc: ParsedDoc, r: Range): { tree: TreeNode[]; self: Un
 interface Slot {
   siblings: TreeNode[];
   index: number;
-  /** 由外到內的父容器（不含區塊自己的背景色容器） */
+  /** 由外到內的父容器（不含區塊自己的背景色、對齊容器） */
   ancestors: Container[];
-  /** 區塊自己的背景色容器 */
+  /** 區塊自己的外層容器（背景色、對齊，由內到外），最外層的是 wrapper */
+  wrappers: Container[];
   wrapper: Container | null;
-  /** 區塊（連同背景色容器）所佔的行 */
+  /** 區塊（連同背景色、對齊容器）所佔的行 */
   range: Range;
 }
+
+/** 單獨包住一個區塊時算是區塊一部分的容器 */
+const OWN_WRAPPERS = new Set(["bg", "align", "cap", "size"]);
 
 function slot(doc: ParsedDoc, r: Range): Slot | null {
   const { tree } = treeWith(doc, r);
   const at = locate(tree, r.start);
   if (!at) return null;
   let { siblings, index, ancestors } = at;
-  let wrapper: Container | null = null;
-  const parent = ancestors[ancestors.length - 1];
-  if (parent?.kind === "bg" && parent.children.length === 1) {
-    wrapper = parent;
+  const wrappers: Container[] = [];
+  for (;;) {
+    const parent = ancestors[ancestors.length - 1];
+    if (!parent || !OWN_WRAPPERS.has(parent.kind) || parent.children.length !== 1) break;
+    wrappers.push(parent);
     ancestors = ancestors.slice(0, -1);
     siblings = ancestors.length ? ancestors[ancestors.length - 1].children : tree;
     index = siblings.indexOf(parent);
   }
+  const wrapper = wrappers[wrappers.length - 1] ?? null;
   const range = wrapper ? { start: wrapper.open.start, end: wrapper.close.end } : { start: r.start, end: r.end };
-  return { siblings, index, ancestors, wrapper, range };
+  return { siblings, index, ancestors, wrappers, wrapper, range };
 }
 
 /** 區塊的直接父容器（不含它自己的背景色容器）。 */
@@ -259,7 +265,28 @@ export function groupOf(doc: ParsedDoc, r: Range): Range {
 
 /** 區塊的背景顏色（沒有就是 null）。 */
 export function blockBg(doc: ParsedDoc, r: Range): string | null {
-  return slot(doc, wholeBlock(doc, r))?.wrapper?.color ?? null;
+  return slot(doc, wholeBlock(doc, r))?.wrappers.find((w) => w.kind === "bg")?.color ?? null;
+}
+
+export type Align = "left" | "center" | "right";
+
+/** 區塊的對齊方式（沒有對齊容器就是靠左）。 */
+export function blockAlign(doc: ParsedDoc, r: Range): Align {
+  return (slot(doc, wholeBlock(doc, r))?.wrappers.find((w) => w.kind === "align")?.color as Align) ?? "left";
+}
+
+export type CaptionPos = "top" | "bottom";
+
+/** 圖說的位置（沒有 caption-top 容器就是在下方）。 */
+export function captionPos(doc: ParsedDoc, r: Range): CaptionPos {
+  return slot(doc, wholeBlock(doc, r))?.wrappers.some((w) => w.kind === "cap") ? "top" : "bottom";
+}
+
+export type MediaSize = "25" | "50" | "75" | "100";
+
+/** 圖片、影片的寬度（null 是原始大小）。 */
+export function blockSize(doc: ParsedDoc, r: Range): MediaSize | null {
+  return (slot(doc, wholeBlock(doc, r))?.wrappers.find((w) => w.kind === "size")?.color as MediaSize) ?? null;
 }
 
 /** 清單項目當作整份清單（欄位、縮排、背景色只能包整份清單）。 */
@@ -353,32 +380,58 @@ export function outdentBlock(source: string, r: Range): Moved | null {
 // ─── 背景顏色 ───────────────────────────────────────────────────
 
 /**
- * 設定區塊的背景顏色（color 為 null 表示拿掉）：包一層 `<div class="bg-顏色">`，
- * 已經有背景色就只改標籤。清單項目會套用到整份清單。回傳區塊第一行的新位置。
+ * 設定區塊的外層容器（背景色、對齊）：value 為 null 表示拿掉。
+ * 已經有這種容器就只改標籤；沒有就在區塊（連同它現有的外層容器）外面再包一層。
+ * 清單項目會套用到整份清單。回傳區塊第一行的新位置。
  */
-export function setBlockBg(source: string, r: Range, color: string | null): Moved {
+function setWrapper(source: string, r: Range, kind: "bg" | "align" | "cap" | "size", value: string | null): Moved {
   const doc = parseDoc(source);
   const whole = wholeBlock(doc, r);
   const s = slot(doc, whole);
   const buf = new LineBuf(source);
   const id = buf.ids[r.start];
-  if (s?.wrapper) {
-    if (color) buf.lines[s.wrapper.open.start] = openTag("bg", undefined, color);
+  const own = s?.wrappers.find((w) => w.kind === kind);
+  if (own) {
+    if (value) buf.lines[own.open.start] = openTag(kind, undefined, value);
     else {
-      const rows = unwrapLines(s.wrapper)
-        .filter((l) => isBlank(buf.lines[l]) || l === s.wrapper!.open.start || l === s.wrapper!.close.start)
+      const rows = unwrapLines(own)
+        .filter((l) => isBlank(buf.lines[l]) || l === own.open.start || l === own.close.start)
         .sort((a, b) => b - a);
       for (const l of rows) buf.splice(l, 1);
     }
-  } else if (color) {
+  } else if (value) {
     // 只在前後插入標籤行，不動區塊本身的行
-    const after = whole.end < buf.lines.length && !isBlank(buf.lines[whole.end]) ? [""] : [];
-    buf.splice(whole.end, 0, "", "</div>", ...after);
-    const before = whole.start > 0 && !isBlank(buf.lines[whole.start - 1]) ? [""] : [];
-    buf.splice(whole.start, 0, ...before, openTag("bg", undefined, color), "");
+    const R = s?.range ?? whole;
+    const after = R.end < buf.lines.length && !isBlank(buf.lines[R.end]) ? [""] : [];
+    buf.splice(R.end, 0, "", "</div>", ...after);
+    const before = R.start > 0 && !isBlank(buf.lines[R.start - 1]) ? [""] : [];
+    buf.splice(R.start, 0, ...before, openTag(kind, undefined, value), "");
   }
   normalize(buf);
   return { source: buf.source, start: buf.indexOfId(id) };
+}
+
+/**
+ * 設定區塊的背景顏色（color 為 null 表示拿掉）：包一層 `<div class="bg-顏色">`，
+ * 已經有背景色就只改標籤。清單項目會套用到整份清單。回傳區塊第一行的新位置。
+ */
+export function setBlockBg(source: string, r: Range, color: string | null): Moved {
+  return setWrapper(source, r, "bg", color);
+}
+
+/** 設定區塊的對齊（靠左就是拿掉對齊容器）：`<div class="align-center">`。 */
+export function setBlockAlign(source: string, r: Range, align: Align): Moved {
+  return setWrapper(source, r, "align", align === "left" ? null : align);
+}
+
+/** 設定圖說位置（下方就是拿掉容器）：`<div class="caption-top">`。 */
+export function setCaptionPos(source: string, r: Range, pos: CaptionPos): Moved {
+  return setWrapper(source, r, "cap", pos === "top" ? "top" : null);
+}
+
+/** 設定圖片、影片的寬度（null 是原始大小，拿掉容器）：`<div class="width-50">`。 */
+export function setBlockSize(source: string, r: Range, size: MediaSize | null): Moved {
+  return setWrapper(source, r, "size", size);
 }
 
 /** 多個區塊一起設定背景顏色（由後往前做，前面的行號不受影響）。 */

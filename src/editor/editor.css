@@ -1128,3 +1128,253 @@ kbd {
   font: inherit;
   font-size: 14px;
 }
+
+/* ─── 圖片、影片 ─── */
+
+.content img,
+.content video {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: 6px;
+}
+.content p > img:only-child {
+  margin: 4px 0;
+}
+.content video {
+  width: 100%;
+  background: #000;
+}
+.row.selected .content img,
+.row.selected .content video {
+  outline: 3px solid var(--ed-accent-ring);
+  outline-offset: 1px;
+}
+
+/* ─── 表格 ─── */
+
+.content table {
+  border-collapse: collapse;
+  margin: 4px 0;
+  font-size: 0.95em;
+  max-width: 100%;
+}
+.content th,
+.content td {
+  min-width: 90px;
+  padding: 6px 10px;
+  border: 1px solid var(--ed-faint);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+.content th {
+  background: var(--ed-chrome);
+  font-weight: 700;
+}
+.table-edit {
+  position: relative;
+  outline: none;
+  overflow-x: auto;
+}
+.table-edit .cell {
+  min-height: 1.5em;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.table-edit td:focus-within,
+.table-edit th:focus-within {
+  box-shadow: inset 0 0 0 2px var(--ed-accent-ring);
+}
+.table-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  color: var(--ed-muted);
+}
+.table-tools button {
+  padding: 2px 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 5px;
+  background: var(--ed-bg);
+  color: var(--ed-text-soft);
+  font: inherit;
+  cursor: pointer;
+}
+.table-tools button:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+.table-tools button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.table-tools button.on {
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent);
+  border-color: var(--ed-accent-ring);
+}
+.table-hint {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.row.editing.raw.kind-html .content:has(.table-edit) {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ─── 對齊、大小 ─── */
+
+.block-align.align-center .content {
+  text-align: center;
+}
+.block-align.align-right .content {
+  text-align: right;
+}
+.content video {
+  width: auto;
+}
+
+/* 圖片、影片放在框裡：對齊與大小作用在框上，圖說不受影響 */
+.media-frame {
+  display: table;
+  max-width: 100%;
+}
+.media-frame > div > p {
+  margin: 0;
+}
+.block-align.align-center .media-frame {
+  margin-left: auto;
+  margin-right: auto;
+}
+.block-align.align-right .media-frame {
+  margin-left: auto;
+}
+.block-size .media-frame img,
+.block-size .media-frame video {
+  width: 100%;
+  max-height: none;
+}
+.block-size.width-25 .media-frame {
+  width: 25%;
+}
+.block-size.width-50 .media-frame {
+  width: 50%;
+}
+.block-size.width-75 .media-frame {
+  width: 75%;
+}
+.block-size.width-100 .media-frame {
+  width: 100%;
+}
+
+/* 選取圖片、影片時浮在上方的選單 */
+.media-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  white-space: nowrap;
+  text-align: left;
+}
+.media-menu.at-left {
+  left: 0;
+}
+.media-menu.at-center {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.media-menu.at-right {
+  right: 0;
+}
+.media-menu .group {
+  display: flex;
+  gap: 2px;
+}
+.media-menu button {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.media-menu button.text {
+  padding: 0 7px;
+}
+.media-menu button:hover {
+  background: var(--ed-hover);
+}
+.media-menu button.on {
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent);
+}
+.media-menu .sep {
+  align-self: stretch;
+  width: 1px;
+  margin: 3px 2px;
+  background: var(--ed-faint);
+  opacity: 0.5;
+}
+
+/* ─── 圖說 ─── */
+
+.media-caption {
+  margin-top: 6px;
+  min-height: 1.5em;
+  color: var(--ed-muted);
+  font-size: 0.875em;
+  line-height: 1.5;
+  outline: none;
+  cursor: text;
+  white-space: pre-wrap;
+}
+.media-caption:focus {
+  color: var(--ed-text-soft);
+}
+.media-caption[data-empty="1"]::before {
+  content: attr(data-placeholder);
+  color: var(--ed-faint);
+  pointer-events: none;
+}
+.media-caption[data-empty="1"]:focus::before {
+  color: var(--ed-muted);
+}
+/* 沒有圖說時，只有滑過或選取圖片才出現「加上圖說…」 */
+.row:not(:hover):not(.selected) .media-caption[data-empty="1"]:not(:focus) {
+  display: none;
+}
+
+/* 圖說是框的表格標題：寬度跟圖片一樣，在圖片上方／下方的中央 */
+.media-frame .media-caption {
+  display: table-caption;
+  caption-side: bottom;
+  text-align: center;
+}
+.block-cap.cap-top .media-frame .media-caption {
+  caption-side: top;
+  margin: 0 0 6px;
+}
+
+/* ─── 精簡模式（日記：一頁有好幾個編輯器） ─── */
+
+.md-editor.compact .tail {
+  min-height: 28px;
+  padding-bottom: 0;
+}

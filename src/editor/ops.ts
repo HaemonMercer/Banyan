@@ -29,7 +29,10 @@ export type BlockType =
   | "ordered"
   | "quote"
   | "code"
-  | "hr";
+  | "hr"
+  | "image"
+  | "video"
+  | "table";
 
 const isBlank = (line: string | undefined) => line !== undefined && /^[ \t]*$/.test(line);
 const join = (lines: string[]) => lines.join("\n");
@@ -338,6 +341,9 @@ export function turnInto(text: string, type: BlockType): { text: string; caret: 
     case "hr":
       out = content.trim() ? `${content}\n\n---` : "---";
       break;
+    default:
+      // 圖片、影片、表格是插入用的，不轉換
+      out = text;
   }
   return { text: out, caret: out.length };
 }
