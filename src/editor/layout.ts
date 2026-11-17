@@ -185,17 +185,47 @@ export function treeWith(doc: ParsedDoc, r: Range): { tree: TreeNode[]; self: Un
   return { tree: buildTree(units), self };
 }
 
-/** 區塊的直接父容器。 */
-export function parentOf(doc: ParsedDoc, r: Range): Container | null {
+/**
+ * 區塊在樹中的位置。區塊單獨包在背景色容器（`<div class="bg-…">`）裡時，
+ * 背景色容器算是區塊的一部分：兄弟、父容器、所佔的行都以背景色容器為準。
+ */
+interface Slot {
+  siblings: TreeNode[];
+  index: number;
+  /** 由外到內的父容器（不含區塊自己的背景色容器） */
+  ancestors: Container[];
+  /** 區塊自己的背景色容器 */
+  wrapper: Container | null;
+  /** 區塊（連同背景色容器）所佔的行 */
+  range: Range;
+}
+
+function slot(doc: ParsedDoc, r: Range): Slot | null {
   const { tree } = treeWith(doc, r);
   const at = locate(tree, r.start);
-  return at?.ancestors[at.ancestors.length - 1] ?? null;
+  if (!at) return null;
+  let { siblings, index, ancestors } = at;
+  let wrapper: Container | null = null;
+  const parent = ancestors[ancestors.length - 1];
+  if (parent?.kind === "bg" && parent.children.length === 1) {
+    wrapper = parent;
+    ancestors = ancestors.slice(0, -1);
+    siblings = ancestors.length ? ancestors[ancestors.length - 1].children : tree;
+    index = siblings.indexOf(parent);
+  }
+  const range = wrapper ? { start: wrapper.open.start, end: wrapper.close.end } : { start: r.start, end: r.end };
+  return { siblings, index, ancestors, wrapper, range };
+}
+
+/** 區塊的直接父容器（不含它自己的背景色容器）。 */
+export function parentOf(doc: ParsedDoc, r: Range): Container | null {
+  const s = slot(doc, r);
+  return s?.ancestors[s.ancestors.length - 1] ?? null;
 }
 
 /** 區塊是不是在縮排裡（也就是某個區塊的子區塊）。 */
 export function isIndented(doc: ParsedDoc, r: Range): boolean {
-  const { tree } = treeWith(doc, r);
-  return !!locate(tree, r.start)?.ancestors.some((a) => a.kind === "indent");
+  return !!slot(doc, r)?.ancestors.some((a) => a.kind === "indent");
 }
 
 export function canOutdent(doc: ParsedDoc, r: Range): boolean {
@@ -204,30 +234,35 @@ export function canOutdent(doc: ParsedDoc, r: Range): boolean {
 
 /** 可以增加縮排：不在縮排裡、上方有可以當父區塊的區塊。 */
 export function canIndent(doc: ParsedDoc, r: Range): boolean {
-  const { tree } = treeWith(doc, r);
-  const at = locate(tree, r.start);
-  if (!at || at.ancestors.some((a) => a.kind === "indent")) return false;
-  const prev = at.siblings[at.index - 1];
+  const s = slot(doc, r);
+  if (!s || s.ancestors.some((a) => a.kind === "indent")) return false;
+  const prev = s.siblings[s.index - 1];
   if (!prev) return false;
-  if (prev.type === "container") return prev.kind === "indent";
+  if (prev.type === "container") return prev.kind === "indent" || prev.kind === "bg";
   return !prev.unit.tag;
 }
 
-/** 區塊的子區塊：緊接在它後面的縮排區。 */
+/** 區塊的子區塊：緊接在它（或它的背景色容器）後面的縮排區。 */
 function childrenOf(doc: ParsedDoc, r: Range): Container | null {
-  const { tree } = treeWith(doc, r);
-  const at = locate(tree, r.start);
-  const next = at?.siblings[at.index + 1];
+  const s = slot(doc, r);
+  const next = s?.siblings[s.index + 1];
   return next?.type === "container" && next.kind === "indent" ? next : null;
 }
 
-/** 區塊連同它的子區塊所佔的行範圍（搬移、刪除、複製都以此為單位）。 */
+/** 區塊連同背景色與子區塊所佔的行範圍（搬移、刪除、複製都以此為單位）。 */
 export function groupOf(doc: ParsedDoc, r: Range): Range {
+  const s = slot(doc, r);
+  const base = s?.range ?? { start: r.start, end: r.end };
   const kids = childrenOf(doc, r);
-  return kids ? { start: r.start, end: kids.close.end } : { start: r.start, end: r.end };
+  return kids ? { start: base.start, end: kids.close.end } : base;
 }
 
-/** 清單項目當作整份清單（欄位與縮排只能包整份清單）。 */
+/** 區塊的背景顏色（沒有就是 null）。 */
+export function blockBg(doc: ParsedDoc, r: Range): string | null {
+  return slot(doc, wholeBlock(doc, r))?.wrapper?.color ?? null;
+}
+
+/** 清單項目當作整份清單（欄位、縮排、背景色只能包整份清單）。 */
 function wholeBlock(doc: ParsedDoc, r: Range): Range {
   const u = doc.units.find((x) => x.start === r.start);
   if (!u?.list) return r;
@@ -250,10 +285,12 @@ export interface Moved {
 export function indentBlock(source: string, r: Range): Moved | null {
   const doc = parseDoc(source);
   if (!canIndent(doc, r)) return null;
+  const s = slot(doc, r)!;
 
   // 自己有子區塊：先拿掉子區塊的縮排標籤，連同子區塊一起縮排
   const kids = childrenOf(doc, r);
   if (kids) {
+    if (s.wrapper) return null; // 有背景色又有子區塊：先不處理
     const buf = new LineBuf(source);
     const lastLeaf = Math.max(...kids.children.map((c) => (c.type === "leaf" ? c.unit.end : c.close.end)));
     const rows = unwrapLines(kids)
@@ -264,31 +301,32 @@ export function indentBlock(source: string, r: Range): Moved | null {
     return indentBlock(buf.source, { start: r.start, end });
   }
 
-  const { tree } = treeWith(doc, r);
-  const at = locate(tree, r.start)!;
+  const R = s.range;
+  const offsetInBlock = r.start - R.start;
   const buf = new LineBuf(source);
-  const keep = buf.ids.slice(r.start, r.end);
-  const prev = at.siblings[at.index - 1];
+  const prev = s.siblings[s.index - 1];
   let line: number;
+  let count: number;
 
   if (prev?.type === "container" && prev.kind === "indent") {
-    const text = cut(buf, r);
+    const text = cut(buf, R);
+    count = text.length;
     line = insertBlock(buf, buf.map(prev.close.start), text, false);
-    keep.splice(0, keep.length, ...buf.ids.slice(line, line + text.length));
   } else {
-    const text = buf.lines.slice(r.start, r.end);
+    const text = buf.lines.slice(R.start, R.end);
+    count = text.length;
     const wrapped = [openTag("indent"), "", ...text, "", "</div>"];
     let offset = 2;
-    if (r.start > 0 && !isBlank(buf.lines[r.start - 1])) {
+    if (R.start > 0 && !isBlank(buf.lines[R.start - 1])) {
       wrapped.unshift("");
       offset++;
     }
-    if (r.end < buf.lines.length && !isBlank(buf.lines[r.end])) wrapped.push("");
-    buf.splice(r.start, r.end - r.start, ...wrapped);
-    line = r.start + offset;
-    keep.splice(0, keep.length, ...buf.ids.slice(line, line + text.length));
+    if (R.end < buf.lines.length && !isBlank(buf.lines[R.end])) wrapped.push("");
+    buf.splice(R.start, R.end - R.start, ...wrapped);
+    line = R.start + offset;
   }
-  const id = buf.ids[line];
+  const keep = buf.ids.slice(line, line + count);
+  const id = buf.ids[line + offsetInBlock];
   normalize(buf, keep);
   return { source: buf.source, start: buf.indexOfId(id) };
 }
@@ -299,18 +337,62 @@ export function indentBlock(source: string, r: Range): Moved | null {
  */
 export function outdentBlock(source: string, r: Range): Moved | null {
   const doc = parseDoc(source);
-  const { tree } = treeWith(doc, r);
-  const at = locate(tree, r.start);
-  const parent = at?.ancestors[at.ancestors.length - 1];
-  if (!at || parent?.kind !== "indent") return null;
+  const s = slot(doc, r);
+  const parent = s?.ancestors[s.ancestors.length - 1];
+  if (!s || parent?.kind !== "indent") return null;
+  const R = s.range;
   const buf = new LineBuf(source);
-  const keep = buf.ids.slice(r.start, r.end);
-  const text = buf.lines.slice(r.start, r.end);
-  buf.splice(r.start, r.end - r.start, "</div>", "", ...text, "", doc.lines[parent.open.start]);
-  const id = buf.ids[r.start + 2];
-  const kept = buf.ids.slice(r.start + 2, r.start + 2 + text.length);
-  normalize(buf, keep.length ? kept : []);
+  const text = buf.lines.slice(R.start, R.end);
+  buf.splice(R.start, R.end - R.start, "</div>", "", ...text, "", doc.lines[parent.open.start]);
+  const id = buf.ids[R.start + 2 + (r.start - R.start)];
+  const kept = buf.ids.slice(R.start + 2, R.start + 2 + text.length);
+  normalize(buf, kept);
   return { source: buf.source, start: buf.indexOfId(id) };
+}
+
+// ─── 背景顏色 ───────────────────────────────────────────────────
+
+/**
+ * 設定區塊的背景顏色（color 為 null 表示拿掉）：包一層 `<div class="bg-顏色">`，
+ * 已經有背景色就只改標籤。清單項目會套用到整份清單。回傳區塊第一行的新位置。
+ */
+export function setBlockBg(source: string, r: Range, color: string | null): Moved {
+  const doc = parseDoc(source);
+  const whole = wholeBlock(doc, r);
+  const s = slot(doc, whole);
+  const buf = new LineBuf(source);
+  const id = buf.ids[r.start];
+  if (s?.wrapper) {
+    if (color) buf.lines[s.wrapper.open.start] = openTag("bg", undefined, color);
+    else {
+      const rows = unwrapLines(s.wrapper)
+        .filter((l) => isBlank(buf.lines[l]) || l === s.wrapper!.open.start || l === s.wrapper!.close.start)
+        .sort((a, b) => b - a);
+      for (const l of rows) buf.splice(l, 1);
+    }
+  } else if (color) {
+    // 只在前後插入標籤行，不動區塊本身的行
+    const after = whole.end < buf.lines.length && !isBlank(buf.lines[whole.end]) ? [""] : [];
+    buf.splice(whole.end, 0, "", "</div>", ...after);
+    const before = whole.start > 0 && !isBlank(buf.lines[whole.start - 1]) ? [""] : [];
+    buf.splice(whole.start, 0, ...before, openTag("bg", undefined, color), "");
+  }
+  normalize(buf);
+  return { source: buf.source, start: buf.indexOfId(id) };
+}
+
+/** 多個區塊一起設定背景顏色（由後往前做，前面的行號不受影響）。 */
+export function setBlocksBg(source: string, units: Range[], color: string | null): MovedMany {
+  let doc = parseDoc(source);
+  const xs = topLevel(doc, units).filter((x) => !x.whole);
+  const texts = xs.map((x) => doc.lines.slice(x.start, x.end).join("\n"));
+  let out = source;
+  for (const x of [...xs].reverse()) {
+    doc = parseDoc(out);
+    const cur = doc.blocks.find((b) => b.start === x.start) ?? x;
+    out = setBlockBg(out, cur, color).source;
+  }
+  return { source: out, starts: reselect(out, texts) };
 }
 
 // ─── 搬移與多欄 ─────────────────────────────────────────────────

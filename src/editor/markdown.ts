@@ -60,23 +60,30 @@ export interface Unit {
 // 標籤仍是 CommonMark 的 HTML 區塊，渲染結果與規格一致；編輯器只是把它們藏起來，
 // 改用欄位與縮排顯示。
 
-export type ContainerKind = "columns" | "column" | "indent";
+export type ContainerKind = "columns" | "column" | "indent" | "bg";
 
-export type Tag = { type: "open"; kind: ContainerKind | "div"; width?: number } | { type: "close" };
+export type Tag =
+  | { type: "open"; kind: ContainerKind | "div"; width?: number; color?: string }
+  | { type: "close" };
 
-const LAYOUT_OPEN = /^<div class="(columns|column|indent)"(?: style="flex: ?(\d+(?:\.\d+)?)")?>[ \t]*$/;
+const LAYOUT_OPEN = /^<div class="(columns|column|indent|bg-([a-z]+))"(?: style="flex: ?(\d+(?:\.\d+)?)")?>[ \t]*$/;
 const DIV_OPEN = /^<div\b[^>]*>[ \t]*$/i;
 const DIV_CLOSE = /^<\/div>[ \t]*$/i;
 
 export function parseTag(line: string): Tag | undefined {
   const m = LAYOUT_OPEN.exec(line);
-  if (m) return { type: "open", kind: m[1] as ContainerKind, width: m[2] ? Number(m[2]) : undefined };
+  if (m) {
+    // 區塊背景：<div class="bg-blue">
+    if (m[2]) return { type: "open", kind: "bg", color: m[2] };
+    return { type: "open", kind: m[1] as ContainerKind, width: m[3] ? Number(m[3]) : undefined };
+  }
   if (DIV_OPEN.test(line)) return { type: "open", kind: "div" };
   if (DIV_CLOSE.test(line)) return { type: "close" };
   return undefined;
 }
 
-export function openTag(kind: ContainerKind, width?: number): string {
+export function openTag(kind: ContainerKind, width?: number, color?: string): string {
+  if (kind === "bg") return `<div class="bg-${color ?? "gray"}">`;
   return width !== undefined && Math.abs(width - 1) > 0.005
     ? `<div class="${kind}" style="flex: ${+width.toFixed(2)}">`
     : `<div class="${kind}">`;
@@ -89,6 +96,8 @@ export interface Container {
   close: Unit;
   /** 欄寬比例（flex-grow），預設 1 */
   width: number;
+  /** 區塊背景的顏色（kind 為 bg 時） */
+  color?: string;
   children: TreeNode[];
 }
 
@@ -105,6 +114,7 @@ export function buildTree(units: Unit[]): TreeNode[] {
     kind: ContainerKind | "div";
     open: Unit | null;
     width: number;
+    color?: string;
     children: TreeNode[];
   }
   const stack: Frame[] = [{ kind: "div", open: null, width: 1, children: [] }];
@@ -112,7 +122,7 @@ export function buildTree(units: Unit[]): TreeNode[] {
   for (const u of units) {
     const top = stack[stack.length - 1];
     if (u.tag?.type === "open") {
-      stack.push({ kind: u.tag.kind, open: u, width: u.tag.width ?? 1, children: [] });
+      stack.push({ kind: u.tag.kind, open: u, width: u.tag.width ?? 1, color: u.tag.color, children: [] });
     } else if (u.tag?.type === "close" && stack.length > 1) {
       stack.pop();
       const parent = stack[stack.length - 1];
@@ -124,6 +134,7 @@ export function buildTree(units: Unit[]): TreeNode[] {
           open: top.open!,
           close: u,
           width: top.width,
+          color: top.color,
           children: top.children,
         });
     } else {
@@ -191,6 +202,8 @@ export interface ParsedDoc {
   tree: TreeNode[];
   /** 看得到的區塊（不含版面標籤），依文件順序 */
   blocks: Unit[];
+  /** markdown-it 的 env（含連結參考定義），渲染單一區塊的行內內容時要用 */
+  env: Record<string, unknown>;
   /** 與 md.render(source) 完全相同的 HTML，由區塊組回來 */
   html: string;
 }
@@ -300,7 +313,7 @@ export function parseDoc(source: string): ParsedDoc {
     if (u.kind === "html" && u.end - u.start === 1) u.tag = parseTag(lines[u.start]);
   }
   const tree = buildTree(all);
-  return { lines, units: all, tree, blocks: leaves(tree), html: tops.map((b) => b.html).join("") };
+  return { lines, units: all, tree, blocks: leaves(tree), html: tops.map((b) => b.html).join(""), env };
 }
 
 /** 直接用 CommonMark 渲染整份文件（給匯出／測試對照用）。 */

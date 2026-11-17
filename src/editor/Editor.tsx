@@ -14,7 +14,10 @@ import {
 } from "react";
 import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
 import { CopyIcon, GripIcon, IndentIcon, LinkIcon, OutdentIcon, PlusIcon, TrashIcon } from "./icons";
+import { COLORS, COLOR_LABELS, marksAt, setColor, toggleMark, type Color, type Mark, type Marks } from "./inline";
 import { caretFromPoint } from "./caret";
+import { RichBlock, textareaSurface, type Shortcut, type Surface } from "./RichBlock";
+import { decompose, type FormatSpec } from "./wysiwyg";
 import {
   blocksMarkdown,
   canDrop,
@@ -34,6 +37,9 @@ import {
   topLevel,
   outdentBlock,
   placeBeside,
+  blockBg,
+  setBlockBg,
+  setBlocksBg,
   setColumnWidths,
   treeWith,
   type DropPos,
@@ -131,7 +137,10 @@ export function Editor({ value, onChange }: EditorProps) {
   const stateRef = useRef(state);
   stateRef.current = state;
   const history = useRef<History>({ past: [], future: [], last: 0 });
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  /** 編輯中區塊的編輯面（所見即所得或原始碼文字框） */
+  const surfRef = useRef<Surface | null>(null);
+  /** 點擊進入編輯時的滑鼠位置：所見即所得編輯可以把游標放在點到的字上 */
+  const pendingPoint = useRef<{ x: number; y: number } | null>(null);
   // 區塊選取：選取的區塊（起始行）、Shift 延伸的起點與終點、框選的矩形
   const [selected, setSelected] = useState<number[]>([]);
   const selRef = useRef<number[]>([]);
@@ -216,21 +225,59 @@ export function Editor({ value, onChange }: EditorProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo]);
 
+  // 行內格式：游標所在文字的狀態（下方格式列用），以及套用格式後要恢復的選取
+  const [marks, setMarks] = useState<Marks | null>(null);
+  const pendingSel = useRef<[number, number] | null>(null);
+
+  const refreshMarks = useCallback(() => {
+    const surf = surfRef.current;
+    if (!surf || !stateRef.current.region) return setMarks(null);
+    const next = surf.marks() ?? marksAt(surf.text(), ...surf.sel());
+    setMarks((cur) =>
+      cur && (Object.keys(next) as (keyof Marks)[]).every((k) => cur[k] === next[k]) ? cur : next,
+    );
+  }, []);
+
   // 套用游標位置、自動調整高度
   useLayoutEffect(() => {
-    const ta = taRef.current;
-    if (!ta || !state.region) return;
-    ta.style.height = "0px";
-    ta.style.height = ta.scrollHeight + "px";
-    if (document.activeElement !== ta) ta.focus({ preventScroll: false });
-    if (ta.selectionStart !== state.caret || ta.selectionEnd !== state.caret) {
-      ta.setSelectionRange(state.caret, state.caret);
+    const surf = surfRef.current;
+    if (!surf || !state.region || !surf.el?.isConnected) {
+      setMarks(null);
+      return;
     }
-  }, [state]);
+    if (!surf.rich) {
+      const ta = surf.el as HTMLTextAreaElement;
+      ta.style.height = "0px";
+      ta.style.height = ta.scrollHeight + "px";
+    }
+    const focused = document.activeElement === surf.el;
+    if (!focused) surf.focus();
+    const point = pendingPoint.current;
+    pendingPoint.current = null;
+    if (pendingSel.current) {
+      surf.setSel(...pendingSel.current);
+      pendingSel.current = null;
+    } else if (point && surf.rich && placeAtPoint(surf.el, point)) {
+      // 所見即所得：游標放在點到的字上
+    } else {
+      const [a, b] = surf.sel();
+      if (!focused || a !== state.caret || b !== state.caret) surf.setSel(state.caret, state.caret);
+    }
+    refreshMarks();
+  }, [state, refreshMarks]);
 
   const region = state.region;
   const editText = region ? regionText(doc.lines, region) : "";
   const editUnit = region ? regionUnit(doc, region) : undefined;
+  /** 這個區塊能不能所見即所得編輯（拆得開區塊語法與行內內容）；不能就用原始碼文字框 */
+  const shape = useMemo(() => {
+    if (!region) return null;
+    const kind = editUnit?.kind;
+    // 編輯區涵蓋多個區塊（例如剛打開程式碼區塊）時用原始碼
+    const units = doc.units.filter((u) => u.start < region.end && u.end > region.start);
+    if (units.length > 1) return null;
+    return decompose(editText, kind);
+  }, [region, editText, editUnit, doc]);
 
   // ─── 編輯區事件 ────────────────────────────────────────────
 
@@ -270,6 +317,135 @@ export function Editor({ value, onChange }: EditorProps) {
   const slashQuery = slash && region ? editText.slice(slash.pos + 1, state.caret) : "";
   const slashItems = slash ? filterBlockTypes(slashQuery) : [];
 
+  /** 可以套用行內格式的區塊（程式碼、HTML、參考連結裡的字不是 Markdown 行內語法）。 */
+  const formattable = !!region && !["code", "html", "source"].includes(editUnit?.kind ?? "paragraph");
+
+  /** 切換游標或選取文字的粗體、斜體、程式碼、連結。 */
+  /** 把編輯面算出來的新原始碼與選取套用上去。 */
+  const commitFormatted = (r: { text: string; a: number; b: number }) => {
+    const s = stateRef.current;
+    if (!s.region || r.text === regionText(s.source.split("\n"), s.region)) {
+      pendingSel.current = [r.a, r.b];
+      commit({ ...s });
+      return;
+    }
+    setSlash(null);
+    const next = applyText(s, r.text, r.b);
+    const shift = next.caret - r.b; // 編輯區往上擴張時的位移
+    pendingSel.current = [r.a + shift, r.b + shift];
+    commit(next);
+  };
+
+  const TAG_OF = { bold: "strong", italic: "em", underline: "u", strike: "s", code: "code" } as const;
+
+  const applyMark = (mark: Mark) => {
+    const surf = surfRef.current;
+    const s = stateRef.current;
+    if (!surf || !s.region) return;
+    const [a, b] = surf.sel();
+    if (surf.rich) {
+      if (mark === "link") {
+        if (marks?.link) {
+          // 在連結裡：拿掉連結（有選取時以畫面上的字為準）
+          const r = a !== b ? surf.format({ tag: "a", href: "" }, "off") : null;
+          if (r) return commitFormatted(r);
+          const t = toggleMark(surf.text(), a, b, "link", true);
+          if (t.text !== surf.text()) commitFormatted(t);
+          return;
+        }
+        // 所見即所得看不到網址：另外問網址，先記住選取
+        setLinkAsk({ a, b, restore: surf.saveSel() });
+        return;
+      }
+      const tag = TAG_OF[mark];
+      if (a === b) {
+        // 沒有選取：讓接著打的字有（或沒有）這個格式
+        if (surf.typingStyle({ tag })) refreshMarks();
+        return;
+      }
+      // 有選取：以畫面上選到的字為準（不會因為選取邊界剛好在 ** 記號旁而切壞）
+      const r = surf.format({ tag }, "toggle");
+      if (r) commitFormatted(r);
+      return;
+    }
+    const text = surf.text();
+    const r = toggleMark(text, a, b, mark, marks?.[mark]);
+    if (r.text === text) return;
+    commitFormatted(r);
+  };
+
+  /** 設定選取文字的文字顏色或螢光標記。 */
+  const applyColor = (kind: "color" | "highlight", color: Color | null) => {
+    const surf = surfRef.current;
+    const s = stateRef.current;
+    if (!surf || !s.region) return;
+    const [a, b] = surf.sel();
+    if (surf.rich) {
+      const spec: FormatSpec = { tag: kind === "color" ? "span" : "mark", color };
+      if (a === b) {
+        if (surf.typingStyle(spec)) refreshMarks();
+        return;
+      }
+      const r = surf.format(spec, color ? "on" : "off");
+      if (r) commitFormatted(r);
+      return;
+    }
+    const text = surf.text();
+    const r = setColor(text, a, b, kind, color);
+    if (r.text === text) return;
+    commitFormatted(r);
+  };
+
+  /** 設定正在編輯的整個區塊的背景顏色，然後繼續編輯同一個區塊。 */
+  const applyBlockBg = (color: Color | null) => {
+    const surf = surfRef.current;
+    const s = stateRef.current;
+    if (!s.region) return;
+    const sel: [number, number] = surf ? surf.sel() : [s.caret, s.caret];
+    const res = setBlockBg(s.source, s.region, color);
+    if (res.source === s.source || res.start < 0) return;
+    const len = s.region.end - s.region.start;
+    const next = activate({ source: res.source, region: null, caret: 0 }, { start: res.start, end: res.start + len }, sel[1]);
+    pendingSel.current = sel;
+    commit(next);
+  };
+
+  /** 所見即所得插入連結：輸入網址的小視窗（a、b 是原始碼中的選取，restore 放回原本的選取） */
+  const [linkAsk, setLinkAsk] = useState<{ a: number; b: number; restore: () => void } | null>(null);
+  const applyLink = (url: string) => {
+    const ask = linkAsk;
+    setLinkAsk(null);
+    const s = stateRef.current;
+    const surf = surfRef.current;
+    if (!ask || !s.region || !surf) return;
+    ask.restore();
+    const href = url.trim();
+    if (!href) {
+      pendingSel.current = [ask.a, ask.b];
+      commit({ ...s });
+      return;
+    }
+    // 有選取：把選到的字（以畫面為準）包成連結
+    const r = ask.a !== ask.b ? surf.format({ tag: "a", href }, "on") : null;
+    if (r) return commitFormatted(r);
+    // 沒有選取：插入以網址為文字的連結
+    const text = regionText(s.source.split("\n"), s.region);
+    const label = href.replace(/^https?:\/\//, "").replace(/[\\`*_[\]<]/g, "\\$&");
+    const dest = /[\s()<>]/.test(href) ? `<${href}>` : href;
+    const out = text.slice(0, ask.a) + `[${label}](${dest})` + text.slice(ask.b);
+    commitFormatted({ text: out, a: ask.a + 1, b: ask.a + 1 + label.length });
+  };
+
+  /** 段落開頭打了區塊標記：轉成對應的區塊，游標放在內容開頭。 */
+  const onShortcut = (type: Shortcut, rest: string) => {
+    const s = stateRef.current;
+    if (!s.region) return;
+    setSlash(null);
+    const t = turnInto(rest, type);
+    const caret = type === "code" ? t.caret : t.text.length - rest.length;
+    commit(applyText(s, t.text, caret));
+  };
+
   const pickSlash = (type: BlockType) => {
     if (!slash) return;
     const s = stateRef.current;
@@ -285,12 +461,28 @@ export function Editor({ value, onChange }: EditorProps) {
     return true;
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-    const ta = e.currentTarget;
-    const { selectionStart: a, selectionEnd: b, value: text } = ta;
+    const surf = surfRef.current;
     const s = stateRef.current;
-    if (!s.region) return;
+    if (!surf || !s.region) return;
+    const text = surf.text();
+    const [a, b] = surf.sel();
+
+    // 行內格式快捷鍵
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const key = e.key.toLowerCase();
+      const mark = e.shiftKey
+        ? key === "x"
+          ? "strike"
+          : undefined
+        : ({ b: "bold", i: "italic", u: "underline", e: "code", k: "link" } as Record<string, Mark>)[key];
+      if (mark && formattable) {
+        e.preventDefault();
+        applyMark(mark);
+        return;
+      }
+    }
 
     if (slash && slashItems.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -318,7 +510,7 @@ export function Editor({ value, onChange }: EditorProps) {
       return;
     }
 
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && a === 0 && b === text.length) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && surf.allSelected()) {
       // 文字已經全選時再按 Ctrl+A：選取所有區塊
       e.preventDefault();
       leaveEditing();
@@ -333,9 +525,21 @@ export function Editor({ value, onChange }: EditorProps) {
       if (e.shiftKey) {
         if (kind === "paragraph" || kind === "item" || kind === "quote") {
           e.preventDefault();
-          // CommonMark 的硬換行：行尾反斜線
-          commit(applyText(sync, text.slice(0, a) + "\\\n" + text.slice(b), a + 2));
-        }
+          // CommonMark 的硬換行：行尾反斜線（所見即所得：插入換行元素，轉回時就是硬換行）
+          if (surf.rich) document.execCommand("insertLineBreak");
+          else commit(applyText(sync, text.slice(0, a) + "\\\n" + text.slice(b), a + 2));
+        } else e.preventDefault();
+        return;
+      }
+      if (surf.rich) {
+        // 所見即所得：在 DOM 上切開，前後各自轉回 Markdown，格式不會被切壞
+        e.preventDefault();
+        const parts = surf.split();
+        if (!parts) return;
+        const joined = applyText(s, parts.before + parts.after, parts.before.length);
+        const next = splitBlock(joined, parts.before.length);
+        setSlash(null);
+        if (next) commit(next);
         return;
       }
       const next = splitBlock({ ...sync, source: s.source }, a);
@@ -348,7 +552,7 @@ export function Editor({ value, onChange }: EditorProps) {
       return;
     }
 
-    if (e.key === "Backspace" && a === 0 && b === 0) {
+    if (e.key === "Backspace" && a === b && surf.atStart()) {
       const next = backspaceAtStart(sync);
       e.preventDefault();
       if (next) commit(next);
@@ -369,7 +573,7 @@ export function Editor({ value, onChange }: EditorProps) {
           const pad = " ".repeat(width);
           commit(applyText(sync, lines.map((l) => (l ? pad + l : l)).join("\n"), a + width));
         }
-      } else if (kind === "code") {
+      } else if (kind === "code" && !surf.rich) {
         commit(applyText(sync, text.slice(0, a) + "  " + text.slice(b), a + 2));
       } else {
         // 其他區塊：Tab 增加縮排、Shift+Tab 減少縮排
@@ -380,22 +584,23 @@ export function Editor({ value, onChange }: EditorProps) {
     }
 
     if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || a !== b) return;
-    if (e.key === "ArrowUp" && !text.slice(0, a).includes("\n")) {
+    if (e.key === "ArrowUp" && surf.firstLine()) {
       if (go(prevUnit(doc, s.region), "end")) e.preventDefault();
-    } else if (e.key === "ArrowDown" && !text.slice(a).includes("\n")) {
+    } else if (e.key === "ArrowDown" && surf.lastLine()) {
       if (go(nextUnit(doc, s.region), 0)) e.preventDefault();
-    } else if (e.key === "ArrowLeft" && a === 0) {
+    } else if (e.key === "ArrowLeft" && surf.atStart()) {
       if (go(prevUnit(doc, s.region), "end")) e.preventDefault();
-    } else if (e.key === "ArrowRight" && a === text.length) {
+    } else if (e.key === "ArrowRight" && surf.atEnd()) {
       if (go(nextUnit(doc, s.region), 0)) e.preventDefault();
     }
   };
 
-  const onBlur = (ta: HTMLTextAreaElement, renderedStart: number) => {
+  const onBlur = (el: HTMLElement, renderedStart: number, related: Element | null = null) => {
     if (!document.hasFocus()) return; // 只是切換到別的視窗
+    if (related?.closest?.(".link-ask, .format-bar")) return; // 焦點移到網址輸入框、格式列
     const s = stateRef.current;
-    // 已經換到別的編輯區（舊 textarea 卸載或被新的搶走焦點）就不處理
-    if (!s.region || s.region.start !== renderedStart || taRef.current !== ta || !ta.isConnected) return;
+    // 已經換到別的編輯區（舊的編輯元素卸載或被新的搶走焦點）就不處理
+    if (!s.region || s.region.start !== renderedStart || surfRef.current?.el !== el || !el.isConnected) return;
     setSlash(null);
     commit(deactivate(s).state);
   };
@@ -409,7 +614,7 @@ export function Editor({ value, onChange }: EditorProps) {
     if (!s.region) return (l: number) => l;
     const d = deactivate(s);
     commit(d.state);
-    taRef.current?.blur();
+    surfRef.current?.blur();
     return d.map;
   };
 
@@ -491,6 +696,7 @@ export function Editor({ value, onChange }: EditorProps) {
       if (!ranging) {
         select([]);
         anchorRef.current = null;
+        pendingPoint.current = { x: e.clientX, y: e.clientY };
         go(unit, caret);
       }
     };
@@ -523,7 +729,7 @@ export function Editor({ value, onChange }: EditorProps) {
     const cur = parseDoc(s.source);
     const last = cur.units[cur.units.length - 1];
     if (s.region && (!last || s.region.start >= last.end) && /^\s*$/.test(regionText(cur.lines, s.region))) {
-      taRef.current?.focus();
+      surfRef.current?.focus();
       return;
     }
     const lastBlock = cur.blocks[cur.blocks.length - 1];
@@ -771,20 +977,28 @@ export function Editor({ value, onChange }: EditorProps) {
    * 在編輯中的區塊裡貼上：從 Banyan 複製的區塊、或多行的 Markdown，直接變成區塊
    * （在游標處切開，貼上的區塊放在中間並選取）；單行文字照一般方式貼進文字框。
    */
-  const onTextPaste = (e: ReactClipboardEvent<HTMLTextAreaElement>) => {
+  const onTextPaste = (e: ReactClipboardEvent<HTMLElement>) => {
     const s = stateRef.current;
-    if (!s.region) return;
+    const surf = surfRef.current;
+    if (!s.region || !surf) return;
     const kind = editUnit?.kind;
-    if (kind === "code" || kind === "html") return; // 程式碼裡就是文字
     const blocks = e.clipboardData.getData(BLOCKS_MIME);
     const text = blocks || e.clipboardData.getData("text/plain");
-    if (!text || (!blocks && !text.replace(/\r?\n+$/, "").includes("\n"))) return;
+    const multi = !!blocks || text.replace(/\r?\n+$/, "").includes("\n");
+    if (kind === "code" || kind === "html" || !text || !multi) {
+      // 單行文字：所見即所得只貼純文字（不帶網頁的格式）
+      if (surf.rich) {
+        e.preventDefault();
+        document.execCommand("insertText", false, text.replace(/\r?\n/g, " "));
+      }
+      return;
+    }
     e.preventDefault();
-    const ta = e.currentTarget;
     setSlash(null);
-    const res = pasteInto(s.source, s.region, ta.selectionStart, ta.selectionEnd, text);
+    const [a, b] = surf.sel();
+    const res = pasteInto(s.source, s.region, a, b, text);
     commit({ source: res.source, region: null, caret: 0 });
-    ta.blur();
+    surf.blur();
     select(res.starts, res.starts[0] ?? null, res.starts[res.starts.length - 1] ?? null);
   };
 
@@ -871,7 +1085,7 @@ export function Editor({ value, onChange }: EditorProps) {
     if (e.button !== 0) return;
     const t = e.target as HTMLElement;
     if (!t.closest?.(".page, .md-editor")) return;
-    if (t.closest(".row .content, .gutter, .popover, .grip, textarea, .md-source-panel")) return;
+    if (t.closest(".row .content, .gutter, .popover, .grip, textarea, .md-source-panel, .format-bar")) return;
     e.preventDefault();
     const x0 = e.clientX;
     const y0 = e.clientY;
@@ -944,27 +1158,56 @@ export function Editor({ value, onChange }: EditorProps) {
 
   const editorRow = region ? (
     <div
-      className={`row editing kind-${editUnit?.kind ?? "paragraph"}${editUnit && isTitle(editUnit, doc) ? " is-title" : ""}`}
+      className={`row editing ${shape ? "wysiwyg" : "raw"} kind-${editUnit?.kind ?? "paragraph"}${editUnit && isTitle(editUnit, doc) ? " is-title" : ""}`}
       key={`edit:${region.start}`}
     >
       <div className="gutter" />
       <div className="content">
-        <textarea
-          ref={taRef}
-          className={`edit ${editUnit?.kind === "heading" ? `h${editUnit.level}` : ""}`}
-          value={editText}
-          spellCheck={false}
-          rows={1}
-          placeholder={editText ? "" : "輸入文字，或按「/」選擇區塊類型"}
-          onChange={(e) => onTextChange(e.target.value, e.target.selectionStart)}
-          onSelect={(e) => {
-            const c = e.currentTarget.selectionStart;
-            if (c !== stateRef.current.caret) stateRef.current = { ...stateRef.current, caret: c };
-          }}
-          onKeyDown={onKeyDown}
-          onPaste={onTextPaste}
-          onBlur={(e) => onBlur(e.currentTarget, region.start)}
-        />
+        {shape ? (
+          <RichBlock
+            ref={surfRef}
+            text={editText}
+            shape={shape}
+            kind={editUnit?.kind}
+            level={editUnit?.level}
+            list={editUnit?.list}
+            env={doc.env}
+            placeholder={editUnit?.kind === "heading" ? "標題" : "輸入文字，或按「/」選擇區塊類型"}
+            onText={onTextChange}
+            onShortcut={onShortcut}
+            onKeyDown={onKeyDown}
+            onPaste={onTextPaste}
+            onBlur={(el, related) => onBlur(el, region.start, related)}
+            onSelect={() => {
+              const surf = surfRef.current;
+              if (surf) {
+                const [, c] = surf.sel();
+                if (c !== stateRef.current.caret) stateRef.current = { ...stateRef.current, caret: c };
+              }
+              refreshMarks();
+            }}
+          />
+        ) : (
+          <textarea
+            ref={(el) => {
+              surfRef.current = el ? textareaSurface(el) : null;
+            }}
+            className={`edit ${editUnit?.kind === "heading" ? `h${editUnit.level}` : ""}`}
+            value={editText}
+            spellCheck={false}
+            rows={1}
+            placeholder={editText ? "" : "輸入文字，或按「/」選擇區塊類型"}
+            onChange={(e) => onTextChange(e.target.value, e.target.selectionStart)}
+            onSelect={(e) => {
+              const c = e.currentTarget.selectionStart;
+              if (c !== stateRef.current.caret) stateRef.current = { ...stateRef.current, caret: c };
+              refreshMarks();
+            }}
+            onKeyDown={onKeyDown}
+            onPaste={onTextPaste}
+            onBlur={(e) => onBlur(e.currentTarget, region.start, e.relatedTarget as Element | null)}
+          />
+        )}
         <span className="edit-badge" aria-hidden>
           {kindLabel(editUnit?.kind ?? "paragraph", editUnit?.level)}
           <kbd>Esc</kbd>
@@ -1037,9 +1280,17 @@ export function Editor({ value, onChange }: EditorProps) {
       const i = nodes.indexOf(n);
       const owner = nodes[i - 1];
       const dragged =
-        n.kind === "indent" &&
-        owner?.type === "leaf" &&
-        dragRanges.some((r) => owner.unit.start >= r.start && owner.unit.start < r.end);
+        (n.kind === "indent" &&
+          owner?.type === "leaf" &&
+          dragRanges.some((r) => owner.unit.start >= r.start && owner.unit.start < r.end)) ||
+        (n.kind === "bg" && dragRanges.some((r) => n.open.start >= r.start && n.open.start < r.end));
+      if (n.kind === "bg") {
+        return (
+          <div key={`bg:${n.open.start}`} className={`block-bg bg-${n.color}${dragged ? " dragging" : ""}`}>
+            {renderNodes(n.children)}
+          </div>
+        );
+      }
       return (
         <div
           key={`${n.kind}:${n.open.start}`}
@@ -1059,6 +1310,20 @@ export function Editor({ value, onChange }: EditorProps) {
         {doc.units.length === 0 && !region && <span className="empty-hint">點這裡開始寫作…</span>}
       </div>
       {box && <div className="select-box" style={box} />}
+      {linkAsk && region && (
+        <LinkAsk onSubmit={applyLink} onCancel={() => applyLink("")} />
+      )}
+      {region && !drag && (
+        <FormatBar
+          kind={kindLabel(editUnit?.kind ?? "paragraph", editUnit?.level)}
+          marks={marks}
+          bg={(blockBg(doc, region) as Color | null) ?? null}
+          enabled={formattable}
+          onToggle={applyMark}
+          onColor={applyColor}
+          onBlockBg={applyBlockBg}
+        />
+      )}
       {drag && (
         <div className="drag-ghost" style={{ left: drag.x + 12, top: drag.y + 8 }}>
           {drag.label || "（空白）"}
@@ -1076,6 +1341,11 @@ export function Editor({ value, onChange }: EditorProps) {
             current={many ? null : blockTypeOf(menu.unit)}
             canIndent={noItems && targets.some((t) => canIndent(menuDoc, t))}
             canOutdent={noItems && targets.some((t) => canOutdent(menuDoc, t))}
+            bg={many ? null : ((blockBg(menuDoc, menu.unit) as Color | null) ?? null)}
+            onBg={(color) => {
+              setMenu(null);
+              applyMany(setBlocksBg(state.source, targets, color));
+            }}
             onClose={() => setMenu(null)}
             onTurn={(t) => {
               setMenu(null);
@@ -1188,6 +1458,152 @@ function blockTypeOf(unit: Unit): BlockType | null {
   }
 }
 
+/** 所見即所得插入連結時輸入網址的小視窗。 */
+function LinkAsk(props: { onSubmit: (url: string) => void; onCancel: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => ref.current?.focus(), []);
+  return (
+    <div className="popover link-ask">
+      <LinkIcon />
+      <input
+        ref={ref}
+        placeholder="貼上或輸入網址，按 Enter"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            props.onSubmit(e.currentTarget.value);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            props.onCancel();
+          }
+        }}
+        onBlur={(e) => {
+          if (!(e.relatedTarget as Element | null)?.closest?.(".link-ask")) props.onCancel();
+        }}
+      />
+    </div>
+  );
+}
+
+/** 把游標放在畫面上的某一點（點擊進入編輯時用）；點不在元素裡就回傳 false。 */
+function placeAtPoint(el: HTMLElement, p: { x: number; y: number }): boolean {
+  const d = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  let node: Node | null = null;
+  let offset = 0;
+  if (d.caretPositionFromPoint) {
+    const r = d.caretPositionFromPoint(p.x, p.y);
+    if (r) [node, offset] = [r.offsetNode, r.offset];
+  } else if (document.caretRangeFromPoint) {
+    const r = document.caretRangeFromPoint(p.x, p.y);
+    if (r) [node, offset] = [r.startContainer, r.startOffset];
+  }
+  if (!node || !el.contains(node)) return false;
+  const range = document.createRange();
+  range.setStart(node, offset);
+  range.collapse(true);
+  const sel = document.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  return true;
+}
+
+const FORMATS: { mark: Mark; label: string; key: string; icon: ReactNode }[] = [
+  { mark: "bold", label: "粗體", key: "Ctrl+B", icon: <b>B</b> },
+  { mark: "italic", label: "斜體", key: "Ctrl+I", icon: <i>I</i> },
+  { mark: "underline", label: "底線", key: "Ctrl+U", icon: <u className="fb-u">U</u> },
+  { mark: "strike", label: "刪除線", key: "Ctrl+Shift+X", icon: <s className="fb-s">S</s> },
+  { mark: "code", label: "程式碼", key: "Ctrl+E", icon: <CodeGlyph /> },
+  { mark: "link", label: "連結", key: "Ctrl+K", icon: <LinkIcon /> },
+];
+
+function CodeGlyph() {
+  return <span className="fb-code">{"</>"}</span>;
+}
+
+/** 一排顏色：預設＋九種。kind 決定樣本的畫法（文字、螢光、區塊背景）。 */
+function Swatches(props: { kind: "color" | "highlight" | "bg"; value: Color | null; onPick: (c: Color | null) => void }) {
+  return (
+    <div className="swatches">
+      {[null, ...COLORS].map((c) => (
+        <button
+          key={c ?? "default"}
+          className={`swatch ${props.kind}${c ? ` ${props.kind === "color" ? "tc" : props.kind === "highlight" ? "hl" : "bg"}-${c}` : " none"}${
+            props.value === c ? " on" : ""
+          }`}
+          title={c ? COLOR_LABELS[c] : "預設"}
+          onClick={() => props.onPick(c)}
+        >
+          {props.kind === "bg" ? "" : "A"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 編輯時固定在畫面下方的格式列：顯示游標所在文字的狀態，點按鈕切換格式、選顏色。 */
+function FormatBar(props: {
+  kind: string;
+  marks: Marks | null;
+  bg: Color | null;
+  enabled: boolean;
+  onToggle: (m: Mark) => void;
+  onColor: (kind: "color" | "highlight", c: Color | null) => void;
+  onBlockBg: (c: Color | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const m = props.marks;
+  const active = FORMATS.filter((f) => m?.[f.mark]).map((f) => f.label);
+  if (m?.color) active.push(`${COLOR_LABELS[m.color]}字`);
+  if (m?.highlight) active.push(`${COLOR_LABELS[m.highlight]}色螢光`);
+  if (props.bg) active.push(`${COLOR_LABELS[props.bg]}底`);
+  return (
+    <div className="format-bar" role="toolbar" aria-label="文字格式" onMouseDown={(e) => e.preventDefault()}>
+      <span className="fb-kind">{props.kind}</span>
+      <span className="fb-sep" />
+      {FORMATS.map((f) => (
+        <button
+          key={f.mark}
+          className={m?.[f.mark] ? "on" : ""}
+          disabled={!props.enabled}
+          title={`${f.label}（${f.key}）`}
+          aria-pressed={!!m?.[f.mark]}
+          onClick={() => props.onToggle(f.mark)}
+        >
+          {f.icon}
+        </button>
+      ))}
+      <button
+        className={`fb-color${open ? " on" : ""}`}
+        title="顏色：文字、螢光、區塊背景"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={`fb-a${m?.color ? ` tc-${m.color}` : ""}${m?.highlight ? ` hl-${m.highlight}` : ""}`}>A</span>
+        <span className="fb-caret">▾</span>
+      </button>
+      <span className="fb-sep" />
+      <span className={`fb-state${active.length ? " has" : ""}`}>
+        {!props.enabled ? "原始文字" : active.length ? active.join("・") : "一般文字"}
+      </span>
+      {open && (
+        <div className="popover color-menu">
+          {props.enabled && (
+            <>
+              <div className="popover-title">文字顏色</div>
+              <Swatches kind="color" value={m?.color ?? null} onPick={(c) => props.onColor("color", c)} />
+              <div className="popover-title">螢光標記</div>
+              <Swatches kind="highlight" value={m?.highlight ?? null} onPick={(c) => props.onColor("highlight", c)} />
+            </>
+          )}
+          <div className="popover-title">區塊背景</div>
+          <Swatches kind="bg" value={props.bg} onPick={props.onBlockBg} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SlashMenu(props: {
   items: typeof BLOCK_TYPES;
   active: number;
@@ -1242,6 +1658,8 @@ function BlockMenu(props: {
   current: BlockType | null;
   canIndent: boolean;
   canOutdent: boolean;
+  bg: Color | null;
+  onBg: (c: Color | null) => void;
   onClose: () => void;
   onTurn: (t: BlockType) => void;
   onIndent: (outdent: boolean) => void;
@@ -1287,6 +1705,8 @@ function BlockMenu(props: {
           {t.type === props.current && <span className="check">✓</span>}
         </button>
       ))}
+      <div className="popover-title">背景顏色</div>
+      <Swatches kind="bg" value={props.bg} onPick={props.onBg} />
       <div className="popover-sep" />
       {props.canIndent && (
         <button onClick={() => props.onIndent(false)}>

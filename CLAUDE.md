@@ -12,7 +12,7 @@ npm run tauri dev     # 完整 App：先跑 beforeDevCommand（npm run dev），
 npm run dev           # 只有前端（Vite，port 1420）；沒有 Rust 後端，invoke 會失敗
 npm run build         # tsc 型別檢查 + vite build → dist/
 npm run tauri build   # 打包安裝程式（先跑 npm run build，前端取自 ../dist）
-npm test              # Vitest：CommonMark 規格（652 例）＋編輯操作測試
+npm test              # Vitest：CommonMark 規格（652 例）＋編輯、版面、所見即所得測試
 npx vitest run src/editor/ops.test.ts -t "Enter"   # 單一檔案／依名稱篩選
 ```
 
@@ -27,5 +27,5 @@ Rust 在 `src-tauri/` 下執行 `cargo check`／`cargo test`。`npm run tauri de
 - **進入點**：`src-tauri/src/main.rs` 只呼叫 `banyan_lib::run()`；程式邏輯放在 lib crate（`banyan_lib`，名稱加 `_lib` 是為了避開 Windows 上 bin／lib 同名的問題）。`main.rs` 的 `windows_subsystem` 屬性讓 release 版不開主控台視窗，不要刪。
 - **權限**：外掛功能（目前只有 `tauri-plugin-opener`）要在 `src-tauri/capabilities/default.json` 加權限，套用到 label 為 `main` 的視窗。
 - **設定**：`src-tauri/tauri.conf.json` 管視窗、識別碼（`com.banyan`）、打包圖示（`src-tauri/icons/`）；CSP 目前關閉（`null`）。Vite 固定用 port 1420（`strictPort`），不要改成別的 port，除非同時改 `tauri.conf.json` 的 `devUrl`。
-- **編輯器（`src/editor/`）**：文件本體永遠是 Markdown 字串，區塊只是視圖。`markdown.ts` 用 markdown-it（`commonmark` 預設）解析，把 token 切成區塊（`Unit`，記住行範圍 `[start, end)`；頂層清單每個項目一個區塊），並把各區塊 HTML 組回整份文件——測試要求它與規格逐字相同，改渲染規則後要跑 `npm test`。`ops.ts` 是純函式的編輯操作（以行為單位，只動必要的行，其他原始碼保持不變）；`Editor.tsx` 只負責事件與畫面。縮排與多欄存成單行 HTML 區塊標籤（`<div class="columns|column|indent">`，前後空行），`markdown.ts` 把它們組成樹（`ParsedDoc.tree`；`blocks` 是不含標籤的可見區塊，導覽用它）；`layout.ts` 的操作用 `LineBuf` 追蹤行號，改完一律呼叫 `normalize()` 清掉空容器與單欄。不要改成「解析→文件模型→重新序列化」，那會改掉使用者的原始碼。
+- **編輯器（`src/editor/`）**：文件本體永遠是 Markdown 字串，區塊只是視圖。`markdown.ts` 用 markdown-it（`commonmark` 預設）解析，把 token 切成區塊（`Unit`，記住行範圍 `[start, end)`；頂層清單每個項目一個區塊），並把各區塊 HTML 組回整份文件——測試要求它與規格逐字相同，改渲染規則後要跑 `npm test`。`ops.ts` 是純函式的編輯操作（以行為單位，只動必要的行，其他原始碼保持不變）；`Editor.tsx` 只負責事件與畫面。縮排與多欄存成單行 HTML 區塊標籤（`<div class="columns|column|indent">`，前後空行），`markdown.ts` 把它們組成樹（`ParsedDoc.tree`；`blocks` 是不含標籤的可見區塊，導覽用它）；`layout.ts` 的操作用 `LineBuf` 追蹤行號，改完一律呼叫 `normalize()` 清掉空容器與單欄。編輯是所見即所得：`RichBlock.tsx` 的 contenteditable 顯示渲染後的行內內容，`wysiwyg.ts` 負責區塊語法拆合、DOM→Markdown（含跳脫）與選取位置對照；編輯器只透過 `Surface` 介面讀寫文字與選取（位置一律是區塊原始碼中的位置），原始碼文字框（程式碼、複雜區塊）也實作同一介面。打字時不要重畫 contenteditable，否則游標與輸入法會亂。DOM 相關測試用 `// @vitest-environment jsdom`。不要改成「解析→文件模型→重新序列化」，那會改掉使用者的原始碼。
 - **版本號**：同時記在 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`，改版時三處一起改。

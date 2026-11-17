@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canDrop,
   canIndent,
+  blockBg,
   blocksMarkdown,
   canOutdent,
   groupOf,
@@ -18,6 +19,8 @@ import {
   moveBlock,
   outdentBlock,
   placeBeside,
+  setBlockBg,
+  setBlocksBg,
   setColumnWidths,
 } from "./layout";
 import { parseDoc, renderMarkdown, type Unit } from "./markdown";
@@ -400,5 +403,48 @@ describe("整組多欄", () => {
     const [whole] = topLevel(doc, all(two, "A", "B"));
     expect(canDrop(doc, whole, find(two, "C"))).toBe(false);
     expect(canDrop(doc, whole, find(two, "Y"))).toBe(true);
+  });
+});
+
+describe("區塊背景顏色", () => {
+  it("包一層 <div class=\"bg-…\">，再設定就換色，拿掉就還原", () => {
+    const src = "a\n\nb\n";
+    const r = setBlockBg(src, find(src, "b"), "blue");
+    expect(r.source).toBe('a\n\n<div class="bg-blue">\n\nb\n\n</div>\n');
+    expect(r.source.split("\n")[r.start]).toBe("b");
+    expect(renderMarkdown(r.source)).toBe('<p>a</p>\n<div class="bg-blue">\n<p>b</p>\n</div>\n');
+    const doc = parseDoc(r.source);
+    expect(blockBg(doc, find(r.source, "b"))).toBe("blue");
+    const g = setBlockBg(r.source, find(r.source, "b"), "green");
+    expect(g.source).toBe('a\n\n<div class="bg-green">\n\nb\n\n</div>\n');
+    expect(setBlockBg(g.source, find(g.source, "b"), null).source).toBe(src);
+  });
+
+  it("清單項目套用到整份清單", () => {
+    const src = "- a\n- b\n";
+    expect(setBlockBg(src, find(src, "- b"), "red").source).toBe('<div class="bg-red">\n\n- a\n- b\n\n</div>\n');
+  });
+
+  it("搬移有背景色的區塊時背景色跟著走", () => {
+    const src = 'x\n\n<div class="bg-blue">\n\nb\n\n</div>\n\ny\n';
+    expect(moveBlock(src, find(src, "b"), find(src, "y"), "after")).toBe(
+      'x\n\ny\n\n<div class="bg-blue">\n\nb\n\n</div>\n',
+    );
+  });
+
+  it("有背景色的區塊可以有子區塊，也可以縮排", () => {
+    const src = '<div class="bg-blue">\n\nP\n\n</div>\n\nc\n';
+    const r = indentBlock(src, find(src, "c"))!;
+    expect(r.source).toBe('<div class="bg-blue">\n\nP\n\n</div>\n\n<div class="indent">\n\nc\n\n</div>\n');
+    expect(groupOf(parseDoc(r.source), find(r.source, "P"))).toEqual({ start: 0, end: 11 });
+    const r2 = indentBlock(src.replace("c\n", "Q\n\nc\n"), find(src.replace("c\n", "Q\n\nc\n"), "Q"));
+    expect(r2?.source).toContain('<div class="indent">\n\nQ\n\n</div>');
+  });
+
+  it("多個區塊一起設定背景色", () => {
+    const src = "a\n\nb\n";
+    const r = setBlocksBg(src, parseDoc(src).blocks, "yellow");
+    expect(r.source).toBe('<div class="bg-yellow">\n\na\n\n</div>\n\n<div class="bg-yellow">\n\nb\n\n</div>\n');
+    expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["a", "b"]);
   });
 });
