@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDoc } from "./markdown";
+import { parseDoc, renderMarkdown } from "./markdown";
 import {
   activate,
   applyText,
@@ -52,23 +52,49 @@ describe("編輯", () => {
     expect(s.region).toEqual({ start: 0, end: 5 });
   });
 
-  it("離開空的編輯區時把它刪掉", () => {
+  it("離開空的編輯區時留下空白區塊（存成 &nbsp;）", () => {
     const s = insertEmptyAfter(st("a\n\nb\n"), 1);
     expect(s.source).toBe("a\n\n\n\nb\n");
-    expect(deactivate(s).state.source).toBe("a\n\nb\n");
+    const left = deactivate(s).state.source;
+    expect(left).toBe("a\n\n&nbsp;\n\nb\n");
+    expect(renderMarkdown(left)).toBe("<p>a</p>\n<p> </p>\n<p>b</p>\n");
+    expect(units(left).length).toBe(3);
+    expect(deactivate(s).map(2)).toBe(2);
   });
 
-  it("在文件結尾新增後離開不留多餘空行", () => {
-    const s = insertEmptyAfter(st("a\n"), 1);
-    expect(s.source).toBe("a\n\n\n");
-    expect(deactivate(s).state.source).toBe("a\n");
-  });
-
-  it("切換編輯區時，刪除空區塊後目標行號會位移", () => {
-    const s = insertEmptyAfter(st("a\n\nb\n"), 1); // 空區塊在第 2 行，b 移到第 4 行
-    const t = activate(s, { start: 4, end: 5 }, 0);
-    expect(t.source).toBe("a\n\nb\n");
+  it("再次編輯空白區塊時，編輯框是空的", () => {
+    const t = activate(st("a\n\n&nbsp;\n\nb\n"), { start: 2, end: 3 }, "end");
+    expect(t.source).toBe("a\n\n\n\nb\n");
     expect(t.region).toEqual({ start: 2, end: 3 });
+    expect(t.caret).toBe(0);
+  });
+
+  it("文件只剩一個空白區塊時離開就清空", () => {
+    const s = activate(st(""), { start: 0, end: 1 }, 0);
+    expect(deactivate(s).state.source).toBe("");
+  });
+
+  it("空白區塊用 Backspace 刪除", () => {
+    const s = activate(st("a\n\n&nbsp;\n"), { start: 2, end: 3 }, 0);
+    const t = backspaceAtStart(s)!;
+    expect(t.source).toBe("a\n");
+  });
+
+  it("連按兩次 Enter：留下的空白區塊也保留", () => {
+    const s1 = splitBlock(st("a\n", 0, 1, 1), 1)!;
+    const s2 = splitBlock(s1, 0)!;
+    expect(deactivate(s2).state.source).toBe("a\n\n&nbsp;\n\n&nbsp;\n");
+  });
+
+  it("在段落開頭按 Enter：上方多一個空白區塊", () => {
+    const s = splitBlock(st("a\n", 0, 1, 0), 0)!;
+    expect(s.source).toBe("&nbsp;\n\na\n");
+    expect(s.region).toEqual({ start: 2, end: 3 });
+  });
+
+  it("空的清單項目保留", () => {
+    const s = st("- a\n- \n", 1, 2);
+    expect(deactivate(s).state.source).toBe("- a\n- \n");
   });
 });
 

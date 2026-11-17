@@ -69,9 +69,15 @@ function offsetOfLine(lines: string[], line: number) {
   return n;
 }
 
-/** 空白、或只有清單標記（如 Enter 產生的 `- `）的區塊，離開時會被刪掉。 */
-export function isEmptyBlock(text: string): boolean {
-  return /^\s*$/.test(text) || /^[ \t]*([-+*]|\d{1,9}[.)])[ \t]*$/.test(text);
+/**
+ * 空白區塊的存法。CommonMark 沒有空段落，用只有不換行空格的段落代替
+ * （渲染成 `<p>&nbsp;</p>`，在任何 Markdown 軟體裡都是一個空行）。
+ * 編輯時把它換成真正的空行，離開時再換回來。
+ */
+export const EMPTY_BLOCK = "&nbsp;";
+
+export function isEmptyText(text: string): boolean {
+  return /^\s*$/.test(text);
 }
 
 // ─── 進入／離開編輯 ───────────────────────────────────────────────
@@ -80,15 +86,24 @@ export function isEmptyBlock(text: string): boolean {
 export type LineMap = (line: number) => number;
 const identity: LineMap = (l) => l;
 
-/** 離開編輯區；若編輯區是空的就把它刪掉（連同因此變空的欄位、縮排）。回傳行號對照。 */
+/**
+ * 離開編輯區。空白的編輯區留下來成為空白區塊（存成 `&nbsp;`）；
+ * 只有整份文件只剩這個空白區塊時才清掉。回傳行號對照。
+ */
 export function deactivate(state: EditorState): { state: EditorState; map: LineMap } {
   const { region } = state;
   const none = { state: { ...state, region: null }, map: identity };
   if (!region) return none;
   const buf = new LineBuf(state.source);
-  if (!isEmptyBlock(regionText(buf.lines, region))) return none;
-  buf.splice(region.start, region.end - region.start);
-  collapseBuf(buf, region.start);
+  if (!isEmptyText(regionText(buf.lines, region))) return none;
+  const others = buf.lines.some((l, i) => (i < region.start || i >= region.end) && !isEmptyText(l));
+  if (others) {
+    // 原地改寫第一行（保留行號對照），多出來的空行刪掉
+    buf.lines[region.start] = EMPTY_BLOCK;
+    if (region.end - region.start > 1) buf.splice(region.start + 1, region.end - region.start - 1);
+  } else {
+    buf.splice(0, buf.lines.length);
+  }
   normalize(buf);
   return { state: { source: buf.source, region: null, caret: 0 }, map: (l) => buf.map(l) };
 }
@@ -106,6 +121,11 @@ export function activate(state: EditorState, target: Region, caret: number | "en
     start: Math.min(t.start, lines.length - 1),
     end: Math.min(t.end, lines.length),
   });
+  // 空白區塊：編輯時是真正的空行
+  if (t.end - t.start === 1 && lines[t.start].trim() === EMPTY_BLOCK) {
+    lines[t.start] = "";
+    return { source: lines.join("\n"), region: t, caret: 0 };
+  }
   const text = regionText(lines, t);
   return { source: s.source, region: t, caret: caret === "end" ? text.length : Math.min(caret, text.length) };
 }
@@ -208,7 +228,8 @@ export function splitBlock(state: EditorState, caret: number): EditorState | nul
     return { source: join(lines), region: { start: line, end: line + newText.split("\n").length }, caret: next.length };
   }
 
-  const beforeLines = before.replace(/[ \t]+$/, "").split("\n");
+  // 留在上面的部分是空的：成為空白區塊
+  const beforeLines = isEmptyText(before) ? [EMPTY_BLOCK] : before.replace(/[ \t]+$/, "").split("\n");
   lines.splice(region.start, region.end - region.start, ...beforeLines);
   const afterLines = after.replace(/^[ \t]+/, "").split("\n");
   const line = insertBlock(lines, region.start + beforeLines.length, afterLines, false);

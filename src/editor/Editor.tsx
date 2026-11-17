@@ -15,11 +15,20 @@ import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
 import { CopyIcon, GripIcon, IndentIcon, LinkIcon, OutdentIcon, PlusIcon, TrashIcon } from "./icons";
 import { caretFromPoint } from "./caret";
 import {
+  blocksMarkdown,
   canDrop,
   canIndent,
   canOutdent,
+  deleteBlocks,
+  duplicateBlocks,
   groupOf,
   indentBlock,
+  indentBlocks,
+  moveBlocks,
+  pasteAfter,
+  placeBesideMany,
+  reselect,
+  topLevel,
   outdentBlock,
   placeBeside,
   setColumnWidths,
@@ -28,12 +37,11 @@ import {
 } from "./layout";
 import { parseDoc, type Container, type ParsedDoc, type TreeNode, type Unit } from "./markdown";
 import {
+  EMPTY_BLOCK,
   activate,
   applyText,
   backspaceAtStart,
   deactivate,
-  deleteUnit,
-  duplicateUnit,
   insertEmptyAfter,
   moveUnit,
   nextUnit,
@@ -80,6 +88,8 @@ interface Slash {
 /** 拖曳中的區塊。用指標事件自己做，不用 HTML5 拖放（Tauri 在 Windows 上會攔截它）。 */
 interface Drag {
   from: Unit;
+  /** 一起拖曳的區塊（多選時不只一個） */
+  many: Unit[];
   drop: Drop | null;
   x: number;
   y: number;
@@ -115,6 +125,20 @@ export function Editor({ value, onChange }: EditorProps) {
   stateRef.current = state;
   const history = useRef<History>({ past: [], future: [], last: 0 });
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // 區塊選取：選取的區塊（起始行）、Shift 延伸的起點與終點、框選的矩形
+  const [selected, setSelected] = useState<number[]>([]);
+  const selRef = useRef<number[]>([]);
+  const anchorRef = useRef<number | null>(null);
+  const focusRef = useRef<number | null>(null);
+  const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  const select = useCallback((starts: number[], anchor?: number | null, focus?: number | null) => {
+    const sorted = [...new Set(starts)].sort((a, b) => a - b);
+    selRef.current = sorted;
+    setSelected(sorted);
+    if (anchor !== undefined) anchorRef.current = anchor;
+    if (focus !== undefined) focusRef.current = focus;
+  }, []);
 
   const doc = useMemo(() => parseDoc(state.source), [state.source]);
 
@@ -136,6 +160,11 @@ export function Editor({ value, onChange }: EditorProps) {
     stateRef.current = next;
     setStateRaw(next);
     if (changed) onChangeRef.current(next.source);
+    // 內容改了或開始編輯，選取就失效（選取操作會在之後重新設定）
+    if ((changed || next.region) && selRef.current.length) {
+      selRef.current = [];
+      setSelected([]);
+    }
   }, []);
 
   /** 更新狀態並記錄復原點；連續打字會合併成一筆。 */
@@ -273,9 +302,20 @@ export function Editor({ value, onChange }: EditorProps) {
       e.preventDefault();
       if (slash) setSlash(null);
       else {
-        commit(deactivate(s).state);
-        ta.blur();
+        // 離開編輯並選取這個區塊（再按方向鍵可以移動選取、Delete 刪除…）
+        const start = s.region.start;
+        const map = leaveEditing();
+        const b = parseDoc(stateRef.current.source).blocks.find((u) => u.start === map(start));
+        if (b) select([b.start], b.start, b.start);
       }
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && a === 0 && b === text.length) {
+      // 文字已經全選時再按 Ctrl+A：選取所有區塊
+      e.preventDefault();
+      leaveEditing();
+      selectAll();
       return;
     }
 
@@ -355,19 +395,100 @@ export function Editor({ value, onChange }: EditorProps) {
 
   // ─── 區塊事件 ──────────────────────────────────────────────
 
+  /** 離開編輯（空白區塊會變成 &nbsp;），回傳行號對照。 */
+  const leaveEditing = () => {
+    const s = stateRef.current;
+    setSlash(null);
+    if (!s.region) return (l: number) => l;
+    const d = deactivate(s);
+    commit(d.state);
+    taRef.current?.blur();
+    return d.map;
+  };
+
+  const blocksNow = () => parseDoc(stateRef.current.source).blocks;
+
+  /** 兩個區塊之間（含）的所有區塊。 */
+  const rangeBetween = (a: number, b: number): number[] => {
+    const blocks = blocksNow();
+    const i = blocks.findIndex((u) => u.start === a);
+    const j = blocks.findIndex((u) => u.start === b);
+    if (i < 0 || j < 0) return [];
+    return blocks.slice(Math.min(i, j), Math.max(i, j) + 1).map((u) => u.start);
+  };
+
+  const selectAll = () => {
+    const blocks = blocksNow();
+    if (!blocks.length) return;
+    select(
+      blocks.map((u) => u.start),
+      blocks[0].start,
+      blocks[blocks.length - 1].start,
+    );
+  };
+
+  /** Shift+點擊：從起點延伸選取到這個區塊。 */
+  const extendTo = (unit: Unit) => {
+    const s = stateRef.current;
+    const editing = s.region?.start ?? null;
+    const map = leaveEditing();
+    const target = map(unit.start);
+    const anchor = anchorRef.current ?? (editing !== null ? map(editing) : target);
+    const valid = blocksNow().some((u) => u.start === anchor) ? anchor : target;
+    select(rangeBetween(valid, target), valid, target);
+  };
+
+  /** Ctrl+點擊：加入或移出選取。 */
+  const toggle = (unit: Unit) => {
+    const map = leaveEditing();
+    const start = map(unit.start);
+    const cur = selRef.current;
+    select(cur.includes(start) ? cur.filter((x) => x !== start) : [...cur, start], start, start);
+  };
+
   const onUnitMouseDown = (e: MouseEvent<HTMLDivElement>, unit: Unit) => {
     if (e.button !== 0) return;
     const link = (e.target as HTMLElement).closest("a");
     e.preventDefault();
+    setMenu(null);
     if (link && (e.ctrlKey || e.metaKey)) {
       const href = link.getAttribute("href");
       if (href) void openLink(href);
       return;
     }
+    if (e.shiftKey) return extendTo(unit);
+    if (e.ctrlKey || e.metaKey) return toggle(unit);
+
+    // 一般按下：放開時開始編輯；按著拖到別的區塊則改成選取一段區塊
     const src = regionText(doc.lines, unit);
     const caret = caretFromPoint(e.currentTarget, e.clientX, e.clientY, src);
-    setMenu(null);
-    go(unit, caret);
+    let origin = unit.start;
+    let ranging = false;
+    const move = (ev: PointerEvent) => {
+      const row = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest<HTMLElement>(
+        ".row[data-start]",
+      );
+      if (!row) return;
+      const over = Number(row.dataset.start);
+      if (!ranging) {
+        if (over === origin) return;
+        ranging = true;
+        origin = leaveEditing()(origin);
+        window.getSelection()?.removeAllRanges();
+      }
+      select(rangeBetween(origin, over), origin, over);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (!ranging) {
+        select([]);
+        anchorRef.current = null;
+        go(unit, caret);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   };
 
   const addAfter = (unit: Unit | null) => {
@@ -389,13 +510,18 @@ export function Editor({ value, onChange }: EditorProps) {
     setSlash({ pos: 0, index: 0 });
   };
 
-  const onTailMouseDown = (e: MouseEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
+  /** 點文件下方的空白處：最後一個區塊是空白區塊就編輯它，否則在最後新增一個。 */
+  const onTailClick = () => {
     const s = stateRef.current;
-    const last = doc.units[doc.units.length - 1];
-    if (s.region && (!last || s.region.start >= last.end) && /^\s*$/.test(editText)) {
+    const cur = parseDoc(s.source);
+    const last = cur.units[cur.units.length - 1];
+    if (s.region && (!last || s.region.start >= last.end) && /^\s*$/.test(regionText(cur.lines, s.region))) {
       taRef.current?.focus();
+      return;
+    }
+    const lastBlock = cur.blocks[cur.blocks.length - 1];
+    if (lastBlock && lastBlock.start === last?.start && cur.lines[lastBlock.start].trim() === EMPTY_BLOCK) {
+      commit(activate(s, lastBlock, 0));
       return;
     }
     commit(insertEmptyAfter(s, last ? last.end : 0));
@@ -410,14 +536,17 @@ export function Editor({ value, onChange }: EditorProps) {
   };
 
   /** 指標位置對應到放置的位置：最近的區塊，以及上、下、左、右。 */
-  const dropAt = (x: number, y: number, from: Unit): Drop | null => {
+  const dropAt = (x: number, y: number, from: Unit, many: Unit[]): Drop | null => {
     const fromStart = from.start;
     const cur = parseDoc(stateRef.current.source);
+    const moving = new Set(many.map((u) => u.start));
     const rowsEl = [...document.querySelectorAll<HTMLElement>(".md-editor .row[data-start]")].filter((el) => {
       const start = Number(el.dataset.start);
+      if (start === fromStart) return true;
+      if (moving.has(start)) return false;
       const t = cur.blocks.find((u) => u.start === start);
       // 不能放進自己的子區塊；有子區塊的區塊不能放進縮排
-      return start === fromStart || (t ? canDrop(cur, from, t) : false);
+      return t ? many.every((m) => canDrop(cur, m, t)) : false;
     });
     let best: HTMLElement | null = null;
     let bestD = Infinity;
@@ -446,6 +575,8 @@ export function Editor({ value, onChange }: EditorProps) {
   const onHandlePointerDown = (e: ReactPointerEvent<HTMLButtonElement>, unit: Unit) => {
     if (e.button !== 0) return;
     e.preventDefault(); // 不讓編輯中的 textarea 失焦，也不選取文字
+    if (e.shiftKey) return extendTo(unit);
+    if (e.ctrlKey || e.metaKey) return toggle(unit);
     const handle = e.currentTarget;
     const startX = e.clientX;
     const startY = e.clientY;
@@ -455,33 +586,40 @@ export function Editor({ value, onChange }: EditorProps) {
       if (!current) {
         if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
         // 開始拖曳：先關閉編輯區，並找出行號位移後對應的區塊
-        let s = stateRef.current;
-        let from: Unit | undefined = unit;
-        if (s.region) {
-          const d = deactivate(s);
-          s = d.state;
-          from = parseDoc(s.source).blocks.find((u) => u.start === d.map(unit.start));
-          commit(s);
-        }
+        const map = leaveEditing();
+        const s = stateRef.current;
+        const cur = parseDoc(s.source);
+        const from = cur.blocks.find((u) => u.start === map(unit.start));
         if (!from) return cleanup();
         setMenu(null);
-        const kids = groupOf(parseDoc(s.source), from).end > from.end;
-        const label = regionText(s.source.split("\n"), from).slice(0, 80) + (kids ? "  ＋子區塊" : "");
-        current = { from, drop: null, x: 0, y: 0, label };
+        // 拖曳的區塊在多選裡：整組選取一起搬
+        const sel = selRef.current;
+        const many = sel.length > 1 && sel.includes(from.start) ? topLevel(cur, sel.map((st) => ({ start: st, end: st + 1 }))) : [from];
+        if (many.length === 1) select([]);
+        const kids = groupOf(cur, from).end > from.end;
+        const label =
+          many.length > 1
+            ? `${many.length} 個區塊`
+            : regionText(s.source.split("\n"), from).slice(0, 80) + (kids ? "  ＋子區塊" : "");
+        current = { from, many, drop: null, x: 0, y: 0, label };
       }
-      current = { ...current, x: ev.clientX, y: ev.clientY, drop: dropAt(ev.clientX, ev.clientY, current.from) };
+      current = { ...current, x: ev.clientX, y: ev.clientY, drop: dropAt(ev.clientX, ev.clientY, current.from, current.many) };
       setDrag(current);
     };
 
     const up = () => {
       cleanup();
       if (!current) {
-        // 沒有移動：當作點擊，開啟區塊選單
+        // 沒有移動：當作點擊，選取這個區塊（已在多選裡就保留多選）並開啟區塊選單
+        const map = leaveEditing();
+        const start = map(unit.start);
+        if (!selRef.current.includes(start)) select([start], start, start);
         const r = handle.getBoundingClientRect();
-        setMenu({ unit, x: r.left, y: r.bottom + 4 });
+        const u = blocksNow().find((b) => b.start === start);
+        if (u) setMenu({ unit: u, x: r.left, y: r.bottom + 4 });
         return;
       }
-      const { from, drop } = current;
+      const { from, many, drop } = current;
       setDrag(null);
       if (!drop || drop.start === from.start) return;
       const source = stateRef.current.source;
@@ -489,6 +627,18 @@ export function Editor({ value, onChange }: EditorProps) {
       const x = blocks.find((u) => u.start === from.start);
       const target = blocks.find((u) => u.start === drop.start);
       if (!x || !target) return;
+      if (many.length > 1) {
+        const texts = many.map((m) => source.split("\n").slice(m.start, m.end).join("\n"));
+        const side = drop.pos === "left" || drop.pos === "right";
+        const res = side
+          ? { source: placeBesideMany(source, many, target, drop.pos as "left" | "right"), starts: [] as number[] }
+          : moveBlocks(source, many, target, drop.pos as "before" | "after");
+        if (res.source === source) return;
+        commit({ source: res.source, region: null, caret: 0 });
+        const starts = side ? reselect(res.source, texts) : res.starts;
+        select(starts, starts[0] ?? null, starts[starts.length - 1] ?? null);
+        return;
+      }
       const next =
         drop.pos === "left" || drop.pos === "right"
           ? placeBeside(source, x, target, drop.pos)
@@ -563,6 +713,198 @@ export function Editor({ value, onChange }: EditorProps) {
     return true;
   };
 
+  // ─── 區塊選取：鍵盤、剪貼簿、框選 ───────────────────────────
+
+  /** 目前選取的區塊（拿掉跟著父區塊的子區塊）。 */
+  const selectedBlocks = () => {
+    const cur = parseDoc(stateRef.current.source);
+    return topLevel(cur, selRef.current.map((st) => ({ start: st, end: st + 1 })));
+  };
+
+  const applyMany = (res: { source: string; starts: number[] }) => {
+    if (res.source === stateRef.current.source) return;
+    commit({ source: res.source, region: null, caret: 0 });
+    select(res.starts, res.starts[0] ?? null, res.starts[res.starts.length - 1] ?? null);
+  };
+
+  const deleteSelected = () => {
+    const xs = selectedBlocks();
+    if (!xs.length) return;
+    const source = stateRef.current.source;
+    const blocks = parseDoc(source).blocks;
+    const next = deleteBlocks(source, xs);
+    commit({ source: next, region: null, caret: 0 });
+    // 刪除後選取原本位置附近的區塊
+    const firstIdx = blocks.findIndex((b) => b.start === xs[0].start);
+    const after = parseDoc(next).blocks;
+    const keep = after[Math.min(firstIdx, after.length - 1)] ?? null;
+    select(keep ? [keep.start] : [], keep?.start ?? null, keep?.start ?? null);
+  };
+
+  const turnSelectedInto = (type: BlockType) => {
+    const xs = selectedBlocks();
+    let source = stateRef.current.source;
+    const texts: string[] = [];
+    for (const x of [...xs].reverse()) {
+      const lines = source.split("\n");
+      const t = turnInto(lines.slice(x.start, x.end).join("\n"), type);
+      texts.unshift(t.text);
+      lines.splice(x.start, x.end - x.start, ...t.text.split("\n"));
+      source = lines.join("\n");
+    }
+    const starts = reselect(source, texts);
+    applyMany({ source, starts });
+  };
+
+  const selectionKeys = useRef<(e: globalThis.KeyboardEvent) => void>(() => {});
+  selectionKeys.current = (e) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.("textarea, input, .md-source-panel")) return;
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      selectAll();
+      return;
+    }
+    if (!selRef.current.length || e.isComposing) return;
+    const blocks = blocksNow();
+    const focus = focusRef.current ?? selRef.current[selRef.current.length - 1];
+    const fi = blocks.findIndex((u) => u.start === focus);
+    switch (e.key) {
+      case "Escape":
+        e.preventDefault();
+        select([], null, null);
+        return;
+      case "Delete":
+      case "Backspace":
+        e.preventDefault();
+        deleteSelected();
+        return;
+      case "Enter": {
+        e.preventDefault();
+        const first = blocks.find((u) => u.start === selRef.current[0]);
+        select([], null, null);
+        if (first) go(first, "end");
+        return;
+      }
+      case "Tab":
+        e.preventDefault();
+        applyMany(indentBlocks(stateRef.current.source, selectedBlocks(), e.shiftKey));
+        return;
+      case "ArrowUp":
+      case "ArrowDown": {
+        e.preventDefault();
+        const ni = Math.min(Math.max(fi + (e.key === "ArrowDown" ? 1 : -1), 0), blocks.length - 1);
+        const next = blocks[ni];
+        if (!next) return;
+        if (e.shiftKey) {
+          const anchor = anchorRef.current ?? focus;
+          select(rangeBetween(anchor, next.start), anchor, next.start);
+        } else {
+          select([next.start], next.start, next.start);
+        }
+        next && document.querySelector(`.row[data-start="${next.start}"]`)?.scrollIntoView({ block: "nearest" });
+        return;
+      }
+    }
+    if (ctrl && e.key.toLowerCase() === "d") {
+      e.preventDefault();
+      applyMany(duplicateBlocks(stateRef.current.source, selectedBlocks()));
+    }
+  };
+
+  const clipboard = useRef<(e: ClipboardEvent) => void>(() => {});
+  clipboard.current = (e) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.("textarea, input, .md-source-panel") || !selRef.current.length) return;
+    const xs = selectedBlocks();
+    if (e.type === "paste") {
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (!text) return;
+      e.preventDefault();
+      applyMany(pasteAfter(stateRef.current.source, xs[xs.length - 1] ?? null, text));
+      return;
+    }
+    e.preventDefault();
+    e.clipboardData?.setData("text/plain", blocksMarkdown(stateRef.current.source, xs) + "\n");
+    if (e.type === "cut") deleteSelected();
+  };
+
+  /** 在頁面空白處按下拖曳：框選區塊；沒有拖曳就是點一下（取消選取，或在文件下方新增區塊）。 */
+  const boxDown = useRef<(e: PointerEvent) => void>(() => {});
+  boxDown.current = (e) => {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    if (!t.closest?.(".page, .md-editor")) return;
+    if (t.closest(".row .content, .gutter, .popover, .grip, textarea, .md-source-panel")) return;
+    e.preventDefault();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const onTail = !!t.closest(".tail");
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      if (!moved) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
+        moved = true;
+        leaveEditing();
+        setMenu(null);
+      }
+      const left = Math.min(x0, ev.clientX);
+      const top = Math.min(y0, ev.clientY);
+      const width = Math.abs(ev.clientX - x0);
+      const height = Math.abs(ev.clientY - y0);
+      setBox({ left, top, width, height });
+      const hits: number[] = [];
+      document.querySelectorAll<HTMLElement>(".md-editor .row[data-start]").forEach((row) => {
+        const r = row.querySelector(".content")!.getBoundingClientRect();
+        if (r.right >= left && r.left <= left + width && r.bottom >= top && r.top <= top + height) {
+          hits.push(Number(row.dataset.start));
+        }
+      });
+      select(hits, hits[0] ?? null, hits[hits.length - 1] ?? null);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setBox(null);
+      if (moved) return;
+      setMenu(null);
+      select([], null, null);
+      if (onTail) onTailClick();
+      else leaveEditing();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  useEffect(() => {
+    const key = (e: globalThis.KeyboardEvent) => selectionKeys.current(e);
+    const clip = (e: ClipboardEvent) => clipboard.current(e);
+    const down = (e: PointerEvent) => boxDown.current(e);
+    window.addEventListener("keydown", key);
+    document.addEventListener("copy", clip);
+    document.addEventListener("cut", clip);
+    document.addEventListener("paste", clip);
+    document.addEventListener("pointerdown", down);
+    return () => {
+      window.removeEventListener("keydown", key);
+      document.removeEventListener("copy", clip);
+      document.removeEventListener("cut", clip);
+      document.removeEventListener("paste", clip);
+      document.removeEventListener("pointerdown", down);
+    };
+  }, []);
+
+  // 畫面上要標示為選取的區塊：選取的區塊加上它們的子區塊
+  const shownSelected = useMemo(() => {
+    const set = new Set<number>();
+    for (const st of selected) {
+      const g = groupOf(doc, { start: st, end: st + 1 });
+      for (const b of doc.blocks) if (b.start >= g.start && b.start < g.end) set.add(b.start);
+    }
+    return set;
+  }, [selected, doc]);
+
   // ─── 畫面 ──────────────────────────────────────────────────
 
   const editorRow = region ? (
@@ -617,7 +959,8 @@ export function Editor({ value, onChange }: EditorProps) {
             unit={u}
             doc={doc}
             drop={drag?.drop?.start === u.start ? drag.drop.pos : null}
-            dragging={drag?.from.start === u.start}
+            dragging={!!drag?.many.some((m) => m.start === u.start)}
+            selected={shownSelected.has(u.start)}
             onMouseDown={(e) => onUnitMouseDown(e, u)}
             onAdd={() => addAfter(u)}
             onHandlePointerDown={(e) => onHandlePointerDown(e, u)}
@@ -655,7 +998,8 @@ export function Editor({ value, onChange }: EditorProps) {
       }
       const i = nodes.indexOf(n);
       const owner = nodes[i - 1];
-      const dragged = n.kind === "indent" && owner?.type === "leaf" && drag?.from.start === owner.unit.start;
+      const dragged =
+        n.kind === "indent" && owner?.type === "leaf" && !!drag?.many.some((m) => m.start === owner.unit.start);
       return (
         <div
           key={`${n.kind}:${n.open.start}`}
@@ -671,40 +1015,51 @@ export function Editor({ value, onChange }: EditorProps) {
   return (
     <div className={`md-editor${drag ? " is-dragging" : ""}`}>
       {renderNodes(view.tree)}
-      <div className="tail" onMouseDown={onTailMouseDown}>
+      <div className="tail">
         {doc.units.length === 0 && !region && <span className="empty-hint">點這裡開始寫作…</span>}
       </div>
+      {box && <div className="select-box" style={box} />}
       {drag && (
         <div className="drag-ghost" style={{ left: drag.x + 12, top: drag.y + 8 }}>
           {drag.label || "（空白）"}
         </div>
       )}
-      {menu && menuDoc && (
-        <BlockMenu
-          x={menu.x}
-          y={menu.y}
-          current={blockTypeOf(menu.unit)}
-          canIndent={menu.unit.kind !== "item" && canIndent(menuDoc, menu.unit)}
-          canOutdent={menu.unit.kind !== "item" && canOutdent(menuDoc, menu.unit)}
-          onClose={() => setMenu(null)}
-          onTurn={(t) => turnUnitInto(menu.unit, t)}
-          onIndent={(outdent) => {
-            setMenu(null);
-            shiftIndent(menu.unit, outdent, null);
-          }}
-          onDuplicate={() => {
-            setMenu(null);
-            // 連同子區塊一起複製
-            const g = groupOf(menuDoc, menu.unit);
-            commit({ source: duplicateUnit(state.source, { ...menu.unit, end: g.end }), region: null, caret: 0 });
-          }}
-          onDelete={() => {
-            setMenu(null);
-            // 連同子區塊一起刪除
-            commit({ source: deleteUnit(state.source, groupOf(menuDoc, menu.unit)), region: null, caret: 0 });
-          }}
-        />
-      )}
+      {menu && menuDoc && (() => {
+        const many = selected.length > 1 && selected.includes(menu.unit.start);
+        const targets = many ? topLevel(menuDoc, selected.map((st) => ({ start: st, end: st + 1 }))) : [menu.unit];
+        const noItems = targets.every((t) => t.kind !== "item");
+        return (
+          <BlockMenu
+            x={menu.x}
+            y={menu.y}
+            count={targets.length}
+            current={many ? null : blockTypeOf(menu.unit)}
+            canIndent={noItems && targets.some((t) => canIndent(menuDoc, t))}
+            canOutdent={noItems && targets.some((t) => canOutdent(menuDoc, t))}
+            onClose={() => setMenu(null)}
+            onTurn={(t) => {
+              setMenu(null);
+              if (many) turnSelectedInto(t);
+              else turnUnitInto(menu.unit, t);
+            }}
+            onIndent={(outdent) => {
+              setMenu(null);
+              applyMany(indentBlocks(state.source, targets, outdent));
+            }}
+            onDuplicate={() => {
+              setMenu(null);
+              // 連同子區塊一起複製
+              applyMany(duplicateBlocks(state.source, targets));
+            }}
+            onDelete={() => {
+              setMenu(null);
+              // 連同子區塊一起刪除
+              select(targets.map((t) => t.start));
+              deleteSelected();
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -716,12 +1071,13 @@ interface UnitRowProps {
   doc: ParsedDoc;
   drop: DropPos | null;
   dragging: boolean;
+  selected: boolean;
   onMouseDown: (e: MouseEvent<HTMLDivElement>) => void;
   onAdd: () => void;
   onHandlePointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => void;
 }
 
-function UnitRow({ unit, doc, drop, dragging, ...on }: UnitRowProps) {
+function UnitRow({ unit, doc, drop, dragging, selected, ...on }: UnitRowProps) {
   let body: ReactNode;
   const html = { __html: clean(unit.html) };
   if (unit.kind === "item" && unit.list) {
@@ -746,7 +1102,7 @@ function UnitRow({ unit, doc, drop, dragging, ...on }: UnitRowProps) {
   }
   return (
     <div
-      className={`row kind-${unit.kind}${isTitle(unit, doc) ? " is-title" : ""}${dragging ? " dragging" : ""}`}
+      className={`row kind-${unit.kind}${isTitle(unit, doc) ? " is-title" : ""}${dragging ? " dragging" : ""}${selected ? " selected" : ""}`}
       data-start={unit.start}
     >
       {drop && <div className={`drop-indicator ${drop}`} />}
@@ -842,6 +1198,7 @@ function SlashMenu(props: {
 function BlockMenu(props: {
   x: number;
   y: number;
+  count: number;
   current: BlockType | null;
   canIndent: boolean;
   canOutdent: boolean;
@@ -877,6 +1234,7 @@ function BlockMenu(props: {
   }, [props.x, props.y]);
   return (
     <div className="popover block-menu" ref={ref} style={pos} onMouseDown={(e) => e.preventDefault()}>
+      {props.count > 1 && <div className="popover-count">已選取 {props.count} 個區塊</div>}
       <div className="popover-title">轉換成</div>
       {BLOCK_TYPES.map((t) => (
         <button

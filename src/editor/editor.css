@@ -667,3 +667,31 @@ kbd {
 .indent-block.dragging {
   opacity: 0.35;
 }
+
+/* ─── 區塊選取 ─── */
+
+.row.selected .content {
+  background: var(--ed-accent-soft);
+}
+.row.selected + .row.selected .content {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.select-box {
+  position: fixed;
+  z-index: 15;
+  border: 1px solid var(--ed-accent-ring);
+  border-radius: 3px;
+  background: rgba(35, 131, 226, 0.08);
+  pointer-events: none;
+}
+.popover-count {
+  padding: 6px 10px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ed-accent);
+}
+/* 空白區塊（&nbsp;）保持一行高 */
+.content p:only-child {
+  min-height: 1.7em;
+}

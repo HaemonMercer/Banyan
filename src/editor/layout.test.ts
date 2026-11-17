@@ -2,9 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   canDrop,
   canIndent,
+  blocksMarkdown,
   canOutdent,
   groupOf,
   deleteBlock,
+  deleteBlocks,
+  duplicateBlocks,
+  indentBlocks,
+  moveBlocks,
+  pasteAfter,
+  placeBesideMany,
+  topLevel,
   indentBlock,
   moveBlock,
   outdentBlock,
@@ -92,14 +100,14 @@ describe("縮排", () => {
     expect(canIndent(parseDoc(cols), find(cols, "A"))).toBe(false);
   });
 
-  it("空白區塊按 Tab：縮排區保留著，離開時才清掉", () => {
+  it("空白區塊按 Tab：縮排區保留著，離開後成為空白的子區塊", () => {
     const s = insertEmptyAfter({ source: "a\n", region: null, caret: 0 }, 1);
     const r = indentBlock(s.source, s.region!)!;
     expect(r.source).toBe('a\n\n<div class="indent">\n\n\n\n</div>\n');
     expect(r.source.split("\n")[r.start]).toBe("");
     expect(r.start).toBe(4);
     const left = deactivate({ source: r.source, region: { start: r.start, end: r.start + 1 }, caret: 0 });
-    expect(left.state.source).toBe("a\n");
+    expect(left.state.source).toBe('a\n\n<div class="indent">\n\n&nbsp;\n\n</div>\n');
   });
 
   it("有子區塊的區塊縮排時，子區塊一起移進來成為同層", () => {
@@ -192,9 +200,9 @@ describe("多欄", () => {
     expect(setColumnWidths(out, [{ line: 2, width: 1 }])).toContain('<div class="column">\n');
   });
 
-  it("在欄位中新增空白區塊後離開，欄位保持原樣", () => {
+  it("在欄位中新增空白區塊後離開，空白區塊留在欄位裡", () => {
     const s = insertEmptyAfter({ source: COLS, region: null, caret: 0 }, find(COLS, "A").end);
-    expect(deactivate(s).state.source).toBe(COLS);
+    expect(deactivate(s).state.source).toBe(COLS.replace("A\n", "A\n\n&nbsp;\n"));
   });
 });
 
@@ -248,5 +256,59 @@ describe("清理", () => {
   it("一般文件不受影響", () => {
     expect(blocks("a\n\nb\n").length).toBe(2);
     expect(deleteBlock("a\n\nb\n\nc\n", { start: 2, end: 3 })).toBe("a\n\nc\n");
+  });
+});
+
+describe("多選", () => {
+  const SRC = "A\n\nB\n\nC\n\nD\n";
+  const pick = (src: string, ...names: string[]) => names.map((n) => find(src, n));
+
+  it("刪除多個區塊", () => {
+    expect(deleteBlocks(SRC, pick(SRC, "B", "D"))).toBe("A\n\nC\n");
+  });
+
+  it("一起搬移，保持原本順序並回傳新位置", () => {
+    const r = moveBlocks(SRC, pick(SRC, "A", "C"), find(SRC, "D"), "after");
+    expect(r.source).toBe("B\n\nD\n\nA\n\nC\n");
+    expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["A", "C"]);
+  });
+
+  it("目標是選取的區塊之一時不動", () => {
+    expect(moveBlocks(SRC, pick(SRC, "A", "C"), find(SRC, "C"), "after").source).toBe(SRC);
+  });
+
+  it("一起放到旁邊成為新的一欄", () => {
+    const out = placeBesideMany(SRC, pick(SRC, "B", "C"), find(SRC, "A"), "right");
+    expect(out).toContain('<div class="column">\n\nB\n\nC\n\n</div>');
+    expect(out.endsWith("</div>\n\nD\n")).toBe(true);
+  });
+
+  it("建立副本放在最後一個選取區塊後面", () => {
+    const r = duplicateBlocks(SRC, pick(SRC, "A", "B"));
+    expect(r.source).toBe("A\n\nB\n\nA\n\nB\n\nC\n\nD\n");
+    expect(r.starts).toEqual([4, 6]);
+  });
+
+  it("選了父區塊時，它的子區塊不重複計算", () => {
+    const src = 'P\n\n<div class="indent">\n\nc\n\n</div>\n\nQ\n';
+    expect(topLevel(parseDoc(src), pick(src, "P", "c")).length).toBe(1);
+    expect(deleteBlocks(src, pick(src, "P", "c"))).toBe("Q\n");
+    expect(blocksMarkdown(src, pick(src, "P", "c", "Q"))).toBe(
+      'P\n\n<div class="indent">\n\nc\n\n</div>\n\nQ',
+    );
+  });
+
+  it("多個區塊一起縮排：成為同一個父區塊的子區塊，選取保留", () => {
+    const r = indentBlocks(SRC, pick(SRC, "B", "C"), false);
+    expect(r.source).toBe('A\n\n<div class="indent">\n\nB\n\nC\n\n</div>\n\nD\n');
+    expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["B", "C"]);
+    const back = indentBlocks(r.source, pick(r.source, "B", "C"), true);
+    expect(back.source).toBe(SRC);
+  });
+
+  it("貼上 Markdown 到選取區塊後面", () => {
+    const r = pasteAfter(SRC, find(SRC, "B"), "X\n\n- y\n");
+    expect(r.source).toBe("A\n\nB\n\nX\n\n- y\n\nC\n\nD\n");
+    expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["X", "- y"]);
   });
 });
