@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "banyan",
-        "width": 800,
-        "height": 600
+        "title": "Banyan",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 520,
+        "minHeight": 400
       }
     ],
     "security": {
