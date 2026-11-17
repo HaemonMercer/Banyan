@@ -1,5 +1,6 @@
 import {
   buildTree,
+  leaves,
   locate,
   openTag,
   parseDoc,
@@ -323,29 +324,97 @@ const inside = (r: Range, line: number) => line >= r.start && line < r.end;
  * 有子區塊的區塊不能放進縮排裡（縮排只有一層）。
  */
 export function canDrop(doc: ParsedDoc, x: Range, target: Range): boolean {
-  if (inside(groupOf(doc, x), target.start)) return false;
+  if (inside(rangeOf(doc, x), target.start)) return false;
+  // 整組多欄不能放進欄位裡（不做巢狀多欄）
+  if ((x as Picked).whole) return !inColumn(doc, target);
   return !(childrenOf(doc, x) && isIndented(doc, target));
+}
+
+function inColumn(doc: ParsedDoc, r: Range): boolean {
+  const { tree } = treeWith(doc, r);
+  return !!locate(tree, r.start)?.ancestors.some((a) => a.kind === "column");
+}
+
+/**
+ * 選取的單位。一般是一個區塊（連同子區塊）；
+ * 多欄裡的區塊全部被選取時，整組多欄當成一個單位（whole），搬移時排版不會被拆開。
+ */
+export interface Picked extends Unit {
+  whole?: "columns";
+}
+
+/** 單位所佔的行範圍：整組多欄是標籤到標籤，一般區塊是區塊連同子區塊。 */
+export function rangeOf(doc: ParsedDoc, x: Range): Range {
+  return (x as Picked).whole ? { start: x.start, end: x.end } : groupOf(doc, x);
 }
 
 // ─── 多個區塊 ───────────────────────────────────────────────────
 
 /** 依文件順序排好，並拿掉「已經是其他選取區塊的子區塊」的區塊（它們會跟著父區塊走）。 */
-export function topLevel(doc: ParsedDoc, units: Range[]): Unit[] {
+export function topLevel(doc: ParsedDoc, units: Range[]): Picked[] {
   const starts = new Set(units.map((u) => u.start));
-  const picked = doc.blocks.filter((b) => starts.has(b.start));
-  const groups = picked.map((b) => groupOf(doc, b));
-  return picked.filter((b) => !groups.some((g, i) => picked[i] !== b && inside(g, b.start)));
+  // 傳進來的已經是整組多欄：展開成裡面的區塊，下面再組回來
+  for (const u of units as Picked[]) {
+    if (u.whole) for (const b of doc.blocks) if (inside(u, b.start)) starts.add(b.start);
+  }
+  // 裡面每個區塊都被選取的多欄：整組當成一個單位
+  const wholes: Picked[] = [];
+  const walk = (nodes: TreeNode[]) => {
+    for (const n of nodes) {
+      if (n.type !== "container") continue;
+      const inner = leaves(n.children);
+      if (n.kind === "columns" && inner.length && inner.every((u) => starts.has(u.start))) {
+        wholes.push({ kind: "html", start: n.open.start, end: n.close.end, html: "", whole: "columns" });
+      } else {
+        walk(n.children);
+      }
+    }
+  };
+  walk(doc.tree);
+  const inWhole = (line: number) => wholes.some((w) => inside(w, line));
+  const picked: Picked[] = [...doc.blocks.filter((b) => starts.has(b.start) && !inWhole(b.start)), ...wholes].sort(
+    (a, b) => a.start - b.start,
+  );
+  const groups = picked.map((b) => rangeOf(doc, b));
+  return picked.filter((b, i) => !groups.some((g, j) => j !== i && inside(g, b.start)));
+}
+
+/** 一段行範圍裡所有看得到的區塊（搬移、複製後重新選取用）。 */
+function blocksIn(buf: LineBuf, firstId: number, lastId: number): number[] {
+  const a = buf.indexOfId(firstId);
+  const b = buf.indexOfId(lastId);
+  if (a < 0 || b < 0) return [];
+  return parseDoc(buf.source)
+    .blocks.filter((u) => u.start >= a && u.start <= b)
+    .map((u) => u.start);
+}
+
+/**
+ * 相鄰兩個區塊之間要不要空行：同一份清單裡原本緊接著的項目不空行（保持緊湊清單），
+ * 其他都空一行。回傳 pairs[i] 表示第 i-1 與第 i 個之間是否緊接。
+ */
+function tightPairs(doc: ParsedDoc, xs: Unit[]): boolean[] {
+  return xs.map((x, i) => {
+    const prev = xs[i - 1];
+    return (
+      !!prev &&
+      !!prev.list &&
+      !!x.list &&
+      prev.list.listStart === x.list.listStart &&
+      rangeOf(doc, prev).end === x.start
+    );
+  });
 }
 
 /** 被選取的區塊（連同子區塊）的 Markdown，用來複製到剪貼簿。 */
 export function blocksMarkdown(source: string, units: Range[]): string {
   const doc = parseDoc(source);
-  return topLevel(doc, units)
-    .map((u) => {
-      const g = groupOf(doc, u);
-      return doc.lines.slice(g.start, g.end).join("\n");
-    })
-    .join("\n\n");
+  const xs = topLevel(doc, units);
+  const texts = xs.map((u) => {
+    const g = rangeOf(doc, u);
+    return doc.lines.slice(g.start, g.end);
+  });
+  return joinTexts(texts, false, tightPairs(doc, xs)).lines.join("\n");
 }
 
 export interface MovedMany {
@@ -355,19 +424,23 @@ export interface MovedMany {
 }
 
 /** 剪下多個區塊（由後往前剪，前面的行號不受影響），回傳各段文字與它們之間的接法。 */
-function cutMany(buf: LineBuf, doc: ParsedDoc, xs: Unit[]): { texts: string[][]; tight: boolean } {
-  const groups = xs.map((x) => groupOf(doc, x));
+function cutMany(
+  buf: LineBuf,
+  doc: ParsedDoc,
+  xs: Unit[],
+): { texts: string[][]; tight: boolean; pairs: boolean[] } {
+  const groups = xs.map((x) => rangeOf(doc, x));
   const texts = groups.map((g) => buf.lines.slice(g.start, g.end));
   for (const g of [...groups].reverse()) cut(buf, g);
-  return { texts, tight: xs.every((x) => x.kind === "item") };
+  return { texts, tight: xs.every((x) => x.kind === "item"), pairs: tightPairs(doc, xs) };
 }
 
 /** 把多段文字接成一塊；回傳接好的行與每段第一行的偏移。 */
-function joinTexts(texts: string[][], tight: boolean): { lines: string[]; offsets: number[] } {
+function joinTexts(texts: string[][], tight: boolean, pairs: boolean[] = []): { lines: string[]; offsets: number[] } {
   const lines: string[] = [];
   const offsets: number[] = [];
   texts.forEach((t, i) => {
-    if (i > 0 && !tight) lines.push("");
+    if (i > 0 && !tight && !pairs[i]) lines.push("");
     offsets.push(lines.length);
     lines.push(...t);
   });
@@ -392,8 +465,8 @@ export function moveBlocks(
   // 放在有子區塊的區塊後面時，放到子區塊之後
   const dest = target && pos === "after" ? groupOf(doc, target) : target;
   const buf = new LineBuf(source);
-  const { texts, tight } = cutMany(buf, doc, xs);
-  const joined = joinTexts(texts, tight && target?.kind === "item");
+  const { texts, tight, pairs } = cutMany(buf, doc, xs);
+  const joined = joinTexts(texts, tight && target?.kind === "item", pairs);
   let at: number;
   if (!target || !dest) {
     let end = buf.lines.length;
@@ -405,9 +478,10 @@ export function moveBlocks(
     const t = { start: buf.map(dest.start), end: buf.map(dest.end - 1) + 1 };
     at = insertBlock(buf, pos === "before" ? t.start : t.end, joined.lines, tight && target.kind === "item");
   }
-  const ids = joined.offsets.map((o) => buf.ids[at + o]);
+  const first = buf.ids[at];
+  const last = buf.ids[at + joined.lines.length - 1];
   normalize(buf);
-  return { source: buf.source, starts: ids.map((id) => buf.indexOfId(id)) };
+  return { source: buf.source, starts: blocksIn(buf, first, last) };
 }
 
 /** 把區塊 x（連同子區塊）搬到 target 的前面或後面（target 為 null 表示文件最後）。 */
@@ -421,10 +495,11 @@ const column = (text: string[]) => [openTag("column"), "", ...text, "", "</div>"
 export function placeBesideMany(source: string, units: Range[], target: Unit, side: "left" | "right"): string {
   const doc = parseDoc(source);
   const xs = topLevel(doc, units);
-  if (!xs.length || xs.some((x) => x.start === target.start || inside(groupOf(doc, x), target.start))) return source;
+  if (!xs.length || xs.some((x) => x.whole || x.start === target.start || inside(rangeOf(doc, x), target.start)))
+    return source;
   const buf = new LineBuf(source);
-  const { texts, tight } = cutMany(buf, doc, xs);
-  const text = joinTexts(texts, tight).lines;
+  const { texts, tight, pairs } = cutMany(buf, doc, xs);
+  const text = joinTexts(texts, tight, pairs).lines;
   const mid = parseDoc(buf.source);
   const tStart = buf.map(target.start);
   const whole = wholeBlock(mid, { start: tStart, end: tStart + (target.end - target.start) });
@@ -475,18 +550,20 @@ export function duplicateBlocks(source: string, units: Range[]): MovedMany {
   const doc = parseDoc(source);
   const xs = topLevel(doc, units);
   if (!xs.length) return { source, starts: [] };
-  const groups = xs.map((x) => groupOf(doc, x));
+  const groups = xs.map((x) => rangeOf(doc, x));
   const tight = xs.every((x) => x.kind === "item");
   const joined = joinTexts(
     groups.map((g) => doc.lines.slice(g.start, g.end)),
     tight,
+    tightPairs(doc, xs),
   );
   const buf = new LineBuf(source);
   const last = groups[groups.length - 1];
   const at = insertBlock(buf, last.end, joined.lines, tight);
-  const ids = joined.offsets.map((o) => buf.ids[at + o]);
+  const firstId = buf.ids[at];
+  const lastId = buf.ids[at + joined.lines.length - 1];
   normalize(buf);
-  return { source: buf.source, starts: ids.map((id) => buf.indexOfId(id)) };
+  return { source: buf.source, starts: blocksIn(buf, firstId, lastId) };
 }
 
 /**
@@ -498,7 +575,7 @@ export function pasteAfter(source: string, after: Range | null, markdown: string
   if (!text.trim()) return { source, starts: [] };
   const doc = parseDoc(source);
   const buf = new LineBuf(source);
-  const g = after ? groupOf(doc, after) : null;
+  const g = after ? rangeOf(doc, after) : null;
   let at: number;
   if (g) at = insertBlock(buf, g.end, text.split("\n"), false);
   else {
@@ -518,7 +595,7 @@ export function pasteAfter(source: string, after: Range | null, markdown: string
 /** 對多個區塊依序（由後往前，前面的行號不受影響）縮排或減少縮排；不能縮的跳過。 */
 export function indentBlocks(source: string, units: Range[], outdent: boolean): MovedMany {
   let doc = parseDoc(source);
-  const xs = topLevel(doc, units);
+  const xs = topLevel(doc, units).filter((x) => !x.whole);
   // 用內容追蹤選取：每次操作後依序找回這些區塊
   const texts = xs.map((x) => doc.lines.slice(x.start, x.end).join("\n"));
   let out = source;
@@ -553,4 +630,39 @@ export function setColumnWidths(source: string, widths: { line: number; width: n
     if (/^<div class="column"/.test(lines[line] ?? "")) lines[line] = openTag("column", width);
   }
   return lines.join("\n");
+}
+
+/**
+ * 在編輯中的區塊裡貼上區塊：在游標處把區塊切開，貼上的區塊放在中間。
+ * 游標前、後的文字各自成為區塊（空的就不留）；回傳貼上區塊的位置。
+ */
+export function pasteInto(source: string, region: Range, from: number, to: number, markdown: string): MovedMany {
+  const buf = new LineBuf(source);
+  const text = buf.lines.slice(region.start, region.end).join("\n");
+  const before = text.slice(0, from).replace(/[ \t]+$/, "");
+  const after = text.slice(to).replace(/^[ \t]+/, "");
+  const pasted = markdown.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "").split("\n");
+
+  const out: string[] = [];
+  if (before.trim()) out.push(...before.split("\n"), "");
+  const offset = out.length;
+  out.push(...pasted);
+  if (after.trim()) out.push("", ...after.split("\n"));
+
+  let at = region.start;
+  if (at > 0 && !isBlank(buf.lines[at - 1])) {
+    out.unshift("");
+    at++;
+  }
+  if (region.end < buf.lines.length && !isBlank(buf.lines[region.end])) out.push("");
+  buf.splice(region.start, region.end - region.start, ...out);
+  const first = buf.ids[at + offset];
+  const last = buf.ids[at + offset + pasted.length - 1];
+  normalize(buf);
+  const a = buf.indexOfId(first);
+  const b = buf.indexOfId(last);
+  const starts = parseDoc(buf.source)
+    .blocks.filter((u) => u.start >= a && u.start <= b)
+    .map((u) => u.start);
+  return { source: buf.source, starts };
 }

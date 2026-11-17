@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ClipboardEvent as ReactClipboardEvent,
   type ReactNode,
 } from "react";
 import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
@@ -26,6 +27,8 @@ import {
   indentBlocks,
   moveBlocks,
   pasteAfter,
+  pasteInto,
+  rangeOf,
   placeBesideMany,
   reselect,
   topLevel,
@@ -34,6 +37,7 @@ import {
   setColumnWidths,
   treeWith,
   type DropPos,
+  type Picked,
 } from "./layout";
 import { parseDoc, type Container, type ParsedDoc, type TreeNode, type Unit } from "./markdown";
 import {
@@ -78,6 +82,9 @@ async function openLink(href: string) {
   }
 }
 
+/** 剪貼簿中標記「這是 Banyan 的區塊」的格式 */
+const BLOCKS_MIME = "application/x-banyan-blocks";
+
 const MARKER = /^(\s*)([-+*]|\d{1,9}[.)])[ \t]+/;
 
 interface Slash {
@@ -89,7 +96,7 @@ interface Slash {
 interface Drag {
   from: Unit;
   /** 一起拖曳的區塊（多選時不只一個） */
-  many: Unit[];
+  many: Picked[];
   drop: Drop | null;
   x: number;
   y: number;
@@ -539,11 +546,12 @@ export function Editor({ value, onChange }: EditorProps) {
   const dropAt = (x: number, y: number, from: Unit, many: Unit[]): Drop | null => {
     const fromStart = from.start;
     const cur = parseDoc(stateRef.current.source);
-    const moving = new Set(many.map((u) => u.start));
+    // 正在搬的範圍（多欄整組、區塊連同子區塊）裡的區塊都不能當目標
+    const ranges = many.map((m) => rangeOf(cur, m));
     const rowsEl = [...document.querySelectorAll<HTMLElement>(".md-editor .row[data-start]")].filter((el) => {
       const start = Number(el.dataset.start);
       if (start === fromStart) return true;
-      if (moving.has(start)) return false;
+      if (ranges.some((r) => start >= r.start && start < r.end)) return false;
       const t = cur.blocks.find((u) => u.start === start);
       // 不能放進自己的子區塊；有子區塊的區塊不能放進縮排
       return t ? many.every((m) => canDrop(cur, m, t)) : false;
@@ -594,13 +602,15 @@ export function Editor({ value, onChange }: EditorProps) {
         setMenu(null);
         // 拖曳的區塊在多選裡：整組選取一起搬
         const sel = selRef.current;
-        const many = sel.length > 1 && sel.includes(from.start) ? topLevel(cur, sel.map((st) => ({ start: st, end: st + 1 }))) : [from];
-        if (many.length === 1) select([]);
+        const many: Picked[] = sel.length > 1 && sel.includes(from.start) ? topLevel(cur, sel.map((st) => ({ start: st, end: st + 1 }))) : [from];
+        const grouped = many.length > 1 || !!many[0]?.whole;
+        if (!grouped) select([]);
         const kids = groupOf(cur, from).end > from.end;
-        const label =
-          many.length > 1
-            ? `${many.length} 個區塊`
-            : regionText(s.source.split("\n"), from).slice(0, 80) + (kids ? "  ＋子區塊" : "");
+        const label = grouped
+          ? many.map((m) => (m.whole ? "多欄" : null)).filter(Boolean).length === many.length
+            ? "多欄排版"
+            : `${many.length} 個單位` + (many.some((m) => m.whole) ? "（含多欄）" : "")
+          : regionText(s.source.split("\n"), from).slice(0, 80) + (kids ? "  ＋子區塊" : "");
         current = { from, many, drop: null, x: 0, y: 0, label };
       }
       current = { ...current, x: ev.clientX, y: ev.clientY, drop: dropAt(ev.clientX, ev.clientY, current.from, current.many) };
@@ -627,7 +637,7 @@ export function Editor({ value, onChange }: EditorProps) {
       const x = blocks.find((u) => u.start === from.start);
       const target = blocks.find((u) => u.start === drop.start);
       if (!x || !target) return;
-      if (many.length > 1) {
+      if (many.length > 1 || many[0]?.whole) {
         const texts = many.map((m) => source.split("\n").slice(m.start, m.end).join("\n"));
         const side = drop.pos === "left" || drop.pos === "right";
         const res = side
@@ -735,7 +745,7 @@ export function Editor({ value, onChange }: EditorProps) {
     const next = deleteBlocks(source, xs);
     commit({ source: next, region: null, caret: 0 });
     // 刪除後選取原本位置附近的區塊
-    const firstIdx = blocks.findIndex((b) => b.start === xs[0].start);
+    const firstIdx = Math.max(0, blocks.findIndex((b) => b.start >= xs[0].start));
     const after = parseDoc(next).blocks;
     const keep = after[Math.min(firstIdx, after.length - 1)] ?? null;
     select(keep ? [keep.start] : [], keep?.start ?? null, keep?.start ?? null);
@@ -746,6 +756,7 @@ export function Editor({ value, onChange }: EditorProps) {
     let source = stateRef.current.source;
     const texts: string[] = [];
     for (const x of [...xs].reverse()) {
+      if (x.whole) continue; // 多欄本身不能轉換類型
       const lines = source.split("\n");
       const t = turnInto(lines.slice(x.start, x.end).join("\n"), type);
       texts.unshift(t.text);
@@ -754,6 +765,27 @@ export function Editor({ value, onChange }: EditorProps) {
     }
     const starts = reselect(source, texts);
     applyMany({ source, starts });
+  };
+
+  /**
+   * 在編輯中的區塊裡貼上：從 Banyan 複製的區塊、或多行的 Markdown，直接變成區塊
+   * （在游標處切開，貼上的區塊放在中間並選取）；單行文字照一般方式貼進文字框。
+   */
+  const onTextPaste = (e: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const s = stateRef.current;
+    if (!s.region) return;
+    const kind = editUnit?.kind;
+    if (kind === "code" || kind === "html") return; // 程式碼裡就是文字
+    const blocks = e.clipboardData.getData(BLOCKS_MIME);
+    const text = blocks || e.clipboardData.getData("text/plain");
+    if (!text || (!blocks && !text.replace(/\r?\n+$/, "").includes("\n"))) return;
+    e.preventDefault();
+    const ta = e.currentTarget;
+    setSlash(null);
+    const res = pasteInto(s.source, s.region, ta.selectionStart, ta.selectionEnd, text);
+    commit({ source: res.source, region: null, caret: 0 });
+    ta.blur();
+    select(res.starts, res.starts[0] ?? null, res.starts[res.starts.length - 1] ?? null);
   };
 
   const selectionKeys = useRef<(e: globalThis.KeyboardEvent) => void>(() => {});
@@ -826,7 +858,10 @@ export function Editor({ value, onChange }: EditorProps) {
       return;
     }
     e.preventDefault();
-    e.clipboardData?.setData("text/plain", blocksMarkdown(stateRef.current.source, xs) + "\n");
+    const markdown = blocksMarkdown(stateRef.current.source, xs) + "\n";
+    e.clipboardData?.setData("text/plain", markdown);
+    // 標記這是 Banyan 的區塊，貼到編輯中的區塊時才知道要當區塊貼上
+    e.clipboardData?.setData(BLOCKS_MIME, markdown);
     if (e.type === "cut") deleteSelected();
   };
 
@@ -927,6 +962,7 @@ export function Editor({ value, onChange }: EditorProps) {
             if (c !== stateRef.current.caret) stateRef.current = { ...stateRef.current, caret: c };
           }}
           onKeyDown={onKeyDown}
+          onPaste={onTextPaste}
           onBlur={(e) => onBlur(e.currentTarget, region.start)}
         />
         <span className="edit-badge" aria-hidden>
@@ -948,6 +984,8 @@ export function Editor({ value, onChange }: EditorProps) {
   // 編輯區取代與它重疊的區塊，放進樹中對應的位置
   const view = useMemo(() => (region ? treeWith(doc, region) : { tree: doc.tree, self: null }), [doc, region]);
 
+  const dragRanges = drag ? drag.many.map((m) => rangeOf(doc, m)) : [];
+
   const renderNodes = (nodes: TreeNode[]): ReactNode[] =>
     nodes.map((n) => {
       if (n.type === "leaf") {
@@ -959,7 +997,7 @@ export function Editor({ value, onChange }: EditorProps) {
             unit={u}
             doc={doc}
             drop={drag?.drop?.start === u.start ? drag.drop.pos : null}
-            dragging={!!drag?.many.some((m) => m.start === u.start)}
+            dragging={dragRanges.some((r) => u.start >= r.start && u.start < r.end)}
             selected={shownSelected.has(u.start)}
             onMouseDown={(e) => onUnitMouseDown(e, u)}
             onAdd={() => addAfter(u)}
@@ -999,7 +1037,9 @@ export function Editor({ value, onChange }: EditorProps) {
       const i = nodes.indexOf(n);
       const owner = nodes[i - 1];
       const dragged =
-        n.kind === "indent" && owner?.type === "leaf" && !!drag?.many.some((m) => m.start === owner.unit.start);
+        n.kind === "indent" &&
+        owner?.type === "leaf" &&
+        dragRanges.some((r) => owner.unit.start >= r.start && owner.unit.start < r.end);
       return (
         <div
           key={`${n.kind}:${n.open.start}`}

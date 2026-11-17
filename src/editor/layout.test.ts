@@ -11,6 +11,7 @@ import {
   indentBlocks,
   moveBlocks,
   pasteAfter,
+  pasteInto,
   placeBesideMany,
   topLevel,
   indentBlock,
@@ -310,5 +311,94 @@ describe("多選", () => {
     const r = pasteAfter(SRC, find(SRC, "B"), "X\n\n- y\n");
     expect(r.source).toBe("A\n\nB\n\nX\n\n- y\n\nC\n\nD\n");
     expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["X", "- y"]);
+  });
+});
+
+describe("在編輯中的區塊貼上區塊", () => {
+  const BLOCKS = '## 標題\n\n- a\n- b\n\n<div class="indent">\n\n子\n\n</div>';
+
+  it("空白區塊：直接換成貼上的區塊", () => {
+    const r = pasteInto("x\n\n\n\ny\n", { start: 2, end: 3 }, 0, 0, BLOCKS);
+    expect(r.source).toBe(`x\n\n${BLOCKS}\n\ny\n`);
+    expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["## 標題", "- a", "- b", "子"]);
+  });
+
+  it("文字中間：在游標處切開，前後各成一個區塊", () => {
+    const r = pasteInto("前後\n", { start: 0, end: 1 }, 1, 1, "P1\n\nP2\n");
+    expect(r.source).toBe("前\n\nP1\n\nP2\n\n後\n");
+    expect(r.starts).toEqual([2, 4]);
+  });
+
+  it("選取的文字被貼上的區塊取代", () => {
+    const r = pasteInto("abc\n", { start: 0, end: 1 }, 1, 2, "X\n");
+    expect(r.source).toBe("a\n\nX\n\nc\n");
+  });
+
+  it("在欄位裡貼上，區塊留在欄位裡", () => {
+    const src = '<div class="columns">\n\n<div class="column">\n\nA\n\n</div>\n\n<div class="column">\n\n\n\n</div>\n\n</div>\n';
+    const r = pasteInto(src, { start: 10, end: 11 }, 0, 0, "P1\n\nP2");
+    expect(r.source).toContain('<div class="column">\n\nP1\n\nP2\n\n</div>');
+  });
+});
+
+describe("複製的清單保持緊湊", () => {
+  it("同一份清單中相鄰的項目之間不加空行", () => {
+    const src = "## 標\n\n- a\n- b\n\nP\n";
+    const doc = parseDoc(src);
+    expect(blocksMarkdown(src, doc.blocks)).toBe("## 標\n\n- a\n- b\n\nP");
+  });
+
+  it("搬移整份清單的項目時清單仍是緊湊的", () => {
+    const src = "- a\n- b\n\nP\n";
+    const r = moveBlocks(src, parseDoc(src).blocks.slice(0, 2), find(src, "P"), "after");
+    expect(r.source).toBe("P\n\n- a\n- b\n");
+  });
+});
+
+describe("整組多欄", () => {
+  const SRC = "X\n\n" + COLS + "\nY\n";
+  const all = (src: string, ...names: string[]) => names.map((n) => find(src, n));
+
+  it("多欄裡的區塊全選時，整組多欄當成一個單位", () => {
+    const xs = topLevel(parseDoc(SRC), all(SRC, "A", "B"));
+    expect(xs.length).toBe(1);
+    expect(xs[0].whole).toBe("columns");
+  });
+
+  it("搬移時多欄排版保持原樣，搬完選取裡面的區塊", () => {
+    const r = moveBlocks(SRC, all(SRC, "A", "B"), find(SRC, "Y"), "after");
+    expect(r.source).toBe("X\n\nY\n\n" + COLS);
+    expect(r.starts.map((l) => r.source.split("\n")[l])).toEqual(["A", "B"]);
+  });
+
+  it("傳入已經組好的整組多欄（拖曳時）也能搬", () => {
+    const picked = topLevel(parseDoc(SRC), all(SRC, "A", "B"));
+    const r = moveBlocks(SRC, picked, find(SRC, "Y"), "after");
+    expect(r.source).toBe("X\n\nY\n\n" + COLS);
+  });
+
+  it("連同上方的段落一起搬", () => {
+    const r = moveBlocks(SRC, all(SRC, "X", "A", "B"), find(SRC, "Y"), "after");
+    expect(r.source).toBe("Y\n\nX\n\n" + COLS);
+  });
+
+  it("只選其中一欄時照常把區塊搬出來", () => {
+    const r = moveBlocks(SRC, all(SRC, "A"), find(SRC, "Y"), "after");
+    expect(r.source).toBe("X\n\nB\n\nY\n\nA\n");
+  });
+
+  it("複製、建立副本、刪除都保留整組多欄", () => {
+    expect(blocksMarkdown(SRC, all(SRC, "A", "B"))).toBe(COLS.trimEnd());
+    const d = duplicateBlocks(SRC, all(SRC, "A", "B"));
+    expect(d.source).toBe("X\n\n" + COLS + "\n" + COLS + "\nY\n");
+    expect(deleteBlocks(SRC, all(SRC, "A", "B"))).toBe("X\n\nY\n");
+  });
+
+  it("整組多欄不能放進欄位裡", () => {
+    const two = SRC + "\n" + COLS.replace("A", "C").replace("B", "D");
+    const doc = parseDoc(two);
+    const [whole] = topLevel(doc, all(two, "A", "B"));
+    expect(canDrop(doc, whole, find(two, "C"))).toBe(false);
+    expect(canDrop(doc, whole, find(two, "Y"))).toBe(true);
   });
 });
