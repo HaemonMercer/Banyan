@@ -313,6 +313,90 @@ fn database_write(app: AppHandle, name: String, content: String) -> Result<(), S
     write_or_remove(&data_dir(&app, "databases")?.join(encoded_file(&name, "json")?), &content)
 }
 
+// ─── Desk（白板發想＋Dock 整理） ──────────────────────────────────
+//
+// 每個檔案一個 desk/名稱.json（白板與 Dock 的文件），檔名編碼和頁面相同。
+
+#[tauri::command]
+fn desk_list(app: AppHandle) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = fs::read_dir(data_dir(&app, "desk")?)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| decoded_name(&e.file_name().to_string_lossy(), ".json"))
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+#[tauri::command]
+fn desk_read(app: AppHandle, name: String) -> Result<String, String> {
+    read_or_empty(&data_dir(&app, "desk")?.join(encoded_file(&name, "json")?))
+}
+
+/// 寫入 Desk 檔案；內容是空的就刪掉檔案。
+#[tauri::command]
+fn desk_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
+    write_or_remove(&data_dir(&app, "desk")?.join(encoded_file(&name, "json")?), &content)
+}
+
+// ─── 匯出（Word、PowerPoint） ─────────────────────────────────────
+//
+// 前端產生檔案內容，這裡存到使用者的「下載」資料夾；已經有同名的檔案就加上 (1)、(2)…
+
+/// 匯出的檔名：去掉路徑與 Windows 不允許的字元，副檔名只留英數字。
+fn export_name(name: &str) -> (String, String) {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.trim().is_empty() => (s, clean_ext(e)),
+        _ => (name, "bin".to_string()),
+    };
+    let mut out: String = stem
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '_' } else { c })
+        .take(120)
+        .collect();
+    out = out.trim().trim_end_matches('.').trim_start_matches('.').to_string();
+    if out.is_empty() {
+        out = "Untitled".into();
+    }
+    (out, ext)
+}
+
+/// 資料夾裡還沒有人用的檔名：`名稱.ext`、`名稱 (1).ext`…
+fn free_path(dir: &PathBuf, stem: &str, ext: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}.{ext}"));
+    if !first.exists() {
+        return first;
+    }
+    (1..)
+        .map(|i| dir.join(format!("{stem} ({i}).{ext}")))
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
+/// 存匯出的檔案（原始位元組，標頭 `x-name` 是 URL 編碼的檔名），回傳存好的完整路徑。
+#[tauri::command]
+fn export_save(app: AppHandle, request: Request<'_>) -> Result<String, String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("需要檔案的原始位元組".into());
+    };
+    let raw = request
+        .headers()
+        .get("x-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("Untitled.bin");
+    let name = decoded_name(&format!("{raw}.x"), ".x").unwrap_or_else(|| raw.to_string());
+    let (stem, ext) = export_name(&name);
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().document_dir())
+        .map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = free_path(&dir, &stem, &ext);
+    fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -329,7 +413,11 @@ pub fn run() {
             page_write,
             database_list,
             database_read,
-            database_write
+            database_write,
+            desk_list,
+            desk_read,
+            desk_write,
+            export_save
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -385,5 +473,24 @@ mod tests {
         let file = encoded_file("a: b", "json").unwrap();
         assert_eq!(decoded_name(&file, ".json").as_deref(), Some("a: b"));
         assert_eq!(decoded_name("x.md", ".json"), None);
+    }
+
+    #[test]
+    fn export_names() {
+        assert_eq!(export_name("報告.docx"), ("報告".into(), "docx".into()));
+        assert_eq!(export_name("a/b: c?.PPTX"), ("a_b_ c_".into(), "pptx".into()));
+        assert_eq!(export_name("..docx"), ("Untitled".into(), "docx".into()));
+        assert_eq!(export_name("noext"), ("noext".into(), "bin".into()));
+    }
+
+    #[test]
+    fn free_paths() {
+        let dir = std::env::temp_dir().join(format!("banyan-export-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let a = free_path(&dir, "x", "docx");
+        assert!(a.ends_with("x.docx"));
+        fs::write(&a, b"1").unwrap();
+        assert!(free_path(&dir, "x", "docx").ends_with("x (1).docx"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

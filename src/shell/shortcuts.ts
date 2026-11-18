@@ -7,11 +7,8 @@
 export type ShortcutAction =
   | "toggle-sidebar"
   | "today"
-  | "view-journals"
   | "view-bujo"
-  | "view-pages"
-  | "view-databases"
-  | "view-doc"
+  | "view-desk"
   | "back"
   | "forward"
   | "newer-day"
@@ -32,11 +29,8 @@ function codeOf(e: KeyLike): string {
 
 const ALT: Record<string, ShortcutAction> = {
   KeyT: "today",
-  Digit1: "view-journals",
-  Digit2: "view-bujo",
-  Digit3: "view-pages",
-  Digit4: "view-doc",
-  Digit5: "view-databases",
+  Digit1: "view-bujo",
+  Digit2: "view-desk",
   ArrowLeft: "back",
   ArrowRight: "forward",
   ArrowUp: "newer-day",
@@ -64,11 +58,8 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
     title: "Navigate",
     items: [
       [["Alt", "T"], "Today's journal"],
-      [["Alt", "1"], "Journals"],
-      [["Alt", "2"], "Calendar"],
-      [["Alt", "3"], "All pages"],
-      [["Alt", "4"], "Document"],
-      [["Alt", "5"], "Databases"],
+      [["Alt", "1"], "Calendar"],
+      [["Alt", "2"], "Desk"],
       [["Alt", "←"], "Back"],
       [["Alt", "→"], "Forward"],
       [["Alt", "↑"], "Next day's journal"],

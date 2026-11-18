@@ -1,14 +1,12 @@
 import type { ReactNode } from "react";
 import {
-  DatabaseIcon,
+  DeskIcon,
   CalendarIcon,
   ClockIcon,
   DocIcon,
-  JournalIcon,
   KeyboardIcon,
   MonitorIcon,
   MoonIcon,
-  PagesIcon,
   SidebarIcon,
   StarIcon,
   SunIcon,
@@ -17,14 +15,11 @@ import {
 import { dayTitle, relativeLabel } from "../journal/journal";
 import { sameTarget, targetKey, type NavTarget, type ThemePref } from "./nav";
 
-export type MainView = "journals" | "bujo" | "pages" | "databases" | "doc";
+export type MainView = "bujo" | "desk";
 
 const MAIN: { kind: MainView; label: string; icon: ReactNode; keys: string }[] = [
-  { kind: "journals", label: "Journals", icon: <JournalIcon />, keys: "Alt+1" },
-  { kind: "bujo", label: "Calendar", icon: <CalendarIcon />, keys: "Alt+2" },
-  { kind: "pages", label: "All pages", icon: <PagesIcon />, keys: "Alt+3" },
-  { kind: "databases", label: "Databases", icon: <DatabaseIcon />, keys: "Alt+5" },
-  { kind: "doc", label: "Document", icon: <DocIcon />, keys: "Alt+4" },
+  { kind: "bujo", label: "Calendar", icon: <CalendarIcon />, keys: "Alt+1" },
+  { kind: "desk", label: "Desk", icon: <DeskIcon />, keys: "Alt+2" },
 ];
 
 const THEMES: { pref: ThemePref; label: string; icon: ReactNode }[] = [
@@ -45,8 +40,8 @@ function TargetRow(props: { target: NavTarget; now: string; active: boolean; onO
     <button className={`sb-item${props.active ? " on" : ""}`} onClick={props.onOpen} title={text}>
       <span className="sb-icon">{props.target.kind === "day" ? (
           <CalendarIcon />
-        ) : props.target.kind === "database" ? (
-          <DatabaseIcon />
+        ) : props.target.kind === "file" ? (
+          <DeskIcon />
         ) : (
           <DocIcon />
         )}</span>
@@ -125,7 +120,7 @@ export function Sidebar(props: {
               ))
             ) : (
               <p className="sb-empty">
-                Click <StarIcon className="inline-icon" /> on a journal, page or database (or press Alt+S) to add it here
+                Click <StarIcon className="inline-icon" /> on a journal, page or Desk file (or press Alt+S) to add it here
               </p>
             )}
           </section>

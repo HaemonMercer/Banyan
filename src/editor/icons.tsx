@@ -334,3 +334,80 @@ export const MultiIcon = (p: IconProps) => (
   </svg>
 );
 
+
+/** 區段（虛線框） */
+export const SectionIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="3.5" width="11" height="10" rx="1.5" strokeDasharray="2 1.6" />
+    <path d="M2.5 3.5h5" />
+  </svg>
+);
+
+export const MinusIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3.5 8h9" />
+  </svg>
+);
+
+/** 符合畫面（四個角） */
+export const FitIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10" />
+  </svg>
+);
+
+/** 便利貼（折角的方塊） */
+export const NoteIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 2.75h10a.25.25 0 0 1 .25.25v6.75L9.75 13.25H3A.25.25 0 0 1 2.75 13V3A.25.25 0 0 1 3 2.75Z" />
+    <path d="M13.25 9.75H10a.25.25 0 0 0-.25.25v3.25" />
+  </svg>
+);
+
+/** 送出（往右上的箭頭進到托盤） */
+export const SendIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 9.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3" />
+    <path d="M8 10V2.5M5 5.5l3-3 3 3" />
+  </svg>
+);
+
+/** 簡報（投影幕） */
+export const SlidesIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1" />
+    <path d="M8 11.25v2M5.5 13.75h5" />
+  </svg>
+);
+
+/** Desk（書桌） */
+export const DeskIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M1.75 6.25h12.5M3 6.25v7M13 6.25v7M9 6.25v4h4" />
+    <rect x="4.25" y="2" width="4.5" height="4.25" rx=".5" />
+  </svg>
+);
+
+/** 匯出（下載） */
+export const ExportIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M8 2.5V10M5 7l3 3 3-3" />
+    <path d="M2.5 11v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V11" />
+  </svg>
+);
+
+/** 播放（簡報放映） */
+export const PlayIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M5 3.5v9l7-4.5-7-4.5Z" />
+  </svg>
+);
+
+/** 白板（畫布上兩張卡片連起來） */
+export const WhiteboardIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="1.75" y="2.5" width="6" height="4.5" rx="1" />
+    <rect x="8.25" y="9" width="6" height="4.5" rx="1" />
+    <path d="M7.75 4.75h2.5a1 1 0 0 1 1 1V9" />
+  </svg>
+);

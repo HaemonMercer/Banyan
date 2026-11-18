@@ -56,8 +56,9 @@ describe("快捷鍵", () => {
 
   it("Alt 組合鍵", () => {
     expect(matchShortcut(ev("KeyT", { altKey: true }))).toBe("today");
-    expect(matchShortcut(ev("Digit3", { altKey: true }))).toBe("view-pages");
-    expect(matchShortcut(ev("Digit5", { altKey: true }))).toBe("view-databases");
+    expect(matchShortcut(ev("Digit1", { altKey: true }))).toBe("view-bujo");
+    expect(matchShortcut(ev("Digit2", { altKey: true }))).toBe("view-desk");
+    expect(matchShortcut(ev("Digit3", { altKey: true }))).toBeNull();
     expect(matchShortcut(ev("KeyW", { altKey: true }))).toBeNull();
     expect(matchShortcut(ev("ArrowLeft", { altKey: true }))).toBe("back");
   });
