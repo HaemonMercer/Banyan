@@ -1,17 +1,17 @@
 /**
- * 子彈筆記（Bullet Journal）的快速記錄符號。
+ * 子彈筆記（Bullet Journal）的快速記錄符號與待辦清單。
  *
- * 任務與事件是清單項目，內容開頭加上方括號標記（與 GitHub、Obsidian 的待辦寫法相容，
- * 在 CommonMark 裡只是普通文字，任何 Markdown 軟體都看得到）：
+ * 子彈筆記的任務與事件是清單項目，內容開頭加上大括號標記（在 CommonMark 裡只是普通文字）：
  *
- *   - [ ] 任務            •  未完成
- *   - [x] 任務            ×  完成
- *   - [<] 任務 [[2026-11-20]]   <  已排程到那一天（任務留在原處，那天的「該做的事」與行事曆會列出它）
- *   - [-] 任務            •  取消（刪除線）
- *   - [o] 事件            ○  事件
+ *   - { } 任務            □  未完成（也可以寫 `{}`）
+ *   - {x} 任務            ☒  完成
+ *   - {<} 任務 [[2026-11-20]]   ←  已排程到那一天（任務留在原處，那天的「該做的事」與行事曆會列出它）
+ *   - {-} 任務            取消（刪除線）
+ *   - {o} 事件            ○  事件
  *   - 筆記                –  一般清單項目就是筆記
  *
- * 沒有傳統子彈筆記的「已遷移 [>]」（使用者決定拿掉）：要在別天做一律排程。
+ * 方括號 `[ ]`、`[x]`（任何清單標記）是待辦清單的核取方塊，與 GitHub、Obsidian 的寫法相同。
+ * 沒有傳統子彈筆記的「已遷移」（使用者決定拿掉）：要在別天做一律排程。
  */
 
 export type TaskState = "open" | "done" | "scheduled" | "cancelled" | "event";
@@ -25,6 +25,7 @@ export const TASK_CHAR: Record<TaskState, string> = {
 };
 
 const STATE_OF: Record<string, TaskState> = {
+  "": "open",
   " ": "open",
   x: "done",
   X: "done",
@@ -42,47 +43,53 @@ export const TASK_LABEL: Record<TaskState, string> = {
   event: "Event",
 };
 
-/** 清單標記＋任務標記（第 1 組是清單標記與空白，第 2 組是任務字元） */
-const TASK_LINE = /^([ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+)\[([ xX<\-oO])\](?=[ \t]|$)[ \t]?/;
+/**
+ * 清單標記＋任務標記：第 1 組是清單標記與空白，第 2 組是大括號裡的字（子彈筆記），
+ * 第 3 組是方括號裡的字（待辦清單）。
+ */
+const TASK_LINE = /^([ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+)(?:\{([ xX<\-oO]?)\}|\[([ xX])\])(?=[ \t]|$)[ \t]?/;
 /** 清單項目的第一行 */
 const ITEM_LINE = /^([ \t]*(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$))/;
 
 export interface LineTask {
   state: TaskState;
+  /** 待辦清單的核取方塊（`[ ]`、`[x]`），不是子彈筆記的任務 */
+  check: boolean;
   /** 清單標記（含後面的空白） */
   marker: string;
   /** 清單標記＋任務標記的長度（之後是內容） */
   prefix: number;
 }
 
-/** 這一行是不是任務／事件（清單項目的第一行）。 */
+/** 這一行是不是任務／事件／待辦（清單項目的第一行）。 */
 export function lineTask(line: string): LineTask | null {
   const m = TASK_LINE.exec(line);
   if (!m) return null;
-  return { state: STATE_OF[m[2]], marker: m[1], prefix: m[0].length };
+  const check = m[3] !== undefined;
+  const state = check ? (m[3] === " " ? "open" : "done") : STATE_OF[m[2]];
+  return { state, check, marker: m[1], prefix: m[0].length };
 }
 
-/**
- * 待辦清單（核取方塊）：清單標記是 `*` 的未完成／完成項目（`* [ ] `、`* [x] `）。
- * 子彈筆記的任務用 `-`，兩者在原始碼裡分得出來，在其他 Markdown 軟體裡都是待辦。
- */
+/** 待辦清單（核取方塊）：`- [ ] `、`* [x] `…（方括號；子彈筆記的任務用大括號）。 */
 export function isCheckLine(line: string): boolean {
-  const t = lineTask(line);
-  return !!t && /^[ \t]*\*/.test(t.marker) && (t.state === "open" || t.state === "done");
+  return !!lineTask(line)?.check;
 }
 
-// ─── 打字快捷：段落或清單項目開頭打 `[] `、`[x] `、`[o] `… ─────────────
+// ─── 打字快捷 ───────────────────────────────────────────────────
 //
-// 中文輸入法開著時，方括號鍵打出來的是「」或【】、空白鍵可能是全形空白，
-// 所以這些也都要認得（使用者回報「語法經常無法觸發」）。
+// 段落或清單項目開頭打 `{} `、`{x} `、`{o} `…變成子彈筆記的任務；打 `[] `、`[x] ` 變成待辦。
+// 中文輸入法開著時，括號鍵打出來的是全形或中文括號、空白鍵可能是全形空白，
+// 所以這些也都要認得（Shift＋方括號鍵是『』，方括號鍵是「」）。
 
-const OPEN = "[［「【〔";
-const CLOSE = "]］」】〕";
-/** 方括號裡的字 → 狀態（含全形與常見的替代字） */
+const CURLY_OPEN = "{｛『";
+const CURLY_CLOSE = "}｝』";
+const SQUARE_OPEN = "[［「【〔";
+const SQUARE_CLOSE = "]］」】〕";
+/** 括號裡的字 → 狀態（含全形與常見的替代字） */
 const SHORTCUT_STATE: Record<string, TaskState> = {
   "": "open",
   " ": "open",
-  "　": "open",
+  "\u3000": "open",
   x: "done",
   X: "done",
   ｘ: "done",
@@ -99,73 +106,83 @@ const SHORTCUT_STATE: Record<string, TaskState> = {
   "○": "event",
   "〇": "event",
 };
-const SHORTCUT = new RegExp(`^[${OPEN}](.?)[${CLOSE.replace("]", "\\]")}][ \\u00a0\\u3000]`);
+const cls = (chars: string) => "[" + chars.replace(/[\]\\[]/g, "\\$&") + "]";
+const SHORTCUT = new RegExp(
+  `^(?:${cls(CURLY_OPEN)}(.?)${cls(CURLY_CLOSE)}|${cls(SQUARE_OPEN)}(.?)${cls(SQUARE_CLOSE)})[ \\u00a0\\u3000]`,
+);
 
 /**
- * 純文字開頭是不是任務快捷（`[] `、`[ ] `、`[x] `、`「」 `、`【o】 `…）。
- * 回傳狀態與快捷的長度；不是就是 null。
+ * 純文字開頭是不是任務或待辦的快捷（`{} `、`{x} `、`『』 `…是任務；`[] `、`[x] `、`「」 `…是待辦）。
+ * 回傳狀態、是不是待辦、快捷的長度；不是就是 null。待辦只有未完成與完成。
  */
-export function taskShortcut(plain: string): { state: TaskState; length: number } | null {
+export function taskShortcut(plain: string): { state: TaskState; check: boolean; length: number } | null {
   const m = SHORTCUT.exec(plain);
   if (!m) return null;
-  const state = SHORTCUT_STATE[m[1]];
-  return state ? { state, length: m[0].length } : null;
+  const check = m[1] === undefined;
+  const state = SHORTCUT_STATE[check ? m[2] : m[1]];
+  if (!state || (check && state !== "open" && state !== "done")) return null;
+  return { state, check, length: m[0].length };
 }
 
 /**
- * 從所見即所得的行內 Markdown 去掉開頭的任務快捷（裡面的字可能被跳脫成 `\[`、`\<`、`&lt;`）。
+ * 從所見即所得的行內 Markdown 去掉開頭的快捷（裡面的字可能被跳脫成 `\[`、`\<`、`&lt;`）。
  * 去不掉就回傳 null。
  */
 export function stripTaskShortcut(content: string): string | null {
-  const ch = String.raw`(?:\\?[^\\\]］」】〕&]|&[a-z]+;|&#\d+;)`;
-  const re = new RegExp(String.raw`^\\?[${OPEN.replace("[", "\\[")}]${ch}?\\?[${CLOSE.replace("]", "\\]")}](?: | |　|&nbsp;)`);
+  const close = CURLY_CLOSE + SQUARE_CLOSE;
+  const ch = String.raw`(?:\\?[^\\&${close.replace(/[\]\\[]/g, "\\$&")}]|&[a-z]+;|&#\d+;)`;
+  const open = cls(CURLY_OPEN + SQUARE_OPEN);
+  const re = new RegExp(String.raw`^\\?${open}${ch}?\\?${cls(close)}(?: |\u00a0|\u3000|&nbsp;)`);
   const m = re.exec(content);
   return m ? content.slice(m[0].length) : null;
 }
 
 /** 開頭的星號（待辦清單的快捷 `*[] `；全形＊、後面可以空一格） */
-const STAR = /^[*＊][  　]?/;
+const STAR = /^[*＊][ \u00a0\u3000]?/;
 
 /**
- * 純文字開頭是不是待辦清單（核取方塊）的快捷：`*[] `、`*[x] `、`＊【】 `…
- * 只有未完成與完成兩種；其他狀態不算。
+ * 純文字開頭是不是星號＋待辦快捷：`*[] `、`*[x] `、`＊【】 `…（`[] ` 本身就是待辦，
+ * 這是給習慣先打星號的寫法）。
  */
 export function todoShortcut(plain: string): { state: "open" | "done"; length: number } | null {
   const star = STAR.exec(plain);
   if (!star) return null;
   const t = taskShortcut(plain.slice(star[0].length));
-  if (!t || (t.state !== "open" && t.state !== "done")) return null;
+  if (!t || !t.check || (t.state !== "open" && t.state !== "done")) return null;
   return { state: t.state, length: star[0].length + t.length };
 }
 
 /** 從行內 Markdown 去掉開頭的待辦快捷（星號會被跳脫成 `\*`）；去不掉就是 null。 */
 export function stripTodoShortcut(content: string): string | null {
-  const star = /^(?:\\?\*|＊)(?: | |　|&nbsp;)?/.exec(content);
+  const star = /^(?:\\?\*|＊)(?: |\u00a0|\u3000|&nbsp;)?/.exec(content);
   return star ? stripTaskShortcut(content.slice(star[0].length)) : null;
 }
 
-/** 任務標記的寫法（`[ ] `）。 */
-export function taskMark(state: TaskState): string {
-  return `[${TASK_CHAR[state]}] `;
+/** 標記的寫法：子彈筆記的任務是 `{ } `，待辦清單是 `[ ] `／`[x] `。 */
+export function taskMark(state: TaskState, check = false): string {
+  if (check) return state === "done" ? "[x] " : "[ ] ";
+  return `{${TASK_CHAR[state]}} `;
 }
 
 /**
- * 設定清單項目第一行的任務狀態；state 為 null 時拿掉任務標記（變回筆記）。
- * 不是清單項目就加上 `- `。
+ * 設定清單項目第一行的狀態；state 為 null 時拿掉標記（變回筆記）。
+ * 待辦改成未完成／完成時仍是待辦，改成其他狀態就變成子彈筆記的任務。
+ * 不是清單項目就加上 `- `（新的標記是子彈筆記的任務，check 為 true 時是待辦）。
  */
-export function setLineTask(line: string, state: TaskState | null): string {
+export function setLineTask(line: string, state: TaskState | null, check = false): string {
   const t = lineTask(line);
   if (t) {
     const rest = line.slice(t.prefix);
-    return state ? t.marker + taskMark(state) + rest : t.marker + rest;
+    const box = t.check && (state === "open" || state === "done");
+    return state ? t.marker + taskMark(state, box) + rest : t.marker + rest;
   }
   if (!state) return line;
   const m = ITEM_LINE.exec(line);
   if (m) {
     const marker = /[ \t]$/.test(m[1]) ? m[1] : m[1] + " ";
-    return marker + taskMark(state) + line.slice(m[1].length);
+    return marker + taskMark(state, check) + line.slice(m[1].length);
   }
-  return "- " + taskMark(state) + line.replace(/^[ \t]+/, "");
+  return "- " + taskMark(state, check) + line.replace(/^[ \t]+/, "");
 }
 
 /**
@@ -259,7 +276,7 @@ export function setTaskAt(source: string, line: number, state: TaskState | null)
 const EMPTY = /^(?:[ \t]*|&nbsp;)$/;
 
 /**
- * 在文件最後加上幾個清單項目（`- [ ] 內容`）。
+ * 在文件最後加上幾個清單項目（`- { } 內容`）。
  * 最後一行是同類的清單項目就直接接在後面（同一份清單），否則空一行另起。
  */
 export function appendItems(source: string, items: string[]): string {
@@ -276,7 +293,7 @@ export function appendItems(source: string, items: string[]): string {
 /** 渲染後的清單項目 HTML 去掉開頭的任務標記（畫面上改用符號顯示）。 */
 export function stripTaskHtml(html: string): string {
   // 渲染後 < 會變成 &lt;
-  return html.replace(/^(\s*(?:<p>)?)\[(?:[ xX<\-oO]|&lt;)\](?:[ \t]|(?=<\/p>|\n|$))/, "$1");
+  return html.replace(/^(\s*(?:<p>)?)(?:\{(?:[ xX<\-oO]|&lt;)?\}|\[[ xX]\])(?:[ \t]|(?=<\/p>|\n|$))/, "$1");
 }
 
 // ─── 排程：把任務加到另一天的日記 ───────────────────────────

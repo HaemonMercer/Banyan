@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  DatabaseIcon,
   CalendarIcon,
   ClockIcon,
   DocIcon,
@@ -12,18 +13,17 @@ import {
   StarIcon,
   SunIcon,
   TodayIcon,
-  WhiteboardIcon,
 } from "../editor/icons";
 import { dayTitle, relativeLabel } from "../journal/journal";
 import { sameTarget, targetKey, type NavTarget, type ThemePref } from "./nav";
 
-export type MainView = "journals" | "bujo" | "pages" | "boards" | "doc";
+export type MainView = "journals" | "bujo" | "pages" | "databases" | "doc";
 
 const MAIN: { kind: MainView; label: string; icon: ReactNode; keys: string }[] = [
   { kind: "journals", label: "Journals", icon: <JournalIcon />, keys: "Alt+1" },
   { kind: "bujo", label: "Calendar", icon: <CalendarIcon />, keys: "Alt+2" },
   { kind: "pages", label: "All pages", icon: <PagesIcon />, keys: "Alt+3" },
-  { kind: "boards", label: "Whiteboards", icon: <WhiteboardIcon />, keys: "Alt+5" },
+  { kind: "databases", label: "Databases", icon: <DatabaseIcon />, keys: "Alt+5" },
   { kind: "doc", label: "Document", icon: <DocIcon />, keys: "Alt+4" },
 ];
 
@@ -43,7 +43,13 @@ function TargetRow(props: { target: NavTarget; now: string; active: boolean; onO
   const { text, hint } = targetLabel(props.target, props.now);
   return (
     <button className={`sb-item${props.active ? " on" : ""}`} onClick={props.onOpen} title={text}>
-      <span className="sb-icon">{props.target.kind === "day" ? <CalendarIcon /> : props.target.kind === "board" ? <WhiteboardIcon /> : <DocIcon />}</span>
+      <span className="sb-icon">{props.target.kind === "day" ? (
+          <CalendarIcon />
+        ) : props.target.kind === "database" ? (
+          <DatabaseIcon />
+        ) : (
+          <DocIcon />
+        )}</span>
       <span className="sb-label">{text}</span>
       {hint && <span className="sb-hint">{hint}</span>}
     </button>
@@ -119,7 +125,7 @@ export function Sidebar(props: {
               ))
             ) : (
               <p className="sb-empty">
-                Click <StarIcon className="inline-icon" /> on a journal, page or whiteboard (or press Alt+S) to add it here
+                Click <StarIcon className="inline-icon" /> on a journal, page or database (or press Alt+S) to add it here
               </p>
             )}
           </section>

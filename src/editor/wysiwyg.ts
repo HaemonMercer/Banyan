@@ -4,6 +4,7 @@ import { COLORS, type Color, type Marks } from "./inline";
 import { md, type UnitKind } from "./markdown";
 import { linkPages } from "../pages/pageRef";
 import { isCheckLine, lineTask, type TaskState } from "../bujo/tasks";
+import { contentWhen, type TaskTime } from "../bujo/time";
 
 /**
  * 所見即所得（WYSIWYG）編輯的核心：
@@ -37,6 +38,8 @@ export interface Shape {
   task?: TaskState;
   /** 待辦清單的核取方塊 */
   check?: boolean;
+  /** 子彈筆記任務的排程日期與時間（藏在前綴與 suffix 裡，畫面上用標籤顯示） */
+  when?: { date: string | null; time: TaskTime | null };
 }
 
 /** 內容是不是只有一段行內文字（沒有其他區塊結構）。 */
@@ -85,7 +88,18 @@ export function decompose(text: string, kind: UnitKind | undefined): Shape | nul
         prefixes.push(p);
         body.push(l.slice(p.length));
       }
-      shape = { kind: "item", prefixes, cont: indent, suffix: "", content: body.join("\n"), task: task?.state, check: isCheckLine(lines[0]) || undefined };
+      // 只有一行的子彈筆記任務：行首的時間與行尾的排程日期也算區塊語法（像標題結尾的 #），
+      // 打字、按 Enter 都不會動到它們；畫面上在內容後面顯示「2026/11/18 23:00」標籤
+      let suffix = "";
+      let when: Shape["when"];
+      const w = task && !task.check && lines.length === 1 ? contentWhen(body[0]) : null;
+      if (w) {
+        prefixes[0] += body[0].slice(0, w.timeLen);
+        suffix = body[0].slice(body[0].length - w.dateLen);
+        body[0] = body[0].slice(w.timeLen, body[0].length - w.dateLen);
+        when = { date: w.date, time: w.time };
+      }
+      shape = { kind: "item", prefixes, cont: indent, suffix, content: body.join("\n"), task: task?.state, check: isCheckLine(lines[0]) || undefined, when };
       break;
     }
     case "quote": {
@@ -132,7 +146,9 @@ export function recompose(shape: Shape, content: string): string {
   const text = shape.kind === "heading" ? content.replace(/\n/g, " ") : content;
   const rows = layout(shape, text);
   const lines = text.split("\n");
-  return rows.map((r, i) => r.pre + lines[i]).join("\n") + shape.suffix;
+  // 任務的日期前面一定要有空白（原本只有日期、後來打了字的任務）
+  const suffix = shape.when?.date && text && !/^[ \t]/.test(shape.suffix) ? " " + shape.suffix : shape.suffix;
+  return rows.map((r, i) => r.pre + lines[i]).join("\n") + suffix;
 }
 
 /** 行內內容的位置 → 區塊原始碼的位置。 */
@@ -279,6 +295,9 @@ function escapeLineStarts(s: string): string {
       else if (/^\d{1,9}[.)](\s|$)/.test(r)) r = r.replace(/^(\d{1,9})([.)])/, "$1\\$2");
       else if (/^(=+|-+)\s*$/.test(r) && i > 0) r = "\\" + r;
       else if (/^(`{3,}|~{3,})/.test(r)) r = "\\" + r;
+      // 第一行開頭的 `{`：不跳脫的話，在清單項目裡打 `{o}` 還沒打空白就會變成子彈筆記的任務標記，
+      // 畫面（符號）跟著變了、正在編輯的文字卻沒重畫，游標與文字會錯位（方括號本來就會跳脫）
+      else if (i === 0 && r.startsWith("{")) r = "\\" + r;
       l = marks + r;
       // 行尾兩個以上空白會變成硬換行
       if (i < all.length - 1) l = l.replace(/[ \t]+$/, "");

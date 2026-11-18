@@ -1,4 +1,5 @@
-import { TaskGlyph } from "../bujo/TaskGlyph";
+import { TaskGlyph, WhenChip } from "../bujo/TaskGlyph";
+import { whenLabel } from "../bujo/time";
 import { unitDisplayHtml } from "../editor/Editor";
 import { dayTitle, weekday } from "../journal/journal";
 import { findBacklinks, type Source } from "./refIndex";
@@ -51,9 +52,12 @@ export function Backlinks(props: {
               >
                 {u.kind === "item" ? (
                   <ul>
-                    <li className={u.task ? `task t-${u.task}` : undefined}>
+                    <li className={u.task ? `task t-${u.task}${u.when ? " has-when" : ""}` : undefined}>
                       {u.task && <TaskGlyph state={u.task} />}
                       <div dangerouslySetInnerHTML={{ __html: unitDisplayHtml(u) }} />
+                      {u.task && u.when && (
+                        <WhenChip date={u.when.date} label={whenLabel(u.when.date, u.when.time)} state={u.task} />
+                      )}
                     </li>
                   </ul>
                 ) : (

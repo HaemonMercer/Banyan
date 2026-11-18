@@ -150,6 +150,28 @@
   color: var(--ed-muted);
   font-size: 12px;
 }
+.pr-del {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--ed-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+.page-row:hover .pr-del,
+.page-row:focus-within .pr-del,
+.pr-del:focus-visible {
+  opacity: 1;
+}
+.pr-del:hover {
+  background: var(--ed-hover);
+  color: var(--ed-danger);
+}
 .pr-refs {
   color: var(--ed-muted);
   font-size: 13px;

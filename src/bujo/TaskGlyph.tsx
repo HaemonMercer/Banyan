@@ -91,11 +91,14 @@ export function TaskGlyph(props: {
       }}
     >
       {props.box ? (
-        props.state === "done" && (
-          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
-            <path d="M2.5 6.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )
+        // 外層佔一行高、用 flex 置中，方框畫在裡面（不用 calc 算 top：WebView2 會留下殘影）
+        <span className="task-square">
+          {props.state === "done" && (
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+              <path d="M2.5 6.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </span>
       ) : (
         <TaskIcon state={props.state} />
       )}
@@ -140,4 +143,40 @@ function localToday(): string {
   const t = new Date();
   const p = (x: number) => String(x).padStart(2, "0");
   return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+}
+
+/**
+ * 任務的「何時」標籤：排程日期與時間「2026/11/18 23:00」（使用者畫的樣子：內容後面的外框標籤）。
+ * 未完成或已排程、日期已過的是紅色，今天是藍色。點一下由呼叫的人開日期與時間的選單。
+ */
+export function WhenChip(props: {
+  date: string | null;
+  label: string;
+  state: TaskState;
+  onClick?: (x: number, y: number) => void;
+}) {
+  const now = localToday();
+  const pending = props.state === "open" || props.state === "scheduled" || props.state === "event";
+  const cls = !pending || !props.date ? "" : props.date < now ? " overdue" : props.date === now ? " today" : "";
+  return (
+    <span
+      className={`when-chip${cls}`}
+      role="button"
+      contentEditable={false}
+      title="Change date and time"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const r = e.currentTarget.getBoundingClientRect();
+        props.onClick?.(r.left, r.bottom + 4);
+      }}
+    >
+      {props.label}
+    </span>
+  );
 }

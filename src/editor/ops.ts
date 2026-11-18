@@ -159,9 +159,9 @@ function nextMarker(firstLine: string): string {
   if (!m) return "- ";
   const [, indent, bullet, num, delim] = m;
   const marker = num !== undefined ? `${indent}${Number(num) + 1}${delim} ` : `${indent}${bullet} `;
-  // 任務的下一行還是任務（未完成）；事件的下一行還是事件
+  // 任務的下一行還是任務（未完成）；事件的下一行還是事件；待辦的下一行是未勾選的待辦
   const task = lineTask(firstLine);
-  return task ? marker + taskMark(task.state === "event" ? "event" : "open") : marker;
+  return task ? marker + taskMark(task.state === "event" ? "event" : "open", task.check) : marker;
 }
 
 function isLooseAt(doc: ParsedDoc, unit: Unit): boolean {
@@ -347,14 +347,14 @@ export function turnInto(text: string, type: BlockType): { text: string; caret: 
       break;
     case "task":
     case "event": {
-      // 子彈筆記：任務 `- [ ] `、事件 `- [o] `
+      // 子彈筆記：任務 `- { } `、事件 `- {o} `
       const mark = "- " + taskMark(type === "task" ? "open" : "event");
       out = lines.map((l, i) => (i === 0 ? mark : l ? "  " : "") + l).join("\n");
       break;
     }
     case "todo": {
-      // 待辦清單：核取方塊 `* [ ] `（`*` 與子彈筆記的任務 `- [ ] ` 分開）
-      const mark = "* " + taskMark("open");
+      // 待辦清單：核取方塊 `* [ ] `（方括號；子彈筆記的任務用大括號）
+      const mark = "* " + taskMark("open", true);
       out = lines.map((l, i) => (i === 0 ? mark : l ? "  " : "") + l).join("\n");
       break;
     }

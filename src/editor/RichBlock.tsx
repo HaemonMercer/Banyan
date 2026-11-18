@@ -7,7 +7,8 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { Marks } from "./inline";
-import { TaskGlyph } from "../bujo/TaskGlyph";
+import { TaskGlyph, WhenChip } from "../bujo/TaskGlyph";
+import { whenLabel } from "../bujo/time";
 import { stripTaskShortcut, stripTodoShortcut, taskShortcut, todoShortcut, type TaskState } from "../bujo/tasks";
 import type { ListInfo, UnitKind } from "./markdown";
 import {
@@ -129,6 +130,8 @@ interface Props {
   onTaskClick?: () => void;
   /** 在任務符號上按右鍵 */
   onTaskMenu?: (x: number, y: number) => void;
+  /** 點任務的日期時間標籤 */
+  onWhenMenu?: (x: number, y: number) => void;
 }
 
 /** 所見即所得編輯的區塊：可編輯的元素，內容是渲染後的行內 Markdown。 */
@@ -327,9 +330,8 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
         if (rest !== null) {
           last.current = null;
           // `* ` 項目裡打 `[] `／`[x] `：待辦清單；其他是子彈筆記的任務
-          const star = kind === "item" && /^\s*\*/.test(shapeRef.current.prefixes[0] ?? "");
-          if (star && (tm.state === "open" || tm.state === "done")) p.onShortcut("todo", rest, tm.state);
-          else p.onShortcut("task", rest, tm.state);
+          // `[] `、`[x] ` 是待辦清單；`{} `、`{x} `、`{o} `… 是子彈筆記的任務
+          p.onShortcut(tm.check ? "todo" : "task", rest, tm.state);
           return;
         }
       }
@@ -406,9 +408,17 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     case "item": {
       const task = p.shape.task;
       const li = (
-        <li className={task ? `task t-${task}${p.shape.check ? " check" : ""}` : undefined}>
+        <li className={task ? `task t-${task}${p.shape.check ? " check" : ""}${p.shape.when ? " has-when" : ""}` : undefined}>
           {task && <TaskGlyph state={task} box={p.shape.check} onClick={p.onTaskClick} onMenu={p.onTaskMenu} />}
           <div {...common} />
+          {task && p.shape.when && (
+            <WhenChip
+              date={p.shape.when.date}
+              label={whenLabel(p.shape.when.date, p.shape.when.time)}
+              state={task}
+              onClick={p.onWhenMenu}
+            />
+          )}
         </li>
       );
       return p.list?.ordered ? <ol start={p.list.number}>{li}</ol> : <ul>{li}</ul>;

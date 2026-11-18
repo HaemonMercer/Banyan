@@ -45,8 +45,7 @@ body {
   border-bottom: 1px solid transparent;
   transition: border-color 0.15s;
 }
-.topbar.scrolled,
-.with-source .topbar {
+.topbar.scrolled {
   border-bottom-color: var(--ed-faint);
 }
 
@@ -76,14 +75,16 @@ body {
 .actions {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 4px;
   flex: none;
   color: var(--ed-muted);
 }
 .save-state {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 28px;
+  cursor: default;
 }
 .save-state::before {
   content: "";
@@ -95,6 +96,17 @@ body {
 }
 .save-state.saving::before {
   background: var(--ed-muted);
+  animation: save-pulse 1s ease-in-out infinite;
+}
+@keyframes save-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .save-state.saving::before {
+    animation: none;
+  }
 }
 
 .tool {
@@ -175,45 +187,17 @@ body {
   }
 }
 
-/* ─── 原始碼面板 ─── */
-
-.md-source-panel {
-  width: 40%;
-  min-width: 300px;
-  max-width: 560px;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--ed-faint);
-  background: var(--ed-chrome);
+/* 頂端列右邊全是圖示：一樣大、按下去的（日曆開著）有底色 */
+.actions .icon-btn {
+  width: 28px;
+  height: 28px;
 }
-.panel-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 8px 0 16px;
-  flex: none;
-  border-bottom: 1px solid var(--ed-faint);
-  font-size: 13px;
-}
-.panel-title {
-  font-weight: 600;
-}
-.panel-tag {
-  flex: 1;
-  color: var(--ed-muted);
-  font-size: 12px;
-}
-.md-source-panel textarea {
-  flex: 1;
-  border: 0;
-  outline: none;
-  resize: none;
-  padding: 16px 18px;
-  background: transparent;
+.actions .icon-btn.on {
+  background: var(--ed-hover);
   color: var(--ed-text);
-  font-family: var(--ed-mono);
+}
+.actions .stat {
+  margin: 0 6px;
   font-size: 13px;
-  line-height: 1.7;
-  tab-size: 4;
+  white-space: nowrap;
 }

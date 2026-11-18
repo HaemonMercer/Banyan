@@ -20,7 +20,7 @@ describe("頁面連結", () => {
   });
 
   it("找出原始碼裡的連結（程式碼裡的不算、不重複）", () => {
-    const src = "今天讀了 [[原子習慣]]，想到 [[專案 A]]。\n\n- [ ] 寫 [[原子習慣]] 心得\n\n`[[不算]]`\n\n```\n[[也不算]]\n```\n\n[[my\\_page]]";
+    const src = "今天讀了 [[原子習慣]]，想到 [[專案 A]]。\n\n- { } 寫 [[原子習慣]] 心得\n\n`[[不算]]`\n\n```\n[[也不算]]\n```\n\n[[my\\_page]]";
     expect(extractRefs(src)).toEqual(["原子習慣", "專案 A", "my_page"]);
   });
 
@@ -64,7 +64,7 @@ describe("頁面連結", () => {
 
 describe("反向連結", () => {
   const sources: Source[] = [
-    { kind: "day", key: "2026-11-15", content: "- [ ] 讀 [[原子習慣]] 第三章\n- 散步\n" },
+    { kind: "day", key: "2026-11-15", content: "- { } 讀 [[原子習慣]] 第三章\n- 散步\n" },
     { kind: "day", key: "2026-11-17", content: "今天想到 [[原子習慣]] 的觀念。\n\n無關的段落\n" },
     { kind: "page", key: "讀書清單", content: "- [[原子習慣]]\n- [[深度工作]]\n" },
     { kind: "page", key: "原子習慣", content: "自己提到 [[原子習慣]] 不算\n" },
@@ -90,19 +90,27 @@ describe("反向連結", () => {
 
 describe("所見即所得的任務", () => {
   it("任務標記算區塊語法，內容不含標記", () => {
-    const s = decompose("- [ ] 買牛奶", "item")!;
+    const s = decompose("- { } 買牛奶", "item")!;
     expect(s.task).toBe("open");
     expect(s.content).toBe("買牛奶");
-    expect(recompose(s, "買豆漿")).toBe("- [ ] 買豆漿");
-    expect(recompose(decompose("- [ ]", "item")!, "x")).toBe("- [ ] x");
+    expect(recompose(s, "買豆漿")).toBe("- { } 買豆漿");
+    expect(recompose(decompose("- { }", "item")!, "x")).toBe("- { } x");
     expect(decompose("- 筆記", "item")!.task).toBeUndefined();
   });
 });
 
-describe("任務行尾的日期連結", () => {
-  it("只是內容裡的普通連結（沒有附加日期）", () => {
-    const s = decompose("- [ ] 繳電費 [[2026-11-20]]", "item")!;
-    expect(s.content).toBe("繳電費 [[2026-11-20]]");
-    expect(recompose(s, "繳水費 [[2026-11-20]]")).toBe("- [ ] 繳水費 [[2026-11-20]]");
+describe("所見即所得的任務時間與排程日期", () => {
+  it("時間藏在前綴、日期藏在 suffix；改內容時兩者都不動", () => {
+    const s = decompose("- {<} 23:00 繳電費 [[2026-11-18]]", "item")!;
+    expect(s.content).toBe("繳電費");
+    expect(s.when).toEqual({ date: "2026-11-18", time: { start: 1380 } });
+    expect(recompose(s, "繳水費")).toBe("- {<} 23:00 繳水費 [[2026-11-18]]");
+    // 原本只有日期的任務，打字後日期前面補空白
+    const only = decompose("- {<} [[2026-11-18]]", "item")!;
+    expect(only.content).toBe("");
+    expect(recompose(only, "x")).toBe("- {<} x [[2026-11-18]]");
+    // 不是任務、待辦、多行的任務：照常是內容
+    expect(decompose("- 讀 [[2026-11-20]]", "item")!.content).toBe("讀 [[2026-11-20]]");
+    expect(decompose("- [ ] 10:00 待辦 [[2026-11-20]]", "item")!.content).toBe("10:00 待辦 [[2026-11-20]]");
   });
 });

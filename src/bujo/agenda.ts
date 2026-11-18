@@ -27,7 +27,7 @@ function collect(kind: "day" | "page", contents: Record<string, string>): Agenda
   if (hit) return hit;
   const out: AgendaItem[] = [];
   for (const [key, content] of Object.entries(contents)) {
-    if (!content.includes("[")) continue;
+    if (!content.includes("{") && !content.includes("[")) continue;
     for (const t of collectTasks(content)) {
       const { time, rest } = parseTime(t.text);
       out.push({ ...t, kind, key, time, title: rest });

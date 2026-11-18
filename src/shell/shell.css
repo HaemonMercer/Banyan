@@ -24,8 +24,7 @@
 /* 切換主題時顏色一起淡入，不要一格一格跳 */
 body,
 .sidebar,
-.topbar,
-.md-source-panel {
+.topbar {
   transition: background-color 0.2s, color 0.2s, border-color 0.2s;
 }
 
@@ -280,6 +279,9 @@ nav.sb-section {
 }
 .star-btn.on:hover {
   color: #e0a526;
+}
+.delete-btn:hover {
+  color: var(--ed-danger);
 }
 .crumbs .star-btn {
   margin-left: -2px;

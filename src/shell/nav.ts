@@ -3,8 +3,11 @@
  * 都只是使用者偏好，存在 localStorage；讀寫失敗就用預設值，不影響使用。
  */
 
-/** 可以收藏、會出現在「最近」的目標：某天的日記、某個頁面或某個白板。 */
-export type NavTarget = { kind: "day"; date: string } | { kind: "page"; name: string } | { kind: "board"; name: string };
+/** 可以收藏、會出現在「最近」的目標：某天的日記、某個頁面或某個資料庫。 */
+export type NavTarget =
+  | { kind: "day"; date: string }
+  | { kind: "page"; name: string }
+  | { kind: "database"; name: string };
 
 export function targetKey(t: NavTarget): string {
   return t.kind === "day" ? `day:${t.date}` : `${t.kind}:${t.name}`;
@@ -18,7 +21,7 @@ function isTarget(v: unknown): v is NavTarget {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object") return false;
   if (o.kind === "day") return typeof o.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(o.date);
-  if (o.kind === "page" || o.kind === "board") return typeof o.name === "string" && o.name.trim() !== "";
+  if (o.kind === "page" || o.kind === "database") return typeof o.name === "string" && o.name.trim() !== "";
   return false;
 }
 
@@ -32,6 +35,11 @@ export function pushRecent(list: NavTarget[], t: NavTarget, limit = RECENT_LIMIT
 /** 收藏或取消收藏；新收藏的加在最後面。 */
 export function toggleFavorite(list: NavTarget[], t: NavTarget): NavTarget[] {
   return list.some((x) => sameTarget(x, t)) ? list.filter((x) => !sameTarget(x, t)) : [...list, t];
+}
+
+/** 從收藏或最近清單拿掉一個目標（刪除文件時用）。 */
+export function forgetTarget(list: NavTarget[], t: NavTarget): NavTarget[] {
+  return list.some((x) => sameTarget(x, t)) ? list.filter((x) => !sameTarget(x, t)) : list;
 }
 
 export function isFavorite(list: NavTarget[], t: NavTarget): boolean {

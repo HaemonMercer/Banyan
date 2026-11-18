@@ -756,10 +756,44 @@ kbd {
     transform: translate(-50%, 8px);
   }
 }
-.format-bar .fb-kind {
+/* 區塊類型：點開「Turn into」選單 */
+.format-bar button.fb-kind {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
   min-width: 52px;
+  padding: 0 6px 0 4px;
+  margin-left: -6px;
   color: var(--ed-muted);
+  font-size: 13px;
   white-space: nowrap;
+}
+.format-bar button.fb-kind.on {
+  color: var(--ed-accent);
+}
+.format-bar .turn-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  top: auto;
+  max-height: min(420px, calc(100vh - 120px));
+  overflow-y: auto;
+  animation: none;
+}
+.format-bar .turn-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  height: auto;
+  padding: 5px 8px;
+  color: var(--ed-text);
+  font-size: 14px;
+}
+.format-bar .turn-menu .check {
+  margin-left: auto;
 }
 .format-bar .fb-sep {
   width: 1px;
@@ -1433,9 +1467,40 @@ kbd {
 
 /* ─── 子彈筆記：任務、事件的符號 ─── */
 
+/* 符號、核取方塊排在流裡（flex），不用 position: absolute：Tauri（WebView2）裡
+   編輯中的列往下移時（例如在開頭按 Enter），絕對定位的符號舊位置不會重畫，留下一串殘影 */
 .content li.task {
   position: relative;
+  display: flex;
+  align-items: flex-start;
   list-style: none;
+}
+.content li.task > .task-glyph {
+  position: static;
+  flex: none;
+  /* 原本絕對定位的 left: -1.55em，再扣掉 li 的 padding-left 0.15em */
+  margin-left: -1.7em;
+  margin-right: 0.3em;
+}
+.content li.task > .task-box {
+  position: static;
+  flex: none;
+  margin-left: -1.5em;
+  margin-right: 0.45em;
+}
+.content li.task > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 有日期時間標籤：內容只佔需要的寬度，標籤緊接在後面 */
+.content li.task.has-when {
+  align-items: center;
+}
+.content li.task.has-when > div {
+  flex: 0 1 auto;
+}
+.content li.task > .when-chip {
+  flex: none;
 }
 .task-glyph {
   position: absolute;
@@ -1525,10 +1590,20 @@ li.task.t-cancelled > .task-glyph {
 
 /* ─── 待辦清單的核取方塊（* [ ]） ─── */
 
+/* 與 .task-glyph 一樣：外層從第一行頂端開始、佔一行高，方框用 flex 垂直置中。
+   不要用 calc 算 top，也不要加 transition：Tauri（WebView2）編輯時方框會一路往下畫出殘影 */
 .task-box {
   position: absolute;
   left: -1.35em;
-  top: calc((1lh - 1.05em) / 2);
+  top: 0;
+  display: flex;
+  align-items: center;
+  width: 1.05em;
+  height: 1lh;
+  cursor: pointer;
+  user-select: none;
+}
+.task-square {
   display: grid;
   place-items: center;
   width: 1.05em;
@@ -1537,14 +1612,11 @@ li.task.t-cancelled > .task-glyph {
   border: 1.5px solid var(--ed-text-soft);
   border-radius: 3px;
   color: #fff;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.1s, border-color 0.1s;
 }
-.task-box:hover {
+.task-box:hover .task-square {
   background: var(--ed-hover);
 }
-.task-box.checked {
+.task-box.checked .task-square {
   border-color: var(--ed-accent);
   background: var(--ed-accent);
 }
@@ -1593,4 +1665,85 @@ li.task.t-done .date-chip,
 li.task.t-cancelled .date-chip,
 li.task.t-scheduled .date-chip {
   opacity: 0.7;
+}
+
+/* ─── 任務的「何時」標籤（排程日期＋時間，內容後面的外框標籤） ─── */
+
+/* 有標籤的任務只有一行：內容與標籤排在同一行 */
+li.task.has-when > div,
+li.task.has-when > div > p {
+  display: inline;
+}
+li.task.has-when > .rich {
+  display: inline-block;
+  min-width: 1em;
+}
+.when-chip {
+  display: inline-block;
+  margin-left: 12px;
+  padding: 0 7px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  color: var(--ed-text-soft);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  vertical-align: 1px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.when-chip:hover {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+.when-chip.today {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+.when-chip.overdue {
+  border-color: var(--ed-danger);
+  color: var(--ed-danger);
+}
+li.task.t-done .when-chip,
+li.task.t-cancelled .when-chip {
+  opacity: 0.6;
+}
+/* 寬度跟著內容：時間欄在中文系統是「上午 03:56」（12 小時制），固定寬度會被截掉 */
+.when-menu {
+  width: max-content;
+  min-width: 260px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 10px 12px;
+}
+.when-menu .when-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  font-size: 13px;
+}
+.when-menu .when-row > span:first-child {
+  width: 36px;
+  color: var(--ed-muted);
+}
+.when-menu input {
+  flex: none;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13px;
+  color-scheme: light dark;
+}
+.when-menu .when-clear {
+  width: auto;
+  margin-left: auto;
+  padding: 2px 6px;
+  color: var(--ed-accent);
+  font-size: 12px;
 }

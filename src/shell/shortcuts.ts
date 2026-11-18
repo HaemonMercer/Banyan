@@ -10,14 +10,13 @@ export type ShortcutAction =
   | "view-journals"
   | "view-bujo"
   | "view-pages"
-  | "view-boards"
+  | "view-databases"
   | "view-doc"
   | "back"
   | "forward"
   | "newer-day"
   | "older-day"
   | "favorite"
-  | "source"
   | "help";
 
 type KeyLike = Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> & { key?: string };
@@ -37,13 +36,12 @@ const ALT: Record<string, ShortcutAction> = {
   Digit2: "view-bujo",
   Digit3: "view-pages",
   Digit4: "view-doc",
-  Digit5: "view-boards",
+  Digit5: "view-databases",
   ArrowLeft: "back",
   ArrowRight: "forward",
   ArrowUp: "newer-day",
   ArrowDown: "older-day",
   KeyS: "favorite",
-  KeyM: "source",
 };
 
 const CTRL: Record<string, ShortcutAction> = {
@@ -70,7 +68,7 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
       [["Alt", "2"], "Calendar"],
       [["Alt", "3"], "All pages"],
       [["Alt", "4"], "Document"],
-      [["Alt", "5"], "Whiteboards"],
+      [["Alt", "5"], "Databases"],
       [["Alt", "←"], "Back"],
       [["Alt", "→"], "Forward"],
       [["Alt", "↑"], "Next day's journal"],
@@ -82,19 +80,7 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
     items: [
       [["Ctrl", "\\"], "Show/hide sidebar"],
       [["Alt", "S"], "Favorite / unfavorite this page"],
-      [["Alt", "M"], "Markdown source panel"],
       [["Ctrl", "/"], "Keyboard shortcuts"],
-    ],
-  },
-  {
-    title: "Whiteboard",
-    items: [
-      [["Double-click"], "Add a card"],
-      [["Ctrl", "Scroll"], "Zoom"],
-      [["Space", "Drag"], "Pan"],
-      [["Shift", "1"], "Fit to screen"],
-      [["Ctrl", "0"], "Zoom to 100%"],
-      [["Delete"], "Remove from whiteboard"],
     ],
   },
   {

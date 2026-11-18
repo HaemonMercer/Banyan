@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { applyTheme, isFavorite, pushRecent, toggleFavorite, type NavTarget } from "./nav";
+import { applyTheme, forgetTarget, isFavorite, pushRecent, toggleFavorite, type NavTarget } from "./nav";
 import { matchShortcut } from "./shortcuts";
 
 const day = (date: string): NavTarget => ({ kind: "day", date });
@@ -24,6 +24,13 @@ describe("最近與收藏", () => {
     expect(isFavorite(fav, page("A"))).toBe(true);
     fav = toggleFavorite(fav, page("A"));
     expect(fav).toEqual([day("2026-11-17")]);
+  });
+
+  it("刪除文件時從清單拿掉；不在清單裡就原樣傳回", () => {
+    const list = [page("A"), day("2026-11-17"), page("B")];
+    expect(forgetTarget(list, page("A"))).toEqual([day("2026-11-17"), page("B")]);
+    expect(forgetTarget(list, day("2026-11-17"))).toEqual([page("A"), page("B")]);
+    expect(forgetTarget(list, page("C"))).toBe(list);
   });
 });
 
@@ -50,6 +57,8 @@ describe("快捷鍵", () => {
   it("Alt 組合鍵", () => {
     expect(matchShortcut(ev("KeyT", { altKey: true }))).toBe("today");
     expect(matchShortcut(ev("Digit3", { altKey: true }))).toBe("view-pages");
+    expect(matchShortcut(ev("Digit5", { altKey: true }))).toBe("view-databases");
+    expect(matchShortcut(ev("KeyW", { altKey: true }))).toBeNull();
     expect(matchShortcut(ev("ArrowLeft", { altKey: true }))).toBe("back");
   });
 

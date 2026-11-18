@@ -92,6 +92,15 @@ describe("DOM 與 Markdown 來回轉換", () => {
     }
   });
 
+  it("開頭的 { 也跳脫（打 {o} 還沒打空白時，清單項目不會先變成子彈筆記的任務）", async () => {
+    const { lineTask } = await import("../bujo/tasks");
+    el.textContent = "{o}";
+    const out = serialize(el).content;
+    expect(out).toBe("\\{o}");
+    expect(lineTask("- " + out)).toBeNull();
+    expect(renderMarkdown(out)).toBe("<p>{o}</p>\n");
+  });
+
   it("中文標點旁的粗體在 CommonMark 不成立時改用 HTML 標籤", () => {
     el.innerHTML = "中文<strong>「粗」</strong>後";
     const out = serialize(el).content;

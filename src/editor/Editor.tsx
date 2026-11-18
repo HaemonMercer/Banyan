@@ -14,7 +14,8 @@ import {
   type ReactNode,
 } from "react";
 import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
-import { TaskGlyph, TaskIcon } from "../bujo/TaskGlyph";
+import { TaskGlyph, TaskIcon, WhenChip } from "../bujo/TaskGlyph";
+import { clock, contentWhen, lineWhen, parseClock, setTimeAt, stripWhenHtml, whenLabel, type TaskTime } from "../bujo/time";
 import {
   TASK_LABEL,
   cycleState,
@@ -135,9 +136,11 @@ export function unitDisplayHtml(unit: Unit): string {
   return clean(taskHtml(unit));
 }
 
-/** 任務區塊顯示用的 HTML：去掉任務標記（改用符號顯示）。 */
+/** 任務區塊顯示用的 HTML：去掉任務標記（改用符號顯示），以及時間與排程日期（改用標籤顯示）。 */
 function taskHtml(unit: Unit): string {
-  return unit.task ? stripTaskHtml(unit.html) : unit.html;
+  if (!unit.task) return unit.html;
+  const html = stripTaskHtml(unit.html);
+  return unit.when ? stripWhenHtml(html, unit.when) : html;
 }
 
 async function openLink(href: string) {
@@ -247,6 +250,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   /** 子彈筆記符號的右鍵選單（任務所在的行） */
   const [taskMenu, setTaskMenu] = useState<{ line: number; x: number; y: number } | null>(null);
+  const [whenMenu, setWhenMenu] = useState<{ line: number; x: number; y: number } | null>(null);
   /** 頁面連結的自動完成：目前選到第幾個、按 Esc 關掉的那個 `[[` 的位置 */
   const [refIndex, setRefIndex] = useState(0);
   const [refClosed, setRefClosed] = useState<number | null>(null);
@@ -319,7 +323,6 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k === "z" || k === "y") {
-        if ((e.target as HTMLElement)?.closest?.(".md-source-panel")) return;
         if (currentEditor !== me) return;
         e.preventDefault();
         undo(k === "y" || e.shiftKey);
@@ -373,6 +376,9 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   const region = state.region;
   const editText = region ? regionText(doc.lines, region) : "";
   const editUnit = region ? regionUnit(doc, region) : undefined;
+  // 編輯中區塊的類型名稱：清單分得出項目符號、編號、待辦、任務、事件
+  const editType = editUnit ? blockTypeOf(editUnit) : null;
+  const editKind = BLOCK_TYPES.find((t) => t.type === editType)?.label ?? kindLabel(editUnit?.kind ?? "paragraph", editUnit?.level);
   /** 這個區塊能不能所見即所得編輯（拆得開區塊語法與行內內容）；不能就用原始碼文字框 */
   const shape = useMemo(() => {
     if (!region) return null;
@@ -581,7 +587,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
     const t = turnInto(rest, type);
     // `* ` 打出來的項目符號留著 `*`（接著打 `[] ` 會變成待辦清單）
     if (type === "bullet" && marker === "*") t.text = "*" + t.text.slice(1);
-    // 任務、待辦快捷帶了狀態（`[x] `、`[o] `…）：換掉預設的 `[ ]`
+    // 任務、待辦快捷帶了狀態（`{x} `、`{o} `、`[x] `…）：換掉預設的未完成
     if ((type === "task" || type === "todo") && state && state !== "open") {
       const nl = t.text.indexOf("\n");
       const first = nl < 0 ? t.text : t.text.slice(0, nl);
@@ -989,20 +995,29 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
     commit({ ...s, source, caret });
   };
 
-  /** 排程：任務留在原處，標成 `<` 並在行尾寫上日期（那天的「該做的事」與行事曆會列出它）。 */
-  const sendTask = (line: number, date: string) => {
+  /**
+   * 改任務的排程日期（null：取消排程）與時間（null：拿掉時間）；undefined 是不改。
+   * 標記、時間、日期都在內容之外；正在編輯這一行時游標跟著內容開頭的位移。
+   */
+  const setWhen = (line: number, date: string | null | undefined, time: TaskTime | null | undefined) => {
     const s = stateRef.current;
-    const source = scheduleAt(s.source, line, date);
+    let source = s.source;
+    if (date !== undefined) source = scheduleAt(source, line, date);
+    if (time !== undefined) source = setTimeAt(source, line, time);
     if (source === s.source) return;
-    // 標記與日期都在內容之外；正在編輯這一行時游標跟著標記長度的變化位移
-    const before = s.source.split("\n")[line] ?? "";
-    const after = source.split("\n")[line] ?? "";
-    const delta = (lineTask(after)?.prefix ?? 0) - (lineTask(before)?.prefix ?? 0);
+    const contentStart = (l: string) => {
+      const t = lineTask(l);
+      return t ? t.prefix + (contentWhen(l.slice(t.prefix))?.timeLen ?? 0) : 0;
+    };
+    const delta = contentStart(source.split("\n")[line] ?? "") - contentStart(s.source.split("\n")[line] ?? "");
     const editing = !!s.region && s.region.start === line;
     const caret = editing ? Math.max(0, s.caret + delta) : s.caret;
     if (editing) pendingSel.current = [caret, caret];
     commit({ ...s, source, caret });
   };
+
+  /** 排程：任務留在原處，標成 `{<}` 並在行尾寫上日期（那天的「該做的事」與行事曆會列出它）。 */
+  const sendTask = (line: number, date: string) => setWhen(line, date, undefined);
 
   /** 兩個區塊之間（含）的所有區塊。 */
   const rangeBetween = (a: number, b: number): number[] => {
@@ -1140,6 +1155,26 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       return;
     }
     commit(insertEmptyAfter(s, last ? last.end : 0));
+  };
+
+  /** 格式列的「Turn into」：正在編輯的區塊換類型，繼續編輯，游標留在同一段文字上。 */
+  const turnEditingInto = (type: BlockType) => {
+    const s = stateRef.current;
+    if (!s.region) return;
+    const text = regionText(s.source.split("\n"), s.region);
+    const t = turnInto(text, type);
+    if (t.text === text) return;
+    // 換掉的是開頭的標記，游標到結尾的距離不變；程式碼框先拿掉前後的圍欄再算
+    let from = text;
+    let at = s.caret;
+    const fence = /^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)(?:\n {0,3}\1[`~]*[ \t]*)?$/.exec(text);
+    if (fence) {
+      const open = text.indexOf("\n") + 1;
+      from = fence[2];
+      at = Math.max(0, Math.min(from.length, at - open));
+    }
+    const caret = type === "code" ? t.caret : Math.max(0, Math.min(t.text.length, t.text.length - (from.length - at)));
+    commit(applyText(s, t.text, caret));
   };
 
   const turnUnitInto = (unit: Unit, type: BlockType) => {
@@ -1416,7 +1451,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   const selectionKeys = useRef<(e: globalThis.KeyboardEvent) => void>(() => {});
   selectionKeys.current = (e) => {
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.("textarea, input, [contenteditable], .md-source-panel")) return;
+    if (target?.closest?.("textarea, input, [contenteditable]")) return;
     if (!isCurrent()) return;
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.key.toLowerCase() === "a") {
@@ -1474,7 +1509,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   const clipboard = useRef<(e: ClipboardEvent) => void>(() => {});
   clipboard.current = (e) => {
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.("textarea, input, [contenteditable], .md-source-panel") || !selRef.current.length) return;
+    if (target?.closest?.("textarea, input, [contenteditable]") || !selRef.current.length) return;
     if (!isCurrent()) return;
     const xs = selectedBlocks();
     if (e.type === "paste") {
@@ -1519,7 +1554,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       return;
     }
     currentEditor = me;
-    if (t.closest(".row .content, .gutter, .popover, .grip, textarea, .md-source-panel, .format-bar")) return;
+    if (t.closest(".row .content, .gutter, .popover, .grip, textarea, .format-bar")) return;
     e.preventDefault();
     const x0 = e.clientX;
     const y0 = e.clientY;
@@ -1621,6 +1656,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
             onShortcut={onShortcut}
             onTaskClick={() => setTask(region.start, "cycle")}
             onTaskMenu={(x, y) => setTaskMenu({ line: region.start, x, y })}
+            onWhenMenu={(x, y) => setWhenMenu({ line: region.start, x, y })}
             onKeyDown={onKeyDown}
             onPaste={onTextPaste}
             onBlur={(el, related) => onBlur(el, region.start, related)}
@@ -1669,7 +1705,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
           />
         )}
         <span className="edit-badge" aria-hidden>
-          {kindLabel(editUnit?.kind ?? "paragraph", editUnit?.level)}
+          {editKind}
           <kbd>Esc</kbd>
         </span>
         {slash && (
@@ -1728,6 +1764,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
             task={u.task ?? null}
             onTask={() => setTask(u.start, "cycle")}
             onTaskMenu={(x, y) => setTaskMenu({ line: u.start, x, y })}
+            onWhenMenu={(x, y) => setWhenMenu({ line: u.start, x, y })}
           />
         );
       }
@@ -1828,10 +1865,12 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       )}
       {region && !drag && (
         <FormatBar
-          kind={kindLabel(editUnit?.kind ?? "paragraph", editUnit?.level)}
+          kind={editKind}
           marks={marks}
           bg={(blockBg(doc, region) as Color | null) ?? null}
           enabled={formattable}
+          current={editType}
+          onTurn={turnEditingInto}
           onToggle={applyMark}
           onColor={applyColor}
           onBlockBg={applyBlockBg}
@@ -1842,6 +1881,24 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
           {drag.label || "(empty)"}
         </div>
       )}
+      {whenMenu && (() => {
+        const line = state.source.split("\n")[whenMenu.line] ?? "";
+        const t = lineTask(line);
+        if (!t) return null;
+        const w = lineWhen(line);
+        return (
+          <WhenMenu
+            key={whenMenu.line}
+            x={whenMenu.x}
+            y={whenMenu.y}
+            date={w?.date ?? null}
+            time={w?.time ?? null}
+            onDate={(d) => setWhen(whenMenu.line, d, undefined)}
+            onTime={(tm) => setWhen(whenMenu.line, undefined, tm)}
+            onClose={() => setWhenMenu(null)}
+          />
+        );
+      })()}
       {taskMenu && (() => {
         const menuLine = state.source.split("\n")[taskMenu.line] ?? "";
         const t = lineTask(menuLine);
@@ -1972,6 +2029,8 @@ interface UnitRowProps {
   task: TaskState | null;
   onTask: () => void;
   onTaskMenu: (x: number, y: number) => void;
+  /** 點任務的日期時間標籤 */
+  onWhenMenu: (x: number, y: number) => void;
 }
 
 /** 圖片、影片下方可以直接點來編輯的圖說。Enter 或點別處儲存，Esc 取消。 */
@@ -2115,9 +2174,17 @@ function UnitRow({ unit, doc, drop, dragging, selected, align, caption, captionP
   const html = { __html: clean(task ? taskHtml(unit) : unit.html) };
   if (unit.kind === "item" && unit.list) {
     const li = task ? (
-      <li className={`task t-${task}${unit.check ? " check" : ""}`}>
+      <li className={`task t-${task}${unit.check ? " check" : ""}${unit.when ? " has-when" : ""}`}>
         <TaskGlyph state={task} box={unit.check} onClick={on.onTask} onMenu={on.onTaskMenu} />
         <div dangerouslySetInnerHTML={html} />
+        {unit.when && (
+          <WhenChip
+            date={unit.when.date}
+            label={whenLabel(unit.when.date, unit.when.time)}
+            state={task}
+            onClick={on.onWhenMenu}
+          />
+        )}
       </li>
     ) : (
       <li dangerouslySetInnerHTML={html} />
@@ -2291,11 +2358,14 @@ function FormatBar(props: {
   marks: Marks | null;
   bg: Color | null;
   enabled: boolean;
+  /** 編輯中區塊的類型（「Turn into」選單打勾） */
+  current: BlockType | null;
+  onTurn: (t: BlockType) => void;
   onToggle: (m: Mark) => void;
   onColor: (kind: "color" | "highlight", c: Color | null) => void;
   onBlockBg: (c: Color | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<"turn" | "color" | null>(null);
   const m = props.marks;
   const active = FORMATS.filter((f) => m?.[f.mark]).map((f) => f.label);
   if (m?.color) active.push(`${COLOR_LABELS[m.color]} text`);
@@ -2303,7 +2373,16 @@ function FormatBar(props: {
   if (props.bg) active.push(`${COLOR_LABELS[props.bg]} background`);
   return (
     <div className="format-bar" role="toolbar" aria-label="Text formatting" onMouseDown={(e) => e.preventDefault()}>
-      <span className="fb-kind">{props.kind}</span>
+      <button
+        className={`fb-kind${open === "turn" ? " on" : ""}`}
+        title="Turn into another block type"
+        aria-haspopup="menu"
+        aria-expanded={open === "turn"}
+        onClick={() => setOpen((v) => (v === "turn" ? null : "turn"))}
+      >
+        {props.kind}
+        <span className="fb-caret">▾</span>
+      </button>
       <span className="fb-sep" />
       {FORMATS.map((f) => (
         <button
@@ -2318,9 +2397,9 @@ function FormatBar(props: {
         </button>
       ))}
       <button
-        className={`fb-color${open ? " on" : ""}`}
+        className={`fb-color${open === "color" ? " on" : ""}`}
         title="Color: text, highlight, block background"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((v) => (v === "color" ? null : "color"))}
       >
         <span className={`fb-a${m?.color ? ` tc-${m.color}` : ""}${m?.highlight ? ` hl-${m.highlight}` : ""}`}>A</span>
         <span className="fb-caret">▾</span>
@@ -2329,7 +2408,27 @@ function FormatBar(props: {
       <span className={`fb-state${active.length ? " has" : ""}`}>
         {!props.enabled ? "Raw text" : active.length ? active.join("・") : "Plain text"}
       </span>
-      {open && (
+      {open === "turn" && (
+        <div className="popover block-menu turn-menu" role="menu">
+          <div className="popover-title">Turn into</div>
+          {BLOCK_TYPES.filter((t) => !INSERT_ONLY.has(t.type) && t.type !== "hr").map((t) => (
+            <button
+              key={t.type}
+              role="menuitem"
+              className={t.type === props.current ? "current" : ""}
+              onClick={() => {
+                setOpen(null);
+                if (t.type !== props.current) props.onTurn(t.type);
+              }}
+            >
+              <span className="tile small">{t.icon}</span>
+              <span className="label">{t.label}</span>
+              {t.type === props.current && <span className="check">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {open === "color" && (
         <div className="popover color-menu">
           {props.enabled && (
             <>
@@ -2405,6 +2504,117 @@ function RefMenu(props: {
 }
 
 const STATE_ITEMS: TaskState[] = ["open", "done", "cancelled", "event"];
+
+/**
+ * 任務的日期與時間選單（點「2026/11/18 23:00」標籤）：日期就是排程（標成 `{<}`、行尾寫日期），
+ * 開始／結束時間寫在內容開頭。改了就直接寫回原始碼。
+ */
+function WhenMenu(props: {
+  x: number;
+  y: number;
+  date: string | null;
+  time: TaskTime | null;
+  onDate: (date: string | null) => void;
+  onTime: (time: TaskTime | null) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: props.x, top: props.y });
+  const [start, setStart] = useState(props.time ? clock(props.time.start) : "");
+  const [end, setEnd] = useState(props.time?.end !== undefined ? clock(props.time.end) : "");
+  const { onClose } = props;
+  useEffect(() => {
+    const down = (e: globalThis.MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    const key = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", down);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", down);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+  useLayoutEffect(() => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    setPos({
+      left: Math.max(8, Math.min(props.x, window.innerWidth - r.width - 8)),
+      top: r.bottom > window.innerHeight - 8 ? Math.max(8, props.y - r.height - 32) : props.y,
+    });
+  }, [props.x, props.y]);
+  /** 開始、結束都填好（或只有開始）才寫入 */
+  const commitTime = (s: string, e: string) => {
+    const a = parseClock(s);
+    if (a === null || a >= 1440) return;
+    const b = parseClock(e);
+    props.onTime(b !== null && b > a ? { start: a, end: b } : { start: a });
+  };
+  return (
+    <div className="popover when-menu" ref={ref} style={pos}>
+      <div className="popover-title">Date & time</div>
+      <div className="when-row">
+        <span>Date</span>
+        <input
+          type="date"
+          value={props.date ?? ""}
+          onChange={(e) => {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) props.onDate(e.target.value);
+          }}
+          aria-label="Date"
+        />
+        {props.date && (
+          <button className="when-clear" onClick={() => props.onDate(null)} title="Unschedule">
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="when-row">
+        <span>Time</span>
+        <input
+          type="time"
+          value={start}
+          onChange={(e) => {
+            const v = e.target.value;
+            // 改開始時間時結束時間跟著移（保持長度）
+            const a = parseClock(start);
+            const b = parseClock(end);
+            const n = parseClock(v);
+            const ne = a !== null && b !== null && n !== null && b > a ? clock(Math.min(1439, n + b - a)) : end;
+            setStart(v);
+            setEnd(ne);
+            commitTime(v, ne);
+          }}
+          aria-label="Start time"
+        />
+        <span>–</span>
+        <input
+          type="time"
+          value={end}
+          onChange={(e) => {
+            setEnd(e.target.value);
+            commitTime(start, e.target.value);
+          }}
+          aria-label="End time"
+        />
+      </div>
+      {props.time && (
+        <div className="when-row">
+          <button
+            className="when-clear"
+            onClick={() => {
+              setStart("");
+              setEnd("");
+              props.onTime(null);
+            }}
+          >
+            All day
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** 子彈筆記符號的選單：改狀態、排程。 */
 function TaskMenu(props: {

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { contentHtml, escapeWithRefs } from "../editor/wysiwyg";
 import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, JournalIcon } from "../editor/icons";
 import { addDays, dateKey, isDateKey, monthGrid, monthName, monthShort, parseKey, weekday, weekdayShort, WEEKDAYS_MIN } from "../journal/journal";
@@ -148,44 +148,101 @@ function usePlace(ref: RefObject<HTMLElement | null>, x: number, y: number) {
 
 // ─── 拖曳 ──────────────────────────────────────────────────────
 
-/** 正在拖的項目與抓住的位置（離開始時間幾分鐘） */
-let dragging: { key: string; grab: number } | null = null;
+/*
+ * 用指標事件自己做拖曳，不用 HTML5 的 drag／drop：Tauri 在 Windows 開著原生的檔案拖放
+ * （編輯器拖檔案進來要用）時，網頁收不到 HTML5 的拖曳事件，在 App 裡會完全拖不動。
+ * 放置目標用 `data-drop`（day：格子、改日期；allday：全天列、拿掉時間；time：時間表，
+ * 依位置算時間）與 `data-date` 標記。
+ */
 
-function dragProps(t: CalItem, grabAt?: (e: DragEvent) => number) {
-  return {
-    draggable: true,
-    onDragStart: (e: DragEvent) => {
-      dragging = { key: t.key, grab: grabAt?.(e) ?? 0 };
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", t.title);
-      e.stopPropagation();
-    },
-    onDragEnd: () => {
-      dragging = null;
-    },
-  };
+type DropKind = "day" | "allday" | "time";
+
+const dropAttrs = (kind: DropKind, date: string) => ({ "data-drop": kind, "data-date": date });
+
+/** 放開時由行事曆處理（掛在 CalendarView 上） */
+let dropHandler: ((key: string, kind: DropKind, date: string, el: HTMLElement, y: number, grab: number) => void) | null =
+  null;
+
+/** 時間表上的位置 → 分鐘（扣掉抓住的位置，對齊 SNAP） */
+function minuteIn(el: HTMLElement, y: number, grab = 0): number {
+  const r = el.getBoundingClientRect();
+  const min = ((y - r.top) / HOUR) * 60 - grab;
+  return Math.max(0, Math.min(1440 - SNAP, Math.round(min / SNAP) * SNAP));
 }
 
-/** 放置目標：拖過時加上 drop-over 樣式 */
-function dropProps(onDrop: (key: string, e: DragEvent) => void) {
+function dropTarget(x: number, y: number): HTMLElement | null {
+  return document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]") ?? null;
+}
+
+function startDrag(t: CalItem, x0: number, y0: number, grab: number) {
+  let ghost: HTMLDivElement | null = null;
+  let over: HTMLElement | null = null;
+  const highlight = (el: HTMLElement | null) => {
+    if (el === over) return;
+    over?.classList.remove("drop-over");
+    el?.classList.add("drop-over");
+    over = el;
+  };
+  const finish = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("keydown", key, true);
+    highlight(null);
+    ghost?.remove();
+    document.body.classList.remove("cal-dragging");
+  };
+  const move = (e: PointerEvent) => {
+    if (!ghost) {
+      // 移動一點點才算拖曳（不然就是一般的點擊）
+      if (Math.hypot(e.clientX - x0, e.clientY - y0) < 5) return;
+      ghost = document.createElement("div");
+      ghost.className = "cal-drag-ghost";
+      ghost.textContent = t.title || "(empty)";
+      document.body.appendChild(ghost);
+      document.body.classList.add("cal-dragging");
+      window.getSelection()?.removeAllRanges();
+    }
+    ghost.style.left = e.clientX + 12 + "px";
+    ghost.style.top = e.clientY + 10 + "px";
+    const el = dropTarget(e.clientX, e.clientY);
+    highlight(el);
+    // 拖到時間表時顯示會放在幾點
+    if (el?.dataset.drop === "time") ghost.dataset.time = clock(minuteIn(el, e.clientY, grab));
+    else delete ghost.dataset.time;
+  };
+  const up = (e: PointerEvent) => {
+    const dragged = !!ghost;
+    finish();
+    if (!dragged) return;
+    // 放開後接著的 click 不要再開新增或詳細視窗
+    const stop = (ev: Event) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+    };
+    window.addEventListener("click", stop, { capture: true, once: true });
+    window.setTimeout(() => window.removeEventListener("click", stop, { capture: true }), 300);
+    const el = dropTarget(e.clientX, e.clientY);
+    const kind = el?.dataset.drop as DropKind | undefined;
+    const date = el?.dataset.date;
+    if (el && kind && date && dropHandler) dropHandler(t.key, kind, date, el, e.clientY, grab);
+  };
+  // Esc 取消拖曳
+  const key = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || !ghost) return;
+    e.stopPropagation();
+    finish();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("keydown", key, true);
+}
+
+/** 可以拖的項目：按住（不是在符號或連結上）移動就開始拖 */
+function dragProps(t: CalItem, grabAt?: (e: ReactPointerEvent) => number) {
   return {
-    onDragOver: (e: DragEvent) => {
-      if (!dragging) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      e.currentTarget.classList.add("drop-over");
-    },
-    onDragLeave: (e: DragEvent) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node)) e.currentTarget.classList.remove("drop-over");
-    },
-    onDrop: (e: DragEvent) => {
-      e.currentTarget.classList.remove("drop-over");
-      if (!dragging) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const key = dragging.key;
-      onDrop(key, e);
-      dragging = null;
+    onPointerDown: (e: ReactPointerEvent) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest(".task-glyph, a")) return;
+      startDrag(t, e.clientX, e.clientY, grabAt?.(e) ?? 0);
     },
   };
 }
@@ -228,9 +285,9 @@ export function CalendarView(props: { journals: Docs; now: string }) {
   const tasks = useMemo(() => {
     const out: CalItem[] = [];
     for (const [date, content] of Object.entries(journals.contents)) {
-      if (!content.includes("[")) continue;
+      if (!content.includes("{") && !content.includes("[")) continue;
       for (const t of collectTasks(content)) {
-        // 舊的 `[<]`（沒有寫排到哪天）不知道該放哪天，不顯示
+        // 沒有寫排到哪天的 `{<}`不知道該放哪天，不顯示
         if (t.state === "scheduled" && !t.due) continue;
         const { time, rest } = parseTime(t.text);
         out.push({ ...t, date, time, title: rest, key: date + ":" + t.line });
@@ -351,6 +408,22 @@ export function CalendarView(props: { journals: Docs; now: string }) {
   const detailTask = detail ? find(detail.key) : undefined;
   const days = view === "week" ? Array.from({ length: 7 }, (_, i) => addDays(weekStart(cursor), i)) : [cursor];
 
+  // 拖曳放開：格子改日期（時間不變）、全天列拿掉時間、時間表依位置改時間（長度不變）
+  useEffect(() => {
+    dropHandler = (key, kind, date, el, y, grab) => {
+      const t = find(key);
+      if (!t) return;
+      if (kind === "day") return move(t, date);
+      if (kind === "allday") return move(t, date, null);
+      const start = minuteIn(el, y, grab);
+      const len = t.time ? duration(t.time) : 60;
+      move(t, date, t.time && t.time.end === undefined ? { start } : { start, end: Math.min(1440, start + len) });
+    };
+    return () => {
+      dropHandler = null;
+    };
+  });
+
   const common = {
     now,
     cursor,
@@ -358,10 +431,6 @@ export function CalendarView(props: { journals: Docs; now: string }) {
     onOpen: openDetail,
     onState: (t: CalItem) => setState(t, cycleState(t.state, !!t.due)),
     onQuick: openQuick,
-    onDrop: (key: string, date: string, time?: TaskTime | null) => {
-      const t = find(key);
-      if (t) move(t, date, time);
-    },
     find,
     onDay: showDay,
   };
@@ -478,7 +547,6 @@ interface ViewProps {
   onOpen: (t: CalItem, e: MouseEvent) => void;
   onState: (t: CalItem) => void;
   onQuick: (date: string, time: TaskTime | null, e: MouseEvent) => void;
-  onDrop: (key: string, date: string, time?: TaskTime | null) => void;
   find: (key: string) => CalItem | undefined;
   onDay: (date: string) => void;
 }
@@ -548,7 +616,7 @@ function YearView(props: ViewProps & { onMonth: (date: string) => void }) {
                       }`
                     : shortDay(d);
                   return (
-                    <button key={d} className={cls} onClick={() => props.onDay(d)} title={tip}>
+                    <button key={d} className={cls} onClick={() => props.onDay(d)} title={tip} {...dropAttrs("day", d)}>
                       {Number(d.slice(8))}
                     </button>
                   );
@@ -631,7 +699,7 @@ function DayCell(props: ViewProps & { date: string; max: number; inMonth: boolea
     <div
       className={cls}
       onClick={(e) => props.onQuick(date, null, e)}
-      {...dropProps((key) => props.onDrop(key, date))}
+      {...dropAttrs("day", date)}
     >
       <button
         className="cal-dnum"
@@ -707,7 +775,7 @@ function TimeGrid(props: ViewProps & { days: string[]; nowMin: number; view: Vie
   }, [first, days.length]);
 
   /** 時間表上的位置 → 分鐘（對齊 SNAP） */
-  const minuteAt = (e: MouseEvent | DragEvent, grab = 0) => {
+  const minuteAt = (e: MouseEvent, grab = 0) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const min = ((e.clientY - r.top) / HOUR) * 60 - grab;
     return Math.max(0, Math.min(1440 - SNAP, Math.round(min / SNAP) * SNAP));
@@ -742,7 +810,7 @@ function TimeGrid(props: ViewProps & { days: string[]; nowMin: number; view: Vie
             key={d}
             className="tg-allday-cell"
             onClick={(e) => props.onQuick(d, null, e)}
-            {...dropProps((key) => props.onDrop(key, d, null))}
+            {...dropAttrs("allday", d)}
           >
             {(byDay.get(d) ?? [])
               .filter((t) => !t.time)
@@ -773,14 +841,7 @@ function TimeGrid(props: ViewProps & { days: string[]; nowMin: number; view: Vie
                   const start = Math.floor(minuteAt(e) / 30) * 30;
                   props.onQuick(d, { start, end: Math.min(1440, start + 60) }, e);
                 }}
-                {...dropProps((key, e) => {
-                  const t = props.find(key);
-                  const start = minuteAt(e, dragging?.grab ?? 0);
-                  const len = t?.time ? duration(t.time) : 60;
-                  const time: TaskTime =
-                    t?.time && t.time.end === undefined ? { start } : { start, end: Math.min(1440, start + len) };
-                  props.onDrop(key, d, time);
-                })}
+                {...dropAttrs("time", d)}
               >
                 {layoutTimed(timed, (t) => t.time!).map(({ item, col, cols: n }) => (
                   <TimedItem key={item.key} {...props} task={item} col={col} cols={n} />
@@ -820,7 +881,7 @@ function TimedItem(props: ViewProps & { task: CalItem; col: number; cols: number
         if (!clickRef(e)) props.onOpen(task, e);
       }}
       {...dragProps(task, (e) => {
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const r = e.currentTarget.getBoundingClientRect();
         return ((e.clientY - r.top) / HOUR) * 60;
       })}
     >
@@ -1100,7 +1161,7 @@ function MiniMonth(props: { cursor: string; now: string; byDay: Map<string, CalI
             .filter(Boolean)
             .join(" ");
           return (
-            <button key={d} className={cls} onClick={() => props.onPick(d)}>
+            <button key={d} className={cls} onClick={() => props.onPick(d)} {...dropAttrs("day", d)}>
               {Number(d.slice(8))}
             </button>
           );
@@ -1157,11 +1218,11 @@ function Key(props: { onClose: () => void }) {
   const keep = useRef(() => ref.current?.parentElement ?? null).current;
   useDismiss(ref, props.onClose, keep);
   const rows: [TaskState | "note", string, string][] = [
-    ["open", "- [ ] item", "Task"],
-    ["done", "- [x] item", "Done"],
-    ["scheduled", "- [<] item [[2026-11-20]]", "Scheduled to that day"],
-    ["cancelled", "- [-] item", "Cancelled"],
-    ["event", "- [o] item", "Event"],
+    ["open", "- { } item", "Task"],
+    ["done", "- {x} item", "Done"],
+    ["scheduled", "- {<} item [[2026-11-20]]", "Scheduled to that day"],
+    ["cancelled", "- {-} item", "Cancelled"],
+    ["event", "- {o} item", "Event"],
     ["note", "- item", "Note"],
   ];
   const shortcuts: [string, string][] = [
@@ -1190,10 +1251,10 @@ function Key(props: { onClose: () => void }) {
       </table>
       <ul>
         <li>
-          Put the time at the start: <code>- [o] 14:00-15:30 Meeting</code>.
+          Put the time at the start: <code>{"- {o} 14:00-15:30 Meeting"}</code>.
         </li>
         <li>
-          Items go on the day they were written. Scheduling keeps the item where it is, marks it <code>[&lt;]</code> and adds the date at the end; it then shows on that day here and in that day's journal.
+          Items go on the day they were written. Scheduling keeps the item where it is, marks it <code>{"{<}"}</code> and adds the date at the end; it then shows on that day here and in that day's journal.
         </li>
         <li>Click empty space to add, click an item for details, drag to another day to schedule it (same day: change the time); click a symbol to toggle done.</li>
       </ul>

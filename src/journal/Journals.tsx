@@ -184,9 +184,8 @@ export function CalendarButton(props: {
   }, [open]);
   return (
     <div className="calendar-wrap" ref={ref}>
-      <button className={`tool${open ? " on" : ""}`} onClick={() => setOpen((v) => !v)} title="Calendar">
+      <button className={`icon-btn${open ? " on" : ""}`} onClick={() => setOpen((v) => !v)} title="Calendar" aria-label="Calendar">
         <CalendarIcon />
-        <span>Calendar</span>
       </button>
       {open && (
         <Calendar

@@ -1,5 +1,6 @@
 import MarkdownIt, { type Token } from "markdown-it";
 import { isCheckLine, lineTask, type TaskState } from "../bujo/tasks";
+import { lineWhen, type When } from "../bujo/time";
 
 /**
  * CommonMark 解析與渲染。
@@ -45,6 +46,8 @@ export interface Unit {
   task?: TaskState;
   /** 待辦清單的核取方塊（`* [ ]`），不是子彈筆記的任務 */
   check?: boolean;
+  /** 只有一行的子彈筆記任務：行首的時間與行尾的排程日期（畫面上用標籤顯示） */
+  when?: When;
 }
 
 // ─── 版面：縮排與多欄 ─────────────────────────────────────────────
@@ -296,6 +299,7 @@ export function parseDoc(source: string): ParsedDoc {
           list: { ordered, number: first + units.length, listStart: map[0], index: units.length },
           task: lineTask(lines[s] ?? "")?.state,
           check: isCheckLine(lines[s] ?? "") || undefined,
+          when: trimEnd(lines, s, e) - s === 1 ? (lineWhen(lines[s] ?? "") ?? undefined) : undefined,
         });
         j = close;
       }

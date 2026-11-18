@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "./editor/Editor";
+import { countWords } from "./editor/words";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
   CalendarIcon,
-  CloseIcon,
-  CodeIcon,
+  DatabaseIcon,
   DocIcon,
   JournalIcon,
   PagesIcon,
   SidebarIcon,
   StarIcon,
-  WhiteboardIcon,
+  TrashIcon,
 } from "./editor/icons";
 import { CalendarButton, JournalDay, JournalStream } from "./journal/Journals";
 import { addDays, dayTitle, defaultStore, isDateKey, today, weekday } from "./journal/journal";
 import {
   applyTheme,
   FAVORITES_KEY,
+  forgetTarget,
   isFavorite,
   loadJson,
   loadTargets,
@@ -41,11 +42,12 @@ import { allPages, type Source } from "./pages/refIndex";
 import { Backlinks } from "./pages/Backlinks";
 import { OPEN_PAGE_EVENT, setPageNames } from "./pages/pageRef";
 import { defaultPageStore, resolveTarget } from "./pages/pages";
-import { AllPages, PageView } from "./pages/PagesView";
-import { Whiteboard } from "./board/Whiteboard";
-import { BoardsView, OnBoards } from "./board/BoardsView";
-import { defaultBoardStore, forgetCamera } from "./board/store";
-import { emptyBoard, parseBoard, serializeBoard, type CardRef } from "./board/model";
+import { PageView } from "./pages/PagesView";
+import { AllPages } from "./pages/AllPages";
+import { defaultDatabaseStore } from "./database/store";
+import { DatabasesView } from "./database/DatabasesView";
+import { DatabaseView } from "./database/DatabaseView";
+import { newDatabase, parseDatabase, serializeDatabase, type Database } from "./database/model";
 import { pageKey } from "./pages/pageRef";
 import "./App.css";
 import "./shell/shell.css";
@@ -114,23 +116,14 @@ function load(): string {
   }
 }
 
-/** 字數：中日韓文字每字算一個，其他以空白分隔的詞算一個。 */
-function countWords(source: string): number {
-  // 版面標籤（欄位、縮排）不算字
-  const md = source.replace(/^<\/?div\b[^>]*>[ \t]*$/gim, "").replace(/&nbsp;/g, " ");
-  const cjk = md.match(/[㐀-鿿豈-﫿぀-ヿ가-힯]/g)?.length ?? 0;
-  const words = md.replace(/[㐀-鿿豈-﫿぀-ヿ가-힯]/g, " ").match(/[\p{L}\p{N}]+/gu);
-  return cjk + (words?.length ?? 0);
-}
-
 type View =
   | { kind: "journals" }
   | { kind: "day"; date: string }
   | { kind: "bujo" }
   | { kind: "pages" }
   | { kind: "page"; name: string }
-  | { kind: "boards" }
-  | { kind: "board"; name: string }
+  | { kind: "databases" }
+  | { kind: "database"; name: string }
   | { kind: "doc" };
 
 const VIEW_KEY = "banyan.view";
@@ -138,11 +131,11 @@ const VIEW_KEY = "banyan.view";
 function loadView(): View {
   try {
     const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
-    if (v?.kind === "doc" || v?.kind === "journals" || v?.kind === "bujo" || v?.kind === "pages" || v?.kind === "boards") {
+    if (v?.kind === "doc" || v?.kind === "journals" || v?.kind === "bujo" || v?.kind === "pages" || v?.kind === "databases") {
       return { kind: v.kind };
     }
     if (v?.kind === "day" && typeof v.date === "string" && isDateKey(v.date)) return v;
-    if ((v?.kind === "page" || v?.kind === "board") && typeof v.name === "string" && v.name.trim()) return v;
+    if ((v?.kind === "page" || v?.kind === "database") && typeof v.name === "string" && v.name.trim()) return v;
   } catch {
     /* 沒存過或格式不對就從日記開始 */
   }
@@ -166,13 +159,19 @@ function useToday(): string {
 
 /** 側邊欄「主要畫面」：單日日記算在「日記」，單一頁面算在「頁面」 */
 function mainOf(view: View): MainView {
-  return view.kind === "day" ? "journals" : view.kind === "page" ? "pages" : view.kind === "board" ? "boards" : view.kind;
+  return view.kind === "day"
+    ? "journals"
+    : view.kind === "page"
+      ? "pages"
+      : view.kind === "database"
+        ? "databases"
+        : view.kind;
 }
 
 function targetOf(view: View): NavTarget | null {
   return view.kind === "day"
     ? { kind: "day", date: view.date }
-    : view.kind === "page" || view.kind === "board"
+    : view.kind === "page" || view.kind === "database"
       ? { kind: view.kind, name: view.name }
       : null;
 }
@@ -216,7 +215,6 @@ function useHistoryNav() {
 function App() {
   const [markdown, setMarkdown] = useState(load);
   const { view, go, back, forward, canBack, canForward } = useHistoryNav();
-  const [showSource, setShowSource] = useState(false);
   const [saved, setSaved] = useState(true);
   const [scrolled, setScrolled] = useState(false);
   const [sidebar, setSidebar] = useState(
@@ -231,8 +229,8 @@ function App() {
   const pageStore = useMemo(defaultPageStore, []);
   const journals = useDocs(journalStore);
   const pages = useDocs(pageStore);
-  const boardStore = useMemo(defaultBoardStore, []);
-  const boards = useDocs(boardStore);
+  const databaseStore = useMemo(defaultDatabaseStore, []);
+  const databases = useDocs(databaseStore);
   const now = useToday();
   const pageRef = useRef<HTMLElement>(null);
 
@@ -299,33 +297,42 @@ function App() {
   );
   useEffect(() => setPageNames(pageNameList), [pageNameList]);
 
-  // 每份文件放在哪些白板上（頁面、日記下方顯示）
-  const boardIndex = useMemo(() => {
-    const idx = new Map<string, string[]>();
-    for (const [name, json] of Object.entries(boards.contents)) {
-      if (!json) continue;
-      for (const c of parseBoard(json).cards) {
-        const k = c.ref.kind === "page" ? `page:${pageKey(c.ref.name)}` : `day:${c.ref.date}`;
-        const list = idx.get(k) ?? [];
-        if (!list.includes(name)) list.push(name);
-        idx.set(k, list);
-      }
-    }
-    for (const list of idx.values()) list.sort((a, b) => a.localeCompare(b));
-    return idx;
-  }, [boards.contents]);
-  const openBoard = (name: string) => navigate({ kind: "board", name });
-  const openRef = (r: CardRef) => navigate(r.kind === "day" ? { kind: "day", date: r.date } : { kind: "page", name: r.name });
-  const createBoard = (name: string) => {
-    if (!boards.dates?.has(name)) boards.update(name, serializeBoard(emptyBoard()));
-    openBoard(name);
+  // 資料庫（名稱不分大小寫，已經有的用它的寫法）
+  const dbName = (raw: string) => [...(databases.dates ?? [])].find((n) => pageKey(n) === pageKey(raw.trim()));
+  const openDatabase = (name: string) => navigate({ kind: "database", name });
+  /** 建立資料庫並開啟（已經有同名的就開那一個） */
+  const createDatabase = (raw: string) => {
+    const name = raw.trim();
+    if (!name) return;
+    const had = dbName(name);
+    if (!had) databases.update(name, serializeDatabase(newDatabase()));
+    openDatabase(had ?? name);
   };
-  const deleteBoard = (name: string) => {
-    boards.update(name, "");
-    forgetCamera(name);
-    const t: NavTarget = { kind: "board", name };
-    setFavorites((f) => (isFavorite(f, t) ? toggleFavorite(f, t) : f));
-    setRecents((r) => r.filter((x) => !(x.kind === "board" && x.name === name)));
+  const modifyDb = databases.modify;
+  const changeDb = useCallback(
+    (name: string, fn: (db: Database) => Database) => modifyDb(name, (j) => serializeDatabase(fn(parseDatabase(j)))),
+    [modifyDb],
+  );
+  // 資料庫的列標題連到同名頁面（不分大小寫）
+  const pageByKey = useMemo(() => new Map([...(pages.dates ?? [])].map((n) => [pageKey(n), n])), [pages.dates]);
+  const hasPage = useCallback((t: string) => pageByKey.has(pageKey(t)), [pageByKey]);
+  const openPageNamed = (t: string) => navigate({ kind: "page", name: pageByKey.get(pageKey(t)) ?? t });
+
+  /**
+   * 刪除頁面、一天的日記或資料庫：內容寫成空的（Rust 端會刪掉檔案），並從收藏、最近拿掉。
+   * 連到它的 [[連結]] 保留（再點一次就是新的空白頁）。
+   */
+  const deleteDoc = (t: NavTarget) => {
+    if (t.kind === "database") databases.update(t.name, "");
+    else if (t.kind === "page") pages.update(t.name, "");
+    else journals.update(t.date, "");
+    setFavorites((f) => forgetTarget(f, t));
+    setRecents((r) => forgetTarget(r, t));
+  };
+  const confirmDelete = (t: NavTarget): boolean => {
+    if (t.kind === "database") return window.confirm(`Delete the database “${t.name}” and all its rows? This can't be undone.`);
+    const what = t.kind === "day" ? `the journal for ${dayTitle(t.date, now)}` : `the page “${t.name}”`;
+    return window.confirm(`Delete ${what}? Links to it are kept. This can't be undone.`);
   };
 
   // 點頁面連結、反向連結：開啟日記的某一天或某個頁面
@@ -356,7 +363,7 @@ function App() {
   const openTarget = (t: NavTarget) =>
     navigate(t.kind === "day" ? { kind: "day", date: t.date } : { kind: t.kind, name: t.name });
 
-  // 目前畫面的 Markdown（原始碼面板、字數用）；日記串、清單類的畫面不提供原始碼面板
+  // 目前畫面的 Markdown（字數用）；日記串、清單類的畫面不顯示字數
   const day = view.kind === "day" ? view.date : null;
   const pageName = view.kind === "page" ? view.name : null;
   const current =
@@ -367,11 +374,13 @@ function App() {
         : pageName !== null
           ? (pages.contents[pageName] ?? "")
           : null;
-  const setCurrent = (md: string) =>
-    day !== null ? journals.update(day, md) : pageName !== null ? pages.update(pageName, md) : setMarkdown(md);
-  const sourceOpen = showSource && current !== null;
   const target = targetOf(view);
   const starred = !!target && isFavorite(favorites, target);
+  // 有內容（存成檔案）的頁面、日記才能刪
+  const deletable =
+    (day !== null && !!journals.dates?.has(day)) ||
+    (pageName !== null && !!pages.dates?.has(pageName)) ||
+    (view.kind === "database" && !!databases.dates?.has(view.name));
 
   // 快捷鍵：監聽器只裝一次，透過 ref 拿到最新的狀態
   const act = useRef<(a: ShortcutAction) => void>(() => {});
@@ -387,8 +396,8 @@ function App() {
         return navigate({ kind: "bujo" });
       case "view-pages":
         return navigate({ kind: "pages" });
-      case "view-boards":
-        return navigate({ kind: "boards" });
+      case "view-databases":
+        return navigate({ kind: "databases" });
       case "view-doc":
         return navigate({ kind: "doc" });
       case "back":
@@ -401,9 +410,6 @@ function App() {
         return openDay(addDays(day ?? now, -1));
       case "favorite":
         if (target) setFavorites((f) => toggleFavorite(f, target));
-        return;
-      case "source":
-        if (current !== null) setShowSource((v) => !v);
         return;
       case "help":
         return setHelp((v) => !v);
@@ -429,19 +435,20 @@ function App() {
         ? `${weekday(day)}, ${dayTitle(day, now)}`
         : pageName !== null
           ? pageName
-          : view.kind === "board"
+          : view.kind === "database"
             ? view.name
-            : view.kind === "boards"
-              ? "Whiteboards"
+            : view.kind === "databases"
+              ? "Databases"
               : view.kind === "bujo"
             ? "Calendar"
             : view.kind === "pages"
               ? "All pages"
               : "Journals";
-  const isSaved = view.kind === "doc" ? saved : !journals.saving && !pages.saving && !boards.saving;
+  const isSaved =
+    view.kind === "doc" ? saved : !journals.saving && !pages.saving && !databases.saving;
   const TitleIcon =
-    view.kind === "board" || view.kind === "boards"
-      ? WhiteboardIcon
+    view.kind === "database" || view.kind === "databases"
+      ? DatabaseIcon
       : view.kind === "bujo"
       ? CalendarIcon
       : view.kind === "pages"
@@ -453,7 +460,7 @@ function App() {
             : DocIcon;
 
   return (
-    <div className={`app${sourceOpen ? " with-source" : ""}${sidebar ? " with-sidebar" : ""}`}>
+    <div className={`app${sidebar ? " with-sidebar" : ""}`}>
       <Sidebar
         open={sidebar}
         main={target ? null : mainOf(view)}
@@ -501,32 +508,43 @@ function App() {
             )}
           </div>
           <div className="actions">
-            <span className={`save-state${isSaved ? "" : " saving"}`}>{isSaved ? "Saved" : "Saving…"}</span>
+            {/* 儲存狀態只剩圓點：綠色是已儲存、灰色閃爍是儲存中（文字在提示與螢幕閱讀器裡） */}
+            <span
+              className={`save-state${isSaved ? "" : " saving"}`}
+              role="status"
+              aria-label={isSaved ? "Saved" : "Saving…"}
+              title={isSaved ? "Saved" : "Saving…"}
+            />
             {current !== null && <span className="stat">{countWords(current).toLocaleString()} words</span>}
             {view.kind !== "doc" && (
               <CalendarButton dates={journals.dates} now={now} selected={day} onPick={openDay} />
             )}
-            {current !== null && (
+            {deletable && (
               <button
-                className={`tool${showSource ? " on" : ""}`}
-                onClick={() => setShowSource((v) => !v)}
-                title="Show/hide Markdown source (Alt+M)"
+                className="icon-btn delete-btn"
+                onClick={() => {
+                  if (!target || !confirmDelete(target)) return;
+                  // 先離開畫面再刪，以免刪完的空白頁又被記進最近
+                  if (target.kind === "page") navigate({ kind: "pages" });
+                  else if (target.kind === "day") navigate({ kind: "journals" });
+                  else navigate({ kind: "databases" });
+                  deleteDoc(target);
+                }}
+                title={day !== null ? "Delete this journal" : view.kind === "database" ? "Delete this database" : "Delete this page"}
               >
-                <CodeIcon />
-                <span>Source</span>
+                <TrashIcon />
               </button>
             )}
           </div>
         </header>
         <div className="workspace">
-          <main ref={pageRef} className={`page${view.kind === "bujo" ? " page-cal" : view.kind === "board" ? " page-board" : ""}`} onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 4)}>
+          <main ref={pageRef} className={`page${view.kind === "bujo" ? " page-cal" : ""}`} onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 4)}>
             {view.kind === "doc" && <Editor value={markdown} onChange={setMarkdown} />}
             {view.kind === "journals" && <JournalStream journals={journals} pages={pages} now={now} onOpenDay={openDay} />}
             {view.kind === "day" && (
               <>
                 <JournalDay journals={journals} pages={pages} date={view.date} now={now} onOpenDay={openDay} />
                 <div className="journal-backlinks">
-                  <OnBoards names={boardIndex.get(`day:${view.date}`) ?? []} onOpen={openBoard} />
                   <Backlinks
                     name={view.date}
                     self={{ kind: "day", key: view.date }}
@@ -538,7 +556,15 @@ function App() {
               </>
             )}
             {view.kind === "bujo" && <CalendarView journals={journals} now={now} />}
-            {view.kind === "pages" && <AllPages pages={pages} sources={sources} ready={ready} />}
+            {view.kind === "pages" && <AllPages
+                pages={pages}
+                sources={sources}
+                ready={ready}
+                onDelete={(name) => {
+                  const t: NavTarget = { kind: "page", name };
+                  if (confirmDelete(t)) deleteDoc(t);
+                }}
+              />}
             {view.kind === "page" && (
               <PageView
                 name={view.name}
@@ -546,36 +572,34 @@ function App() {
                 sources={sources}
                 now={now}
                 ready={ready}
-                extra={<OnBoards names={boardIndex.get(`page:${pageKey(view.name)}`) ?? []} onOpen={openBoard} />}
               />
             )}
-            {view.kind === "boards" && (
-              <BoardsView boards={boards} onOpen={openBoard} onCreate={createBoard} onDelete={deleteBoard} />
-            )}
-            {view.kind === "board" && (
-              <Whiteboard
-                name={view.name}
-                boards={boards}
-                pages={pages}
-                journals={journals}
-                pageNames={pageNameList}
-                now={now}
-                onOpen={openRef}
+            {view.kind === "databases" && (
+              <DatabasesView
+                databases={databases}
+                onOpen={openDatabase}
+                onCreate={createDatabase}
+                onDelete={(name) => {
+                  const t: NavTarget = { kind: "database", name };
+                  if (confirmDelete(t)) deleteDoc(t);
+                }}
               />
+            )}
+            {view.kind === "database" && (
+              <div className="db-page">
+                <h1 className="db-page-title">{view.name}</h1>
+                <DatabaseView
+                  key={view.name}
+                  name={view.name}
+                  json={databases.contents[view.name] ?? ""}
+                  ready={databases.ready}
+                  onModify={(fn) => changeDb(view.name, fn)}
+                  onOpenPage={openPageNamed}
+                  hasPage={hasPage}
+                />
+              </div>
             )}
           </main>
-          {sourceOpen && (
-            <aside className="md-source-panel">
-              <div className="panel-head">
-                <span className="panel-title">Markdown source</span>
-                <span className="panel-tag">CommonMark 0.31.2</span>
-                <button className="icon-btn" onClick={() => setShowSource(false)} title="Close">
-                  <CloseIcon />
-                </button>
-              </div>
-              <textarea value={current} spellCheck={false} onChange={(e) => setCurrent(e.target.value)} />
-            </aside>
-          )}
         </div>
       </div>
       {help && <ShortcutHelp onClose={() => setHelp(false)} />}

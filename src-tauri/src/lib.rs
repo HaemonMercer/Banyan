@@ -258,24 +258,42 @@ fn page_write(app: AppHandle, name: String, content: String) -> Result<(), Strin
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
-// ─── 白板 ────────────────────────────────────────────────────────
+// ─── 資料庫（參考 Notion 的 Database） ────────────────────────────
 //
-// 每個白板一個 JSON 檔（卡片位置、連線、區段），存在 App 資料夾的 whiteboards/ 底下，
-// 檔名的編碼和頁面相同。卡片指向 pages/ 與 journals/ 裡的文件，內容不重複存。
+// 每個資料庫一個 databases/名稱.json（欄位、資料列、檢視），檔名編碼和頁面相同。
 
-fn boards_root(app: &AppHandle) -> Result<PathBuf, String> {
+fn data_dir(app: &AppHandle, sub: &str) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
-        .join("whiteboards");
+        .join(sub);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
 
+fn read_or_empty(path: &PathBuf) -> Result<String, String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 寫入；內容只有空白就刪掉檔案。
+fn write_or_remove(path: &PathBuf, content: &str) -> Result<(), String> {
+    if content.trim().is_empty() {
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    fs::write(path, content).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
-fn board_list(app: AppHandle) -> Result<Vec<String>, String> {
-    let mut names: Vec<String> = fs::read_dir(boards_root(&app)?)
+fn database_list(app: AppHandle) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = fs::read_dir(data_dir(&app, "databases")?)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
         .filter_map(|e| decoded_name(&e.file_name().to_string_lossy(), ".json"))
@@ -285,26 +303,14 @@ fn board_list(app: AppHandle) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn board_read(app: AppHandle, name: String) -> Result<String, String> {
-    let path = boards_root(&app)?.join(encoded_file(&name, "json")?);
-    match fs::read_to_string(&path) {
-        Ok(s) => Ok(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(e.to_string()),
-    }
+fn database_read(app: AppHandle, name: String) -> Result<String, String> {
+    read_or_empty(&data_dir(&app, "databases")?.join(encoded_file(&name, "json")?))
 }
 
-/// 寫入白板；內容是空的就刪掉檔案（刪除白板）。
+/// 寫入資料庫；內容是空的就刪掉檔案。
 #[tauri::command]
-fn board_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
-    let path = boards_root(&app)?.join(encoded_file(&name, "json")?);
-    if content.trim().is_empty() {
-        if path.exists() {
-            fs::remove_file(&path).map_err(|e| e.to_string())?;
-        }
-        return Ok(());
-    }
-    fs::write(&path, content).map_err(|e| e.to_string())
+fn database_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
+    write_or_remove(&data_dir(&app, "databases")?.join(encoded_file(&name, "json")?), &content)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -321,9 +327,9 @@ pub fn run() {
             page_list,
             page_read,
             page_write,
-            board_list,
-            board_read,
-            board_write
+            database_list,
+            database_read,
+            database_write
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -374,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn board_names() {
+    fn json_names() {
         assert_eq!(encoded_file("研究/計畫", "json").unwrap(), "研究%2F計畫.json");
         let file = encoded_file("a: b", "json").unwrap();
         assert_eq!(decoded_name(&file, ".json").as_deref(), Some("a: b"));

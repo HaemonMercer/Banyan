@@ -41,15 +41,15 @@ describe("時間文字", () => {
 
 describe("setLineTime", () => {
   it("加上、改掉、拿掉時間", () => {
-    expect(setLineTime("- [o] 開會", { start: 600, end: 660 })).toBe("- [o] 10:00-11:00 開會");
-    expect(setLineTime("- [o] 10:00-11:00 開會 [[2026-11-20]]", { start: 780 })).toBe("- [o] 13:00 開會 [[2026-11-20]]");
-    expect(setLineTime("- [ ] 9:00 寫報告", null)).toBe("- [ ] 寫報告");
+    expect(setLineTime("- {o} 開會", { start: 600, end: 660 })).toBe("- {o} 10:00-11:00 開會");
+    expect(setLineTime("- {o} 10:00-11:00 開會 [[2026-11-20]]", { start: 780 })).toBe("- {o} 13:00 開會 [[2026-11-20]]");
+    expect(setLineTime("- { } 9:00 寫報告", null)).toBe("- { } 寫報告");
     expect(setLineTime("  * [x] 打電話", { start: 60 })).toBe("  * [x] 01:00 打電話");
   });
   it("不是任務就不變", () => {
     expect(setLineTime("- 筆記", { start: 60 })).toBe("- 筆記");
-    expect(setTimeAt("a\n- [ ] b", 0, { start: 60 })).toBe("a\n- [ ] b");
-    expect(setTimeAt("a\n- [ ] b", 1, { start: 60 })).toBe("a\n- [ ] 01:00 b");
+    expect(setTimeAt("a\n- { } b", 0, { start: 60 })).toBe("a\n- { } b");
+    expect(setTimeAt("a\n- { } b", 1, { start: 60 })).toBe("a\n- { } 01:00 b");
   });
 });
 
@@ -70,5 +70,32 @@ describe("layoutTimed", () => {
       [130, 1, 2],
       [300, 0, 1],
     ]);
+  });
+});
+
+describe("任務的何時（排程日期＋時間）", async () => {
+  const { lineWhen, whenLabel, stripWhenHtml } = await import("./time");
+  it("讀出時間與日期", () => {
+    expect(lineWhen("- {<} 23:00 Task [[2026-11-18]]")).toEqual({
+      date: "2026-11-18",
+      time: { start: 1380 },
+      timeLen: 6,
+      dateLen: 15,
+    });
+    expect(lineWhen("- { } Task [[2026-11-18]]")?.date).toBe("2026-11-18");
+    expect(lineWhen("- {o} 9:00-10:30 開會")?.time).toEqual({ start: 540, end: 630 });
+    expect(lineWhen("- { } 沒有")).toBeNull();
+    // 待辦清單不算
+    expect(lineWhen("- [ ] 23:00 待辦 [[2026-11-18]]")).toBeNull();
+  });
+  it("標籤文字", () => {
+    expect(whenLabel("2026-11-18", { start: 1380 })).toBe("2026/11/18 23:00");
+    expect(whenLabel("2026-11-18", null)).toBe("2026/11/18");
+    expect(whenLabel(null, { start: 540, end: 630 })).toBe("09:00 – 10:30");
+  });
+  it("渲染後的 HTML 去掉時間與日期", () => {
+    const w = lineWhen("- {<} 23:00 Task [[2026-11-18]]")!;
+    expect(stripWhenHtml("<p>23:00 Task [[2026-11-18]]</p>\n", w)).toBe("<p>Task</p>\n");
+    expect(stripWhenHtml("23:00 Task [[2026-11-18]]", w)).toBe("Task");
   });
 });

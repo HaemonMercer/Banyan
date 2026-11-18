@@ -1,0 +1,1197 @@
+/* ─── 資料庫（參考 Notion 的 Database）：表格、看板、右邊打開的一列、選單 ─── */
+
+/* 選項的顏色（淺色） */
+:root {
+  --db-gray-bg: rgba(84, 72, 49, 0.08);
+  --db-gray-fg: #4a4741;
+  --db-brown-bg: rgba(210, 162, 141, 0.35);
+  --db-brown-fg: #5c3b23;
+  --db-orange-bg: rgba(224, 124, 57, 0.2);
+  --db-orange-fg: #8a4417;
+  --db-yellow-bg: rgba(236, 191, 66, 0.35);
+  --db-yellow-fg: #6e5410;
+  --db-green-bg: rgba(123, 183, 129, 0.27);
+  --db-green-fg: #1f5d33;
+  --db-blue-bg: rgba(93, 165, 206, 0.27);
+  --db-blue-fg: #1c4f78;
+  --db-purple-bg: rgba(168, 129, 197, 0.27);
+  --db-purple-fg: #5a2e7a;
+  --db-pink-bg: rgba(225, 136, 179, 0.27);
+  --db-pink-fg: #7a2652;
+  --db-red-bg: rgba(244, 171, 159, 0.4);
+  --db-red-fg: #8c2a1c;
+}
+:root[data-theme="dark"] {
+  --db-gray-bg: rgba(255, 255, 255, 0.09);
+  --db-gray-fg: #d4d2cd;
+  --db-brown-bg: rgba(184, 101, 69, 0.3);
+  --db-brown-fg: #e6c2b0;
+  --db-orange-bg: rgba(233, 126, 35, 0.3);
+  --db-orange-fg: #f2c19a;
+  --db-yellow-bg: rgba(250, 177, 67, 0.3);
+  --db-yellow-fg: #f3d79a;
+  --db-green-bg: rgba(45, 153, 100, 0.32);
+  --db-green-fg: #a9e0c0;
+  --db-blue-bg: rgba(46, 124, 209, 0.35);
+  --db-blue-fg: #b4d4f5;
+  --db-purple-bg: rgba(155, 98, 211, 0.33);
+  --db-purple-fg: #dcc3f2;
+  --db-pink-bg: rgba(220, 76, 145, 0.32);
+  --db-pink-fg: #f3bcd6;
+  --db-red-bg: rgba(222, 85, 80, 0.35);
+  --db-red-fg: #f5bdb8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --db-gray-bg: rgba(255, 255, 255, 0.09);
+    --db-gray-fg: #d4d2cd;
+    --db-brown-bg: rgba(184, 101, 69, 0.3);
+    --db-brown-fg: #e6c2b0;
+    --db-orange-bg: rgba(233, 126, 35, 0.3);
+    --db-orange-fg: #f2c19a;
+    --db-yellow-bg: rgba(250, 177, 67, 0.3);
+    --db-yellow-fg: #f3d79a;
+    --db-green-bg: rgba(45, 153, 100, 0.32);
+    --db-green-fg: #a9e0c0;
+    --db-blue-bg: rgba(46, 124, 209, 0.35);
+    --db-blue-fg: #b4d4f5;
+    --db-purple-bg: rgba(155, 98, 211, 0.33);
+    --db-purple-fg: #dcc3f2;
+    --db-pink-bg: rgba(220, 76, 145, 0.32);
+    --db-pink-fg: #f3bcd6;
+    --db-red-bg: rgba(222, 85, 80, 0.35);
+    --db-red-fg: #f5bdb8;
+  }
+}
+.c-gray { --c-bg: var(--db-gray-bg); --c-fg: var(--db-gray-fg); }
+.c-brown { --c-bg: var(--db-brown-bg); --c-fg: var(--db-brown-fg); }
+.c-orange { --c-bg: var(--db-orange-bg); --c-fg: var(--db-orange-fg); }
+.c-yellow { --c-bg: var(--db-yellow-bg); --c-fg: var(--db-yellow-fg); }
+.c-green { --c-bg: var(--db-green-bg); --c-fg: var(--db-green-fg); }
+.c-blue { --c-bg: var(--db-blue-bg); --c-fg: var(--db-blue-fg); }
+.c-purple { --c-bg: var(--db-purple-bg); --c-fg: var(--db-purple-fg); }
+.c-pink { --c-bg: var(--db-pink-bg); --c-fg: var(--db-pink-fg); }
+.c-red { --c-bg: var(--db-red-bg); --c-fg: var(--db-red-fg); }
+
+.db {
+  --db-line: var(--ed-faint);
+  --db-row-h: 34px;
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+/* 分頁與工具 */
+.db-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--db-line);
+}
+.db-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.db-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.db-tab:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.db-tab.on {
+  color: var(--ed-text);
+  font-weight: 500;
+}
+.db-tab.on::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: -7px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ed-text);
+}
+.db-tab svg {
+  width: 15px;
+  height: 15px;
+}
+.db-tab.add {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+.db-tab-input {
+  width: 120px;
+}
+.db-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.db-tool {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.db-tool:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.db-tool.on {
+  color: var(--ed-accent);
+}
+.db-tool svg {
+  width: 16px;
+  height: 16px;
+}
+.db-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 4px 0 8px;
+  border-radius: 6px;
+  background: var(--ed-hover);
+  color: var(--ed-muted);
+}
+.db-search input {
+  width: 160px;
+  border: none;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.db-search button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.db-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  margin-left: 6px;
+  padding: 0 12px 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--ed-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.db-new:hover {
+  filter: brightness(1.08);
+}
+.db-new svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 表格 */
+.db-scroll {
+  overflow-x: auto;
+  padding-left: 30px;
+  margin-left: -30px;
+}
+.db-table {
+  position: relative;
+}
+.db-tr {
+  position: relative;
+  display: flex;
+  min-height: var(--db-row-h);
+  border-bottom: 1px solid var(--db-line);
+}
+.db-head {
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+.db-th {
+  position: relative;
+  flex: none;
+  display: flex;
+  border-right: 1px solid var(--db-line);
+}
+.db-th-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.db-th-btn:hover {
+  background: var(--ed-hover);
+}
+.db-th-btn svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.db-th-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-sorted {
+  color: var(--ed-accent);
+}
+.db-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 1;
+  width: 6px;
+  cursor: col-resize;
+}
+.db-resize:hover {
+  background: var(--ed-accent);
+  opacity: 0.5;
+}
+.db-add-prop {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  border: none;
+  background: none;
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.db-add-prop:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.db-td {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 8px;
+  box-sizing: border-box;
+  border-right: 1px solid var(--db-line);
+  overflow: hidden;
+  cursor: default;
+}
+.db-td:hover {
+  background: var(--ed-hover);
+}
+.db-td.editing {
+  overflow: visible;
+  padding: 0;
+  box-shadow: inset 0 0 0 2px var(--ed-accent-ring, var(--ed-accent));
+  background: var(--ed-bg);
+}
+.db-td.t-title {
+  font-weight: 500;
+}
+.db-td.t-number {
+  justify-content: flex-end;
+}
+.db-text,
+.db-td > span:not(.db-pills):not(.db-checkbox) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-has-page {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--ed-muted);
+}
+.db-open {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--db-line);
+  border-radius: 4px;
+  background: var(--ed-bg);
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.db-open svg {
+  width: 12px;
+  height: 12px;
+}
+.db-tr:hover .db-open {
+  display: inline-flex;
+}
+.db-grip {
+  position: absolute;
+  top: 50%;
+  left: -26px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 24px;
+  margin-top: -12px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ed-muted);
+  opacity: 0;
+  cursor: grab;
+}
+.db-grip.fixed {
+  cursor: pointer;
+}
+.db-tr:hover .db-grip,
+.db-grip:focus-visible {
+  opacity: 1;
+}
+.db-grip:hover {
+  background: var(--ed-hover);
+}
+.db-tr.lifted {
+  opacity: 0.4;
+}
+.db-tr.drop-before::before,
+.db-tr.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 2px;
+  background: var(--ed-accent);
+  pointer-events: none;
+}
+.db-tr.drop-before::before {
+  top: -1px;
+}
+.db-tr.drop-after::after {
+  bottom: -1px;
+}
+.db-new-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--db-row-h);
+  padding: 0 8px;
+  border: none;
+  border-bottom: 1px solid var(--db-line);
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.db-new-row:hover {
+  background: var(--ed-hover);
+}
+.db-new-row svg {
+  width: 14px;
+  height: 14px;
+}
+.db-count {
+  padding: 8px;
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+
+/* 一格裡的值 */
+.db-input {
+  width: 100%;
+  height: 100%;
+  min-height: calc(var(--db-row-h) - 2px);
+  padding: 4px 8px;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  color: var(--ed-text);
+  font: inherit;
+  outline: none;
+}
+.db-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--c-bg);
+  color: var(--c-fg);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db-pill button {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-right: -2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.db-pill button svg {
+  width: 10px;
+  height: 10px;
+}
+.db-pills {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.db-checkbox {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--ed-muted);
+  border-radius: 3px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.db-checkbox.on {
+  border-color: var(--ed-accent);
+  background: var(--ed-accent);
+}
+.db-num {
+  font-variant-numeric: tabular-nums;
+}
+.db-url {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.db-url-text {
+  overflow: hidden;
+  color: var(--ed-text-soft);
+  text-decoration: underline;
+  text-decoration-color: var(--ed-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-url-go {
+  display: none;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--db-line);
+  border-radius: 4px;
+  background: var(--ed-bg);
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.db-url-go svg {
+  width: 12px;
+  height: 12px;
+}
+.db-td:hover .db-url-go,
+.db-peek-value:hover .db-url-go {
+  display: grid;
+}
+.db-empty {
+  color: var(--ed-muted);
+  opacity: 0.7;
+}
+
+/* 看板 */
+.db-board {
+  padding-top: 12px;
+}
+.db-board.dragging,
+.db-board.dragging .db-card {
+  cursor: grabbing;
+}
+.db-board-hint {
+  margin: 0 0 10px;
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+.db-cols {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-bottom: 16px;
+}
+.db-col {
+  flex: none;
+  width: 260px;
+  padding: 6px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--ed-hover);
+}
+.db-col.over {
+  box-shadow: inset 0 0 0 1px var(--ed-accent);
+}
+.db-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px 4px;
+}
+.db-col-count {
+  color: var(--ed-muted);
+  font-size: 12.5px;
+}
+.db-none {
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+.db-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--ed-bg);
+  box-shadow: 0 0 0 1px var(--db-line), 0 1px 2px rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  user-select: none;
+}
+.db-card:hover {
+  background: color-mix(in srgb, var(--ed-bg) 94%, var(--ed-text));
+}
+.db-card.lifted {
+  opacity: 0.4;
+}
+.db-card-title {
+  font-weight: 500;
+  word-break: break-word;
+}
+.db-card-title.empty {
+  color: var(--ed-muted);
+}
+.db-card-prop {
+  display: flex;
+  min-width: 0;
+  color: var(--ed-text-soft);
+  font-size: 12.5px;
+}
+.db-card-prop .db-pills {
+  flex-wrap: wrap;
+}
+.db-card-drop {
+  height: 3px;
+  margin: -2px 2px 4px;
+  border-radius: 2px;
+  background: var(--ed-accent);
+}
+.db-col-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.db-col-new:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.db-col-new svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 右邊打開的一列 */
+.db-peek {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100vw);
+  box-sizing: border-box;
+  padding: 10px 28px 40px;
+  overflow-y: auto;
+  border-left: 1px solid var(--ed-faint);
+  background: var(--ed-bg);
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.12);
+  color: var(--ed-text);
+  animation: db-slide 0.16s ease-out;
+}
+@keyframes db-slide {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+.db-peek-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 -8px 18px;
+}
+.db-peek-spacer {
+  flex: 1;
+}
+.db-peek-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.db-peek-btn:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+.db-peek-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.db-peek-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.db-peek-title {
+  width: 100%;
+  margin: 0 0 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  field-sizing: content;
+}
+.db-peek-props {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.db-peek-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  align-items: center;
+  min-height: 34px;
+}
+.db-peek-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.db-peek-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-peek-name svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.db-peek-name:hover,
+.db-peek-value:hover {
+  background: var(--ed-hover);
+}
+.db-peek-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  min-width: 0;
+  padding: 2px 8px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.db-peek-value .db-pills {
+  flex-wrap: wrap;
+}
+.db-peek-value:has(.db-input) {
+  padding: 0;
+  box-shadow: inset 0 0 0 2px var(--ed-accent);
+}
+.db-peek-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  margin-top: 6px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.db-peek-add:hover {
+  background: var(--ed-hover);
+}
+.db-peek-add svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 選單 */
+.db-pop {
+  z-index: 40;
+  min-width: 220px;
+  max-height: min(460px, calc(100vh - 16px));
+  overflow-y: auto;
+  padding: 4px;
+}
+.db-pop.wide {
+  min-width: 260px;
+}
+.db-list {
+  display: flex;
+  flex-direction: column;
+}
+.db-list > button,
+.db-opt-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.db-list > button:hover:not(:disabled),
+.db-opt-pick:hover {
+  background: var(--ed-hover);
+}
+.db-list > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.db-list > button svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ed-muted);
+}
+.db-list > button.danger,
+.db-list > button.danger svg {
+  color: #d44c47;
+}
+.db-pop-title {
+  padding: 6px 8px 4px;
+  color: var(--ed-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.db-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--ed-faint);
+}
+.db-check {
+  margin-left: auto;
+  color: var(--ed-text-soft);
+  font-size: 12px;
+}
+.db-hint {
+  margin-left: auto;
+  color: var(--ed-muted);
+  font-size: 12.5px;
+}
+.db-arrow {
+  width: 15px;
+  color: var(--ed-muted);
+  text-align: center;
+}
+.db-toggle {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  margin-left: auto;
+  border-radius: 7px;
+  background: var(--ed-faint);
+  transition: background 0.12s;
+}
+.db-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.12s;
+}
+.db-toggle.on {
+  background: var(--ed-accent);
+}
+.db-toggle.on::after {
+  transform: translateX(12px);
+}
+.db-name-input {
+  margin: 4px 4px 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 4px;
+  background: var(--ed-hover);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+.db-name-input:focus {
+  border-color: var(--ed-accent);
+}
+.db-chosen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: -4px -4px 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--ed-faint);
+  background: var(--ed-hover);
+}
+.db-chosen input {
+  flex: 1;
+  min-width: 100px;
+  border: none;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+.db-opt {
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+}
+.db-opt-pick {
+  flex: 1;
+  min-width: 0;
+}
+.db-opt-more {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ed-muted);
+  opacity: 0;
+  cursor: pointer;
+}
+.db-opt:hover .db-opt-more {
+  opacity: 1;
+}
+.db-opt-more:hover {
+  background: var(--ed-hover);
+}
+.db-swatch {
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--ed-faint);
+  border-radius: 3px;
+  background: var(--c-bg);
+}
+.db-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+}
+.db-date input {
+  padding: 4px 6px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 4px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  color-scheme: light dark;
+}
+.db-link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ed-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.db-link-btn:hover {
+  text-decoration: underline;
+}
+
+/* 一個資料庫的頁面：比文件寬 */
+.db-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 96px;
+}
+.db-page-title {
+  margin: 0 0 18px;
+  font-size: 2.3rem;
+  font-weight: 700;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+/* ─── 所有資料庫（側邊欄「Databases」） ─── */
+
+.dbs-view {
+  max-width: 720px;
+  margin: 0 auto;
+  padding-bottom: 96px;
+}
+.dbs-title {
+  margin: 0 0 18px;
+  font-size: 2.3rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.dbs-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  margin-bottom: 14px;
+  padding: 0 14px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 8px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.dbs-new:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+.dbs-new:disabled {
+  color: var(--ed-muted);
+  cursor: default;
+}
+.dbs-list {
+  display: flex;
+  flex-direction: column;
+}
+.dbs-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--ed-text);
+  font-size: 15px;
+  cursor: pointer;
+  outline: none;
+}
+.dbs-row:hover,
+.dbs-row:focus-visible,
+.dbs-row.editing {
+  background: var(--ed-hover);
+}
+.dbs-icon {
+  flex: none;
+  color: var(--ed-text-soft);
+}
+.dbs-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dbs-meta {
+  flex: none;
+  color: var(--ed-muted);
+  font-size: 12.5px;
+}
+.dbs-del {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ed-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+.dbs-row:hover .dbs-del,
+.dbs-row:focus-visible .dbs-del {
+  opacity: 1;
+}
+.dbs-del:hover {
+  background: var(--ed-faint);
+  color: var(--ed-danger);
+}
+.dbs-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--ed-accent);
+  border-radius: 5px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ed-accent-soft);
+}
+.dbs-empty {
+  padding: 56px 24px;
+  border: 1.5px dashed var(--ed-faint);
+  border-radius: 14px;
+  color: var(--ed-muted);
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.dbs-empty strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ed-text-soft);
+  font-size: 16px;
+}
+
+/* 右鍵／「⋯」選單（RowMenu） */
+.prop-menu {
+  z-index: 40;
+  min-width: 190px;
+  padding: 6px;
+}
+.prop-menu button {
+  justify-content: space-between;
+}
+.prop-menu .glyph {
+  width: 18px;
+  flex: none;
+  color: var(--ed-muted);
+}
+.prop-menu button:has(.glyph) {
+  justify-content: flex-start;
+}
+
+/* `.popover button` 是整列寬：資料庫選單裡的小按鈕要蓋掉 */
+.db-pop .db-opt-more {
+  flex: none;
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+.db-pop .db-pill button {
+  flex: none;
+  width: 14px;
+  padding: 0;
+  justify-content: center;
+}
+.db-pop .db-opt-pick {
+  padding: 0 8px;
+}

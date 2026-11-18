@@ -138,6 +138,22 @@ export const ChevronRightIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 文字（T） */
+export const TextIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 4V2.75h10V4M8 2.75v10.5M6 13.25h4" />
+  </svg>
+);
+
+/** 更多（…） */
+export const MoreIcon = (p: IconProps) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <circle cx="3.5" cy="8" r="1.3" />
+    <circle cx="8" cy="8" r="1.3" />
+    <circle cx="12.5" cy="8" r="1.3" />
+  </svg>
+);
+
 /* ─── 側邊欄與頂端列 ─── */
 
 /** 側邊欄開關 */
@@ -232,37 +248,7 @@ export const ArrowRightIcon = (p: IconProps) => (
   </svg>
 );
 
-/* ─── 白板 ─── */
-
-/** 白板（畫布上兩張卡片連起來） */
-export const WhiteboardIcon = (p: IconProps) => (
-  <svg {...base(p)}>
-    <rect x="1.75" y="2.5" width="6" height="4.5" rx="1" />
-    <rect x="8.25" y="9" width="6" height="4.5" rx="1" />
-    <path d="M7.75 4.75h2.5a1 1 0 0 1 1 1V9" />
-  </svg>
-);
-
-/** 區段（虛線框） */
-export const SectionIcon = (p: IconProps) => (
-  <svg {...base(p)}>
-    <rect x="2.5" y="3.5" width="11" height="10" rx="1.5" strokeDasharray="2 1.6" />
-    <path d="M2.5 3.5h5" />
-  </svg>
-);
-
-export const MinusIcon = (p: IconProps) => (
-  <svg {...base(p)}>
-    <path d="M3.5 8h9" />
-  </svg>
-);
-
-/** 符合畫面（四個角） */
-export const FitIcon = (p: IconProps) => (
-  <svg {...base(p)}>
-    <path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10" />
-  </svg>
-);
+/* ─── 其他 ─── */
 
 /** 開啟（右上箭頭） */
 export const OpenIcon = (p: IconProps) => (
@@ -270,3 +256,81 @@ export const OpenIcon = (p: IconProps) => (
     <path d="M6.5 3.5h-3v9h9v-3M9 2.5h4.5V7M13.5 2.5 7.5 8.5" />
   </svg>
 );
+
+/** 搜尋（放大鏡） */
+export const SearchIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="7" cy="7" r="4.25" />
+    <path d="m10.25 10.25 3.25 3.25" />
+  </svg>
+);
+
+/* ─── 稿件（參考 Scrivener） ─── */
+
+/** 排序（上下箭頭） */
+export const SortIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M5 13V3M2.75 5.25 5 3l2.25 2.25M11 3v10M8.75 10.75 11 13l2.25-2.25" />
+  </svg>
+);
+
+/* ─── 資料庫（參考 Notion） ─── */
+
+/** 資料庫（表格） */
+export const DatabaseIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2" y="2.75" width="12" height="10.5" rx="1.5" />
+    <path d="M2 6.25h12M2 9.75h12M6.25 6.25v7" />
+  </svg>
+);
+
+/** 看板（幾欄卡片） */
+export const BoardIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2" y="2.75" width="3.5" height="10.5" rx="1" />
+    <rect x="6.25" y="2.75" width="3.5" height="7" rx="1" />
+    <rect x="10.5" y="2.75" width="3.5" height="8.75" rx="1" />
+  </svg>
+);
+
+/** 屬性（幾條滑桿） */
+export const PropsIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+    <circle cx="5.5" cy="4.5" r="1.25" fill="currentColor" />
+    <circle cx="10.5" cy="8" r="1.25" fill="currentColor" />
+    <circle cx="7" cy="11.5" r="1.25" fill="currentColor" />
+  </svg>
+);
+
+/** 勾選框 */
+export const CheckboxIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.75" y="2.75" width="10.5" height="10.5" rx="2" />
+    <path d="m5.5 8 1.75 1.75L10.75 6.25" />
+  </svg>
+);
+
+/** 數字（#） */
+export const HashIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6.25 2.5 5 13.5M11 2.5 9.75 13.5M3 6h10.5M2.5 10H13" />
+  </svg>
+);
+
+/** 單選（實心圓） */
+export const SelectIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="8" cy="8" r="5.25" />
+    <path d="m5.75 7 2.25 2.25L10.25 7" />
+  </svg>
+);
+
+/** 多選（幾條清單） */
+export const MultiIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6 4.5h7.5M6 8h7.5M6 11.5h7.5" />
+    <path d="m2.25 4.5.75.75 1.25-1.5M2.25 8l.75.75 1.25-1.5M2.25 11.5l.75.75 1.25-1.5" />
+  </svg>
+);
+
