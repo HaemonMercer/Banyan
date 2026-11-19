@@ -1,5 +1,4 @@
-import { restyleBoxes, type BoxValue } from "./editor/layout";
-import { setRestyleAll } from "./desk/styleLibrary";
+import { loadStyles, setRewriteDocs } from "./desk/styleLibrary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { countWords } from "./editor/words";
 import {
@@ -342,16 +341,17 @@ function App() {
     (name: string, fn: (f: DeskFile) => DeskFile) => modifyFile(name, (j) => serializeFile(fn(parseFile(j)))),
     [modifyFile],
   );
-  // 已存的區塊樣式（styleLibrary.ts，所有文件共用）更新、改名、刪除：所有 Desk 檔案裡的 Word、簡報一起改
-  const restyleAllRef = useRef<(fn: (v: BoxValue) => BoxValue | null) => void>(() => {});
-  restyleAllRef.current = (fn) => {
+  // 已存的樣式（styleLibrary.ts，所有文件共用）：段落樣式的更新、改名、刪除與字元樣式的改名、刪除，
+  // 改所有 Desk 檔案裡的 Word、簡報（hint：內容裡沒有這串字的檔案跳過）
+  const rewriteDocsRef = useRef<(rewrite: (src: string) => string, hint: string) => void>(() => {});
+  rewriteDocsRef.current = (rewrite, hint) => {
     for (const [k, c] of Object.entries(files.contents)) {
-      if (!c.includes("data-style")) continue;
+      if (!c.includes(hint)) continue;
       changeFile(k, (f) => {
         let changed = false;
         const docs = f.docs.map((d) => {
           if (d.kind !== "word" && d.kind !== "slides") return d;
-          const out = restyleBoxes(d.content, fn);
+          const out = rewrite(d.content);
           if (out === d.content) return d;
           changed = true;
           return { ...d, content: out };
@@ -360,7 +360,11 @@ function App() {
       });
     }
   };
-  useEffect(() => setRestyleAll((fn) => restyleAllRef.current(fn)), []);
+  useEffect(() => {
+    setRewriteDocs((rewrite, hint) => rewriteDocsRef.current(rewrite, hint));
+    // 字元樣式的樣子在共用的樣式表裡：一開始就讀
+    void loadStyles();
+  }, []);
   const fileName = view.kind === "file" ? view.name : null;
   const onModifyFile = useCallback(
     (fn: (f: DeskFile) => DeskFile) =>

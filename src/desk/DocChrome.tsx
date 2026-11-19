@@ -6,6 +6,9 @@ import type { Color } from "../editor/inline";
 import {
   BLOCK_FONTS,
   BORDER_COLORS,
+  charOnly,
+  removeCharStyle,
+  renameCharStyle,
   blockStyleCss,
   cleanStyleName,
   formatBlockStyle,
@@ -18,11 +21,12 @@ import {
   type Sides,
 } from "../editor/blockStyle";
 import type { BoxValue } from "../editor/layout";
+import { changeCharStyles, useCharStyles } from "./styleLibrary";
 
 /**
  * Word 與簡報的外框（參考 Apple 的 Pages、Keynote）：
  * - 上方工具列：圖示在上、名稱在下的按鈕（Insert、Table、Media…），右邊是開關檢閱器的 Format、Document；
- * - 右邊的檢閱器（Inspector）：Format 分成 Style、Text、Paragraph、Arrange 分頁（`FormatInspector`），跟著游標所在的段落。
+ * - 右邊的檢閱器（Inspector）：Format 分成 Text（Word 叫 Style）、Layout，簡報另有 Style、Arrange（`FormatInspector`），跟著游標所在的段落。
  *
  * 按鈕透過 `editorBus` 操作文件裡的編輯器：編輯中就作用在選取的文字／這個段落，
  * 選了區塊就作用在選取的區塊。工具列與檢閱器有 `editor-ui` class，mousedown 時 preventDefault：
@@ -265,31 +269,33 @@ const LISTS: { id: BlockType; label: string }[] = [
   { id: "todo", label: "Checklist" },
 ];
 
-/* ─── 檢閱器的 Format 分頁（參考 Pages／Keynote）：Style、Text、Paragraph、Arrange ─── */
+/* ─── 檢閱器的 Format 分頁（參考 Pages／Keynote） ─── */
 
 /**
- * Format 檢閱器的分頁：
- * - Style：段落樣式（標題、內文…）、段落背景、清除格式；簡報另有投影片背景、物件的填色與框線。
- * - Text：字元樣式（粗斜體、底線、刪除線、上下標）、文字顏色、螢光、程式碼、連結。
- * - Paragraph：對齊、縮排、項目符號與清單，以及區塊樣式（`editor/blockStyle.ts`）：間距、內距、字型、框線。
- * - Arrange：物件的位置、大小、旋轉、對齊與上下層（只有簡報的物件有）。
+ * Format 檢閱器的分頁（Word 只有 Text 與 Layout，Text 分頁在 Word 叫「Style」，跟 Pages 一樣）：
+ * - Text：段落樣式、字元樣式、字型（字型、字級、字距、粗斜體、底線、刪除線、上下標、顏色、螢光、程式碼、連結）、清除格式。
+ *   規則只有一條：有選取文字就作用在選取的字，沒有就作用在整段（存在區塊樣式裡，`editor/blockStyle.ts`）。
+ * - Layout：對齊、縮排、清單、間距（行距、段前、段後）、左右縮排、框線與底色（框線、圓角、內距、底色）。
+ * - Style：簡報的投影片背景、物件的填色與框線（Word 沒有）。
+ * - Arrange：物件的位置、大小、旋轉、對齊與上下層（只有簡報選了物件時有）。
  * 跟著游標所在（或選取）的段落；Word 和簡報共用。
  */
-export type FormatTab = "style" | "text" | "paragraph" | "arrange";
+export type FormatTab = "style" | "text" | "layout" | "arrange";
 
-const TAB_LABELS: Record<FormatTab, string> = { style: "Style", text: "Text", paragraph: "Paragraph", arrange: "Arrange" };
+const TAB_LABELS: Record<FormatTab, string> = { style: "Style", text: "Text", layout: "Layout", arrange: "Arrange" };
 
 /** 記住上次看的分頁（每種文件一份）；看的分頁這次沒有（例如沒選物件的 Arrange）就顯示第一個 */
-export function useFormatTab(key: string, initial: FormatTab = "style"): [FormatTab, (t: FormatTab) => void] {
+export function useFormatTab(key: string, initial: FormatTab = "text"): [FormatTab, (t: FormatTab) => void] {
   const [tab, setTab] = usePanel<FormatTab>(`${key}-format-tab`, initial);
   return [tab ?? initial, setTab];
 }
 
-/** 有分頁的 Format 檢閱器：tabs 是這次可以看的分頁（依順序） */
+/** 有分頁的 Format 檢閱器：tabs 是這次可以看的分頁（依順序）；沒有 Style 分頁時 Text 分頁叫「Style」（Pages 的叫法） */
 export function FormatInspector(props: { tabs: FormatTab[]; tab: FormatTab; onTab: (t: FormatTab) => void; children: (tab: FormatTab) => ReactNode }) {
   const shown = props.tabs.includes(props.tab) ? props.tab : props.tabs[0];
+  const label = (t: FormatTab) => (t === "text" && !props.tabs.includes("style") ? "Style" : TAB_LABELS[t]);
   return (
-    <Inspector title="Format" tabs={props.tabs.map((t) => ({ id: t, label: TAB_LABELS[t] }))} tab={shown} onTab={(id) => props.onTab(id as FormatTab)}>
+    <Inspector title="Format" tabs={props.tabs.map((t) => ({ id: t, label: label(t) }))} tab={shown} onTab={(id) => props.onTab(id as FormatTab)}>
       {props.children(shown)}
     </Inspector>
   );
@@ -306,78 +312,38 @@ function NeedText(props: { hint?: string }) {
 
 const canFormat = (st: Status) => st.active && (st.editing || st.selected > 0);
 
-/** Style 分頁的文字部分：段落樣式（內建的與已存的）、段落背景、清除格式 */
-export function ParagraphStyleFormat(props: { st: Status; run: Run; styles: ParaStyle[]; shading?: boolean; clear?: boolean; hint?: string; lib?: StyleLib }) {
-  const { st, run } = props;
-  if (!canFormat(st)) return <NeedText hint={props.hint} />;
+/** 小的「⋯」選單：樣式的新增、更新、改名、刪除這類不常用的動作 */
+function MoreMenu(props: { label: string; items: { label: string; title?: string; disabled?: boolean; onClick: () => void }[] }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useOutside(ref, open, () => setOpen(false));
+  const items = props.items.filter((x) => !x.disabled);
   return (
-    <>
-      <ParagraphStyles st={st} run={run} styles={props.styles} lib={props.lib} />
-      {props.shading && (
-        <Section title="Paragraph Background">
-          <Field label="Fill">
-            <ColorWell kind="bg" value={st.bg} title="Paragraph background" onPick={(c) => run((x) => x.blockBg(c))} />
-          </Field>
-        </Section>
-      )}
-      {props.clear && st.editing && (
-        <Section>
-          <button className="dp-btn" onClick={() => document.execCommand("removeFormat")} title="Remove bold, italic, colors and other text styles from the selection">
-            Clear Formatting
-          </button>
-        </Section>
-      )}
-    </>
-  );
-}
-
-/** Text 分頁：字元樣式、文字顏色、螢光、程式碼、連結 */
-export function TextStyleFormat(props: { st: Status; run: Run; code?: boolean; hint?: string }) {
-  const { st, run } = props;
-  if (!canFormat(st)) return <NeedText hint={props.hint} />;
-  const text = st.active && st.editing && st.formattable;
-  const m = st.marks;
-  return (
-    <>
-      <Section title="Font">
-        <div className="dc-row">
-          <Seg label="Character style">
-            {MARKS.map((x) => (
-              <SegBtn key={x.mark} title={x.title} on={!!m?.[x.mark]} disabled={!text} onClick={() => run((c) => c.mark(x.mark))}>
-                {x.icon}
-              </SegBtn>
-            ))}
-          </Seg>
+    <div className="dc-more-wrap" ref={ref}>
+      <button className="dc-more" title={props.label} aria-label={props.label} aria-haspopup="menu" aria-expanded={open} disabled={!items.length} onClick={() => setOpen((v) => !v)}>
+        ⋯
+      </button>
+      {open && (
+        <div className="popover block-menu dc-menu dc-more-menu" role="menu">
+          {items.map((x) => (
+            <MenuItem
+              key={x.label}
+              label={<span title={x.title}>{x.label}</span>}
+              onClick={() => {
+                setOpen(false);
+                x.onClick();
+              }}
+            />
+          ))}
         </div>
-        {!text && <p className="dc-note">{st.editing ? "This paragraph is code or HTML, so it can't have text styles." : "Click in a paragraph and select some text to style it."}</p>}
-      </Section>
-      <Section title="Color">
-        <Field label="Text color">
-          <ColorWell kind="color" value={m?.color ?? null} disabled={!text} title="Text color" onPick={(c) => run((x) => x.color("color", c))} />
-        </Field>
-        <Field label="Highlight">
-          <ColorWell kind="highlight" value={m?.highlight ?? null} disabled={!text} title="Highlight" onPick={(c) => run((x) => x.color("highlight", c))} />
-        </Field>
-      </Section>
-      <Section title="More">
-        <Seg label="More">
-          {props.code && (
-            <SegBtn title="Inline code (Ctrl+E)" on={!!m?.code} disabled={!text} onClick={() => run((c) => c.mark("code"))}>
-              <span className="dc-mono">{"</>"}</span>
-            </SegBtn>
-          )}
-          <SegBtn title="Link (Ctrl+K)" on={!!m?.link} disabled={!text} onClick={() => run((c) => c.mark("link"))}>
-            <LinkIcon />
-          </SegBtn>
-        </Seg>
-      </Section>
-    </>
+      )}
+    </div>
   );
 }
 
 /**
- * 已存的區塊樣式（每份文件一份，參考 Pages 的段落樣式選單）。
- * change 一次改好樣式清單與整份文件裡用到它的區塊（restyle 對每個區塊樣式算出新的，null 是拿掉）。
+ * 已存的樣式（每份文件都能用，`styleLibrary.ts`）。
+ * change 一次改好樣式清單與所有文件裡用到它的區塊（restyle 對每個區塊樣式算出新的，null 是拿掉）。
  */
 export interface StyleLib {
   styles: SavedStyle[];
@@ -385,128 +351,95 @@ export interface StyleLib {
 }
 
 /**
- * Paragraph 分頁（參考 Pages 的 Layout）：每個區塊（段落、標題、清單、圖片…）當成一個盒子——
- * 對齊、縮排、清單、間距（行距、外距、內距）、字型、框線。空白的欄位跟著文件的預設；存成樣式在 Style 分頁的段落樣式。
+ * Text 分頁（Word 叫 Style）：段落樣式、字元樣式、字型、清除格式。
+ * 粗斜體、底線、刪除線與文字顏色：有選取文字就作用在選取的字，沒有就作用在整段。
  */
-export function ParagraphLayoutFormat(props: { st: Status; run: Run; checklist?: boolean; hint?: string }) {
+export function TextFormat(props: { st: Status; run: Run; styles: ParaStyle[]; lib?: StyleLib; code?: boolean; hint?: string }) {
   const { st, run } = props;
   if (!canFormat(st)) return <NeedText hint={props.hint} />;
-  const listType = LISTS.some((l) => l.id === st.type) ? st.type : "paragraph";
+  const sel = st.editing && st.textSel;
+  const rich = st.active && st.editing && st.formattable;
+  const m = st.marks;
   const s: BlockStyle = parseBlockStyle(st.box);
   const set = (patch: Partial<BlockStyle>) => run((c) => c.box((v) => ({ ...v, css: patchBlockStyle(v.css, patch) })));
-  /** 標題本來就是粗體：粗體按鈕對標題是切換成「一般」 */
+  /** 標題本來就是粗體：整段的粗體按鈕對標題是切換成「一般」 */
   const heading = st.type === "h1" || st.type === "h2" || st.type === "h3";
+  const paraBold = s.weight ? s.weight === "bold" : heading;
   const many = !st.editing && st.selected > 1;
+  /** 粗斜體、底線、刪除線：有選取作用在選取的字，沒有就是整段 */
+  const toggle = (mark: "bold" | "italic" | "underline" | "strike") => {
+    if (sel) return run((c) => c.mark(mark));
+    if (mark === "bold") return set({ weight: paraBold ? (heading ? "normal" : undefined) : heading ? undefined : "bold" });
+    set({ [mark]: !s[mark] || undefined });
+  };
+  const on = (mark: "bold" | "italic" | "underline" | "strike") => (sel ? !!m?.[mark] : mark === "bold" ? paraBold : !!s[mark]);
+  const saved = props.lib?.styles.find((x) => x.name === st.boxName);
   return (
     <>
       {many && (
         <Section>
-          <p className="dc-note">Showing the first selected block. Changes apply to all {st.selected} blocks.</p>
+          <p className="dc-note">Showing the first selected paragraph. Changes apply to all {st.selected}.</p>
         </Section>
       )}
-      <Section title="Alignment">
-        <Seg label="Alignment">
-          <SegBtn title="Align left" on={st.align === "left"} onClick={() => run((c) => c.align("left"))}>
-            <AlignLeftIcon />
-          </SegBtn>
-          <SegBtn title="Center" on={st.align === "center"} onClick={() => run((c) => c.align("center"))}>
-            <AlignCenterIcon />
-          </SegBtn>
-          <SegBtn title="Align right" on={st.align === "right"} onClick={() => run((c) => c.align("right"))}>
-            <AlignRightIcon />
-          </SegBtn>
-        </Seg>
-      </Section>
-      <Section title="Indent">
-        <Seg label="Indent">
-          <SegBtn title="Decrease indent (Shift+Tab)" onClick={() => run((c) => c.indent(true))}>
-            <OutdentIcon />
-          </SegBtn>
-          <SegBtn title="Increase indent (Tab)" onClick={() => run((c) => c.indent(false))}>
-            <IndentIcon />
-          </SegBtn>
-        </Seg>
-      </Section>
-      <Section title="Bullets & Lists">
-        <Popup
-          label="Bullets and lists"
-          value={listType as BlockType}
-          options={LISTS.filter((l) => props.checklist || l.id !== "todo").map((l) => ({ id: l.id, label: l.label }))}
-          onPick={(t) => run((c) => c.turnInto(t))}
-        />
-      </Section>
-      <Section title="Spacing">
-        <Field label="Line spacing">
-          <Popup
-            label="Line spacing"
-            value={s.line ?? 0}
-            options={[{ id: 0, label: "Default" }, ...LINE_SPACINGS.map((l) => ({ id: l, label: String(l) }))]}
-            onPick={(line) => set({ line: line || undefined })}
-          />
-        </Field>
-        <SidesField label="Margin" value={s.margin} onSet={(margin) => set({ margin })} />
-        <SidesField label="Padding" value={s.padding} onSet={(padding) => set({ padding })} />
-      </Section>
+      <ParagraphStyles st={st} run={run} styles={props.styles} lib={props.lib} />
+      <CharStyles st={st} run={run} text={rich} />
       <Section title="Font">
         <Popup
-          label="Block font"
+          label="Font"
           value={s.font ?? ""}
-          options={[{ id: "", label: "Document default" }, ...BLOCK_FONTS.map((f) => ({ id: f.css, label: f.label, render: <span style={{ fontFamily: f.css }}>{f.label}</span> }))]}
+          options={[{ id: "", label: "Default" }, ...BLOCK_FONTS.map((f) => ({ id: f.css, label: f.label, render: <span style={{ fontFamily: f.css }}>{f.label}</span> }))]}
           onPick={(font) => set({ font: font || undefined })}
         />
         <div className="dc-nums">
           <PtField label="Size (pt)" value={s.size} placeholder="Default" onSet={(size) => set({ size: size || undefined })} />
-          <PtField label="Character spacing (pt)" value={s.tracking} step={0.5} onSet={(tracking) => set({ tracking: tracking || undefined })} />
+          <PtField label="Spacing (pt)" value={s.tracking} step={0.5} onSet={(tracking) => set({ tracking: tracking || undefined })} />
         </div>
-        {/* 整個段落的字元樣式（存在區塊樣式裡，所以也會存進段落樣式）；選取文字的樣式在 Text 分頁 */}
-        <div className="dc-row">
-          <Seg label="Paragraph character style">
-            <SegBtn
-              title="Bold (whole paragraph)"
-              on={s.weight ? s.weight === "bold" : heading}
-              onClick={() => set({ weight: (s.weight ? s.weight === "bold" : heading) ? (heading ? "normal" : undefined) : heading ? undefined : "bold" })}
-            >
-              <b>B</b>
-            </SegBtn>
-            <SegBtn title="Italic (whole paragraph)" on={!!s.italic} onClick={() => set({ italic: !s.italic || undefined })}>
-              <i style={{ fontFamily: "Georgia, serif" }}>I</i>
-            </SegBtn>
-            <SegBtn title="Underline (whole paragraph)" on={!!s.underline} onClick={() => set({ underline: !s.underline || undefined })}>
-              <u>U</u>
-            </SegBtn>
-            <SegBtn title="Strikethrough (whole paragraph)" on={!!s.strike} onClick={() => set({ strike: !s.strike || undefined })}>
-              <s>S</s>
+        <div className="dc-row dc-font-row">
+          <Seg label="Character style">
+            {(MARKS.slice(0, 4) as unknown as { mark: "bold" | "italic" | "underline" | "strike"; title: string; icon: ReactNode }[]).map((x) => (
+              <SegBtn key={x.mark} title={`${x.title}${sel ? "" : " — whole paragraph"}`} on={on(x.mark)} disabled={sel && !rich} onClick={() => toggle(x.mark)}>
+                {x.icon}
+              </SegBtn>
+            ))}
+          </Seg>
+          <ColorWell
+            kind="color"
+            value={sel ? (m?.color ?? null) : ((s.color as Color | undefined) ?? null)}
+            title={sel ? "Text color" : "Text color — whole paragraph"}
+            onPick={(c) => (sel ? run((x) => x.color("color", c)) : set({ color: c ?? undefined }))}
+          />
+        </div>
+        <div className="dc-row dc-font-row">
+          <Seg label="More text styles">
+            {MARKS.slice(4).map((x) => (
+              <SegBtn key={x.mark} title={x.title} on={!!m?.[x.mark]} disabled={!rich} onClick={() => run((c) => c.mark(x.mark))}>
+                {x.icon}
+              </SegBtn>
+            ))}
+            {props.code && (
+              <SegBtn title="Inline code (Ctrl+E)" on={!!m?.code} disabled={!rich} onClick={() => run((c) => c.mark("code"))}>
+                <span className="dc-mono">{"</>"}</span>
+              </SegBtn>
+            )}
+            <SegBtn title="Link (Ctrl+K)" on={!!m?.link} disabled={!rich} onClick={() => run((c) => c.mark("link"))}>
+              <LinkIcon />
             </SegBtn>
           </Seg>
-          <ColorWell kind="color" value={(s.color as Color | undefined) ?? null} title="Paragraph text color" onPick={(c) => set({ color: c ?? undefined })} />
+          <ColorWell kind="highlight" value={m?.highlight ?? null} disabled={!sel || !rich} title="Highlight (select some text)" onPick={(c) => run((x) => x.color("highlight", c))} />
         </div>
-      </Section>
-      <Section title="Border">
-        <div className="dc-nums">
-          <PtField label="Width (pt)" value={s.border} step={0.5} onSet={(border) => set({ border: border || undefined })} />
-          <PtField label="Radius (pt)" value={s.radius} onSet={(radius) => set({ radius: radius || undefined })} />
-        </div>
-        <div className="dc-border-colors" role="group" aria-label="Border color">
-          {BORDER_COLORS.map((c) => (
-            <button
-              key={c}
-              className={`dc-border-color${(s.borderColor ?? "default") === c ? " on" : ""}`}
-              title={c === "default" ? "Default" : c[0].toUpperCase() + c.slice(1)}
-              aria-label={`Border color ${c}`}
-              style={{ borderColor: c === "default" ? "var(--ed-faint)" : `var(--tc-${c})` }}
-              onClick={() => set({ border: s.border || 1, borderColor: c })}
-            />
-          ))}
-        </div>
+        <p className="dc-note">{sel ? "Changes apply to the selected text." : "Nothing selected: changes apply to the whole paragraph."}</p>
       </Section>
       <Section>
         <button
           className="dp-btn"
-          disabled={!st.box && !st.boxName}
-          onClick={() => run((c) => c.box(() => ({ css: "" })))}
-          title="Remove this block's spacing, padding, font, border and style"
+          disabled={sel ? !rich : !st.box || (!!saved && !styleModified(props.lib!.styles, saved.name, st.box))}
+          title={sel ? "Remove bold, italic, colors and other text styles from the selection" : "Remove this paragraph's own font, spacing and border (back to its paragraph style)"}
+          onClick={() => {
+            if (sel) document.execCommand("removeFormat");
+            else run((c) => c.box(() => (saved ? { css: saved.css, name: saved.name } : { css: "" })));
+          }}
         >
-          Reset Block Format
+          Clear Formatting
         </button>
       </Section>
     </>
@@ -515,11 +448,11 @@ export function ParagraphLayoutFormat(props: { st: Status; run: Run; checklist?:
 
 /**
  * 段落樣式（參考 Pages 的段落樣式選單）：一個選單裡有內建的（標題、內文、引言…，只換段落類型）與
- * 已存的（`StyleLib`，所有文件共用；段落類型＋區塊樣式：間距、內距、字型、框線）。
+ * 已存的（`StyleLib`，所有文件共用；段落類型＋區塊樣式）。
  * - 選已存的：寫上它的區塊樣式與名稱，有記段落類型就一起換；
- * - 從已存的換成內建的：拿掉那個樣式的區塊樣式（換樣式就是換掉整個樣子），沒套用已存的就只換類型；
- * - 區塊改過（區塊樣式跟已存的不一樣）：Update（改樣式，所有文件用到它的區塊一起改）、Revert；
- * - New Style 用這個區塊現在的類型與樣子建一個；Rename、Delete（區塊保留樣子，不再連到樣式）。
+ * - 從已存的換成內建的：拿掉那個樣式的區塊樣式，沒套用已存的就只換類型；
+ * - 區塊改過（區塊樣式跟已存的不一樣）：選單下面一行「Update／Revert」；
+ * - 「⋯」：New Style（用這個段落現在的類型與樣子）、Rename、Delete（段落保留樣子，不再連到樣式）。
  */
 function ParagraphStyles(props: { st: Status; run: Run; styles: ParaStyle[]; lib?: StyleLib }) {
   const { st, run, lib } = props;
@@ -534,6 +467,14 @@ function ParagraphStyles(props: { st: Status; run: Run; styles: ParaStyle[]; lib
       c.box(() => ({ css: x.css, name: x.name }));
       if (x.type && x.type !== st.type) c.turnInto(x.type);
     });
+  const update = () => {
+    if (!lib || !cur) return;
+    const css = formatBlockStyle(parseBlockStyle(st.box));
+    lib.change(
+      saved.map((x) => (x.name === cur.name ? { ...x, css } : x)),
+      (v) => (v.name === cur.name ? { ...v, css } : v),
+    );
+  };
   const finish = (raw: string) => {
     const mode = naming;
     setNaming(null);
@@ -554,85 +495,296 @@ function ParagraphStyles(props: { st: Status; run: Run; styles: ParaStyle[]; lib
   };
   return (
     <Section title="Paragraph Style">
-      <Popup
-        big
-        label="Paragraph style"
-        value={cur ? `s:${cur.name}` : !st.boxName && builtIn ? `t:${builtIn.type}` : null}
-        placeholder={
-          st.boxName ? `${st.boxName} (missing)` : st.type === "bullet" || st.type === "ordered" || st.type === "todo" ? "List" : "Mixed"
-        }
-        options={[
-          ...props.styles.map((s) => ({ id: `t:${s.type}`, label: s.label, render: <span className={`dc-style ${s.cls}`}>{s.label}</span> })),
-          ...saved.map((x) => ({
-            id: `s:${x.name}`,
-            label: x.name,
-            hint: "Saved",
-            render: (
-              <span className={`dc-style dc-style-sample ${clsOf(x.type)}`} style={blockStyleCss(x.css)}>
-                {x.name}
-              </span>
-            ),
-          })),
-        ]}
-        onPick={(id) => {
-          if (id.startsWith("s:")) {
-            const x = saved.find((y) => y.name === id.slice(2));
-            if (x) apply(x);
-            return;
+      <div className="dc-style-line">
+        <Popup
+          big
+          label="Paragraph style"
+          value={cur ? `s:${cur.name}` : !st.boxName && builtIn ? `t:${builtIn.type}` : null}
+          placeholder={
+            st.boxName ? `${st.boxName} (missing)` : st.type === "bullet" || st.type === "ordered" || st.type === "todo" ? "List" : "Mixed"
           }
-          const t = id.slice(2) as BlockType;
-          run((c) => {
-            if (st.boxName) c.box(() => ({ css: "" }));
-            c.turnInto(t);
-          });
-        }}
-      />
-      {modified && lib && (
-        <div className="dc-row dc-style-mod">
-          <span className="dc-note">Changed from “{cur!.name}”.</span>
-          <button
-            className="dp-btn"
-            title={`Change “${cur!.name}” to look like this paragraph, everywhere it's used`}
-            onClick={() => {
-              const css = formatBlockStyle(parseBlockStyle(st.box));
-              lib.change(
-                saved.map((x) => (x.name === cur!.name ? { ...x, css } : x)),
-                (v) => (v.name === cur!.name ? { ...v, css } : v),
-              );
-            }}
-          >
+          options={[
+            ...props.styles.map((s) => ({ id: `t:${s.type}`, label: s.label, render: <span className={`dc-style ${s.cls}`}>{s.label}</span> })),
+            ...saved.map((x) => ({
+              id: `s:${x.name}`,
+              label: modified && x.name === cur?.name ? `${x.name}*` : x.name,
+              hint: "Saved",
+              render: (
+                <span className={`dc-style dc-style-sample ${clsOf(x.type)}`} style={blockStyleCss(x.css)}>
+                  {x.name}
+                </span>
+              ),
+            })),
+          ]}
+          onPick={(id) => {
+            if (id.startsWith("s:")) {
+              const x = saved.find((y) => y.name === id.slice(2));
+              if (x) apply(x);
+              return;
+            }
+            const t = id.slice(2) as BlockType;
+            run((c) => {
+              if (st.boxName) c.box(() => ({ css: "" }));
+              c.turnInto(t);
+            });
+          }}
+        />
+        {lib && (
+          <MoreMenu
+            label="Paragraph style actions"
+            items={[
+              { label: "New Style from Paragraph…", title: "Save this paragraph's type and look as a style you can use in any document", onClick: () => setNaming("new") },
+              { label: `Update “${cur?.name}”`, disabled: !modified, title: "Change the style to look like this paragraph, everywhere it's used", onClick: update },
+              { label: "Revert to Style", disabled: !modified, onClick: () => cur && apply(cur) },
+              { label: "Rename Style…", disabled: !cur, onClick: () => setNaming("rename") },
+              {
+                label: "Delete Style",
+                disabled: !cur,
+                title: "Paragraphs that use it keep their look",
+                onClick: () => cur && lib.change(saved.filter((x) => x.name !== cur.name), (v) => (v.name === cur.name ? { css: v.css } : v)),
+              },
+            ]}
+          />
+        )}
+      </div>
+      {modified && !naming && (
+        <div className="dc-style-mod">
+          <span>Changed from the style</span>
+          <button className="dc-link-btn" onClick={update} title={`Change “${cur!.name}” everywhere it's used`}>
             Update
           </button>
-          <button className="dp-btn" title="Put this paragraph back to the saved style" onClick={() => apply(cur!)}>
+          <button className="dc-link-btn" onClick={() => apply(cur!)}>
             Revert
           </button>
         </div>
       )}
-      {lib &&
-        (naming ? (
-          <NameInput initial={naming === "rename" && cur ? cur.name : freeStyleName(saved, "Style")} onDone={finish} />
-        ) : (
-          <div className="dc-row dc-style-actions">
-            <button className="dp-btn" title="Save this paragraph's type, spacing, padding, font and border as a style you can use in any document" onClick={() => setNaming("new")}>
-              New Style…
-            </button>
-            {cur && (
-              <>
-                <button className="dp-btn" onClick={() => setNaming("rename")}>
-                  Rename…
-                </button>
-                <button
-                  className="dp-btn"
-                  title="Delete this style. Paragraphs that use it keep their look."
-                  onClick={() => lib.change(saved.filter((x) => x.name !== cur.name), (v) => (v.name === cur.name ? { css: v.css } : v))}
-                >
-                  Delete
-                </button>
-              </>
-            )}
-          </div>
-        ))}
+      {naming && <NameInput initial={naming === "rename" && cur ? cur.name : freeStyleName(saved, "Style")} onDone={finish} />}
     </Section>
+  );
+}
+
+/**
+ * 字元樣式（參考 Pages）：套用在選取的文字（`<span data-cs="名稱">`），所有文件共用（`styleLibrary.ts`）。
+ * 樣子在共用的樣式表裡，改樣式設定所有用到它的字一起變。「⋯」：New Style（用選取文字的粗斜體、底線、
+ * 刪除線、顏色建一個並套用；用預設名稱，打名字的輸入框會讓編輯器失去選取）、Edit（展開設定）、Rename、Delete。
+ */
+function CharStyles(props: { st: Status; run: Run; text: boolean }) {
+  const { st, run, text } = props;
+  const list = useCharStyles();
+  const [naming, setNaming] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const m = st.marks;
+  const curName = m?.charStyle ?? null;
+  const cur = list.find((x) => x.name === curName) ?? null;
+  const s: BlockStyle = cur ? parseBlockStyle(cur.css) : {};
+  const NONE = "\u0000none";
+  const edit = (patch: Partial<BlockStyle>) =>
+    cur && changeCharStyles(list.map((x) => (x.name === cur.name ? { ...x, css: formatBlockStyle(charOnly({ ...parseBlockStyle(x.css), ...patch })) } : x)));
+  const create = () => {
+    const name = freeStyleName(list, "Character Style");
+    const css = formatBlockStyle(
+      charOnly({
+        weight: m?.bold ? "bold" : undefined,
+        italic: m?.italic || undefined,
+        underline: m?.underline || undefined,
+        strike: m?.strike || undefined,
+        color: m?.color ?? undefined,
+      }),
+    );
+    changeCharStyles([...list, { name, css }]);
+    run((c) => c.charStyle(name));
+  };
+  const finish = (raw: string) => {
+    setNaming(false);
+    if (!cur || !cleanStyleName(raw)) return;
+    const name = freeStyleName(list, raw, cur.name);
+    if (name === cur.name) return;
+    changeCharStyles(
+      list.map((x) => (x.name === cur.name ? { ...x, name } : x)),
+      (src) => renameCharStyle(src, cur.name, name),
+    );
+  };
+  return (
+    <Section title="Character Style">
+      <div className="dc-style-line">
+        <Popup
+          label="Character style"
+          disabled={!text}
+          value={cur ? cur.name : curName ? null : NONE}
+          placeholder={curName ? `${curName} (missing)` : "None"}
+          options={[
+            { id: NONE, label: "None" },
+            ...list.map((x) => ({
+              id: x.name,
+              label: x.name,
+              render: (
+                <span className="dc-style-sample" style={blockStyleCss(formatBlockStyle(charOnly(parseBlockStyle(x.css))))}>
+                  {x.name}
+                </span>
+              ),
+            })),
+          ]}
+          onPick={(id) => run((c) => c.charStyle(id === NONE ? null : id))}
+        />
+        <MoreMenu
+          label="Character style actions"
+          items={[
+            { label: "New Style from Selection", disabled: !text || !st.textSel, title: "Save the selected text's look as a character style and apply it", onClick: create },
+            { label: editing ? "Hide Style Settings" : "Edit Style…", disabled: !cur, title: "Change this style everywhere it's used", onClick: () => setEditing((v) => !v) },
+            { label: "Rename Style…", disabled: !cur, onClick: () => setNaming(true) },
+            {
+              label: "Delete Style",
+              disabled: !cur,
+              title: "Text that uses it goes back to plain text",
+              onClick: () => cur && changeCharStyles(list.filter((x) => x.name !== cur.name), (src) => removeCharStyle(src, cur.name)),
+            },
+          ]}
+        />
+      </div>
+      {naming && <NameInput initial={cur?.name ?? ""} onDone={finish} />}
+      {cur && editing && (
+        <div className="dc-cs-edit">
+          <p className="dc-note">Changes to “{cur.name}” apply everywhere it's used.</p>
+          <Popup
+            label="Character style font"
+            value={s.font ?? ""}
+            options={[{ id: "", label: "Same as paragraph" }, ...BLOCK_FONTS.map((f) => ({ id: f.css, label: f.label, render: <span style={{ fontFamily: f.css }}>{f.label}</span> }))]}
+            onPick={(font) => edit({ font: font || undefined })}
+          />
+          <div className="dc-nums">
+            <PtField label="Size (pt)" value={s.size} placeholder="Same" onSet={(size) => edit({ size: size || undefined })} />
+            <PtField label="Spacing (pt)" value={s.tracking} step={0.5} onSet={(tracking) => edit({ tracking: tracking || undefined })} />
+          </div>
+          <div className="dc-row dc-font-row">
+            <Seg label="Character style look">
+              <SegBtn title="Bold" on={s.weight === "bold"} onClick={() => edit({ weight: s.weight === "bold" ? undefined : "bold" })}>
+                <b>B</b>
+              </SegBtn>
+              <SegBtn title="Italic" on={!!s.italic} onClick={() => edit({ italic: !s.italic || undefined })}>
+                <i style={{ fontFamily: "Georgia, serif" }}>I</i>
+              </SegBtn>
+              <SegBtn title="Underline" on={!!s.underline} onClick={() => edit({ underline: !s.underline || undefined })}>
+                <u>U</u>
+              </SegBtn>
+              <SegBtn title="Strikethrough" on={!!s.strike} onClick={() => edit({ strike: !s.strike || undefined })}>
+                <s>S</s>
+              </SegBtn>
+            </Seg>
+            <ColorWell kind="color" value={(s.color as Color | undefined) ?? null} title="Character style color" onPick={(c) => edit({ color: c ?? undefined })} />
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * Layout 分頁（參考 Pages 的 Layout）：對齊與縮排、清單、間距（行距、段前、段後）、
+ * 左右縮排、框線與底色（底色、框線、圓角、內距）。空白的欄位跟著文件的預設。
+ */
+export function LayoutFormat(props: { st: Status; run: Run; checklist?: boolean; shading?: boolean; hint?: string }) {
+  const { st, run } = props;
+  if (!canFormat(st)) return <NeedText hint={props.hint} />;
+  const listType = LISTS.some((l) => l.id === st.type) ? st.type : "paragraph";
+  const s: BlockStyle = parseBlockStyle(st.box);
+  const set = (patch: Partial<BlockStyle>) => run((c) => c.box((v) => ({ ...v, css: patchBlockStyle(v.css, patch) })));
+  const margin: Sides = s.margin ?? [0, 0, 0, 0];
+  /** 外距的一邊（段前＝上、段後＝下、左右縮排＝左右） */
+  const side = (i: number) => (n: number | undefined) => {
+    const next = [...margin] as Sides;
+    next[i] = n ?? 0;
+    set({ margin: next });
+  };
+  return (
+    <>
+      <Section title="Alignment">
+        <div className="dc-row">
+          <Seg label="Alignment">
+            <SegBtn title="Align left" on={st.align === "left"} onClick={() => run((c) => c.align("left"))}>
+              <AlignLeftIcon />
+            </SegBtn>
+            <SegBtn title="Center" on={st.align === "center"} onClick={() => run((c) => c.align("center"))}>
+              <AlignCenterIcon />
+            </SegBtn>
+            <SegBtn title="Align right" on={st.align === "right"} onClick={() => run((c) => c.align("right"))}>
+              <AlignRightIcon />
+            </SegBtn>
+          </Seg>
+          <Seg label="Indent">
+            <SegBtn title="Decrease indent (Shift+Tab)" onClick={() => run((c) => c.indent(true))}>
+              <OutdentIcon />
+            </SegBtn>
+            <SegBtn title="Increase indent (Tab)" onClick={() => run((c) => c.indent(false))}>
+              <IndentIcon />
+            </SegBtn>
+          </Seg>
+        </div>
+      </Section>
+      <Section title="Bullets & Lists">
+        <Popup
+          label="Bullets and lists"
+          value={listType as BlockType}
+          options={LISTS.filter((l) => props.checklist || l.id !== "todo").map((l) => ({ id: l.id, label: l.label }))}
+          onPick={(t) => run((c) => c.turnInto(t))}
+        />
+      </Section>
+      <Section title="Spacing">
+        <Field label="Line">
+          <Popup
+            label="Line spacing"
+            value={s.line ?? 0}
+            options={[{ id: 0, label: "Default" }, ...LINE_SPACINGS.map((l) => ({ id: l, label: String(l) }))]}
+            onPick={(line) => set({ line: line || undefined })}
+          />
+        </Field>
+        <div className="dc-nums">
+          <PtField label="Before (pt)" value={s.margin ? margin[0] : undefined} onSet={side(0)} />
+          <PtField label="After (pt)" value={s.margin ? margin[2] : undefined} onSet={side(2)} />
+        </div>
+      </Section>
+      <Section title="Indents">
+        <div className="dc-nums">
+          <PtField label="Left (pt)" value={s.margin ? margin[3] : undefined} onSet={side(3)} />
+          <PtField label="Right (pt)" value={s.margin ? margin[1] : undefined} onSet={side(1)} />
+          <PtField label="First line (pt)" value={s.firstLine} onSet={(firstLine) => set({ firstLine: firstLine || undefined })} />
+        </div>
+      </Section>
+      <Section title="Border & Fill">
+        {props.shading && (
+          <Field label="Fill">
+            <ColorWell kind="bg" value={st.bg} title="Paragraph background" onPick={(c) => run((x) => x.blockBg(c))} />
+          </Field>
+        )}
+        {/* 第一格是「沒有框線」；再按一次選中的顏色也是拿掉框線 */}
+        <div className="dc-border-colors" role="group" aria-label="Border color">
+          <button
+            className={`dc-border-color none${s.border ? "" : " on"}`}
+            title="No border"
+            aria-label="No border"
+            onClick={() => set({ border: undefined, borderColor: undefined })}
+          />
+          {BORDER_COLORS.map((c) => {
+            const on = !!s.border && (s.borderColor ?? "default") === c;
+            return (
+              <button
+                key={c}
+                className={`dc-border-color${on ? " on" : ""}`}
+                title={on ? "Remove border" : c === "default" ? "Gray border" : `${c[0].toUpperCase() + c.slice(1)} border`}
+                aria-label={`Border color ${c}`}
+                aria-pressed={on}
+                style={{ borderColor: c === "default" ? "var(--ed-faint)" : `var(--tc-${c})` }}
+                onClick={() => set(on ? { border: undefined, borderColor: undefined } : { border: s.border || 1, borderColor: c })}
+              />
+            );
+          })}
+        </div>
+        <div className="dc-nums">
+          <PtField label="Border (pt)" value={s.border} step={0.5} onSet={(border) => set({ border: border || undefined })} />
+          <PtField label="Corners (pt)" value={s.radius} onSet={(radius) => set({ radius: radius || undefined })} />
+        </div>
+        <SidesField label="Padding" value={s.padding} onSet={(padding) => set({ padding })} />
+      </Section>
+    </>
   );
 }
 

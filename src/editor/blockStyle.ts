@@ -40,6 +40,8 @@ export interface BlockStyle {
   color?: string;
   /** 字距（pt，可以是負的） */
   tracking?: number;
+  /** 首行縮排（pt；整段的第一行往右縮，`text-indent`） */
+  firstLine?: number;
 }
 
 /** 文字顏色（跟文字顏色選單同一組，沒有「預設」：拿掉就是預設） */
@@ -126,6 +128,9 @@ export function parseBlockStyle(css: string): BlockStyle {
     } else if (key === "letter-spacing") {
       const m = /^(-?\d+(?:\.\d+)?)pt$/.exec(val);
       if (m) out.tracking = clamp(Number(m[1]), -5, 20);
+    } else if (key === "text-indent") {
+      const m = /^(\d+(?:\.\d+)?)pt$/.exec(val);
+      if (m) out.firstLine = clamp(Number(m[1]), 0, LIMIT.space);
     }
   }
   return clean(out);
@@ -150,6 +155,7 @@ export function clean(s: BlockStyle): BlockStyle {
   if (s.strike) out.strike = true;
   if (s.color) out.color = s.color;
   if (s.tracking) out.tracking = s.tracking;
+  if (s.firstLine) out.firstLine = s.firstLine;
   return out;
 }
 
@@ -172,6 +178,7 @@ export function formatBlockStyle(s: BlockStyle): string {
   if (c.underline || c.strike) out.push(`text-decoration: ${[c.underline && "underline", c.strike && "line-through"].filter(Boolean).join(" ")}`);
   if (c.color) out.push(`color: var(--tc-${c.color})`);
   if (c.tracking) out.push(`letter-spacing: ${fmt(c.tracking)}pt`);
+  if (c.firstLine) out.push(`text-indent: ${fmt(c.firstLine)}pt`);
   return out.join("; ");
 }
 
@@ -248,4 +255,61 @@ export function cleanStyles(raw: unknown): SavedStyle[] {
 export function styleModified(styles: SavedStyle[], name: string, css: string): boolean {
   const s = styles.find((x) => x.name === name);
   return !!s && formatBlockStyle(parseBlockStyle(s.css)) !== formatBlockStyle(parseBlockStyle(css));
+}
+
+// ─── 字元樣式（參考 Pages 的字元樣式：套用在選取的文字） ─────────
+//
+// 存成參照 `<span data-cs="名稱">文字</span>`，樣子由共用的樣式表（`charStyleSheet`）決定：
+// 改了樣式，所有文件裡用到它的字一起變，不必改寫文件。只有字元方面的屬性（字型、字級、粗細、
+// 斜體、底線、刪除線、顏色、字距）。
+
+/** 只留字元方面的屬性 */
+export function charOnly(s: BlockStyle): BlockStyle {
+  const { font, size, weight, italic, underline, strike, color, tracking } = s;
+  return clean({ font, size, weight, italic, underline, strike, color, tracking });
+}
+
+/** 字元樣式的樣式表：`span[data-cs="名稱"] { … }` */
+export function charStyleSheet(list: SavedStyle[]): string {
+  return list
+    .map((s) => {
+      const css = formatBlockStyle(charOnly(parseBlockStyle(s.css)));
+      return css ? `span[data-cs="${s.name.replace(/\\/g, "\\\\")}"] { ${css} }` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** 改名：`<span data-cs="舊">` → `<span data-cs="新">` */
+export function renameCharStyle(src: string, from: string, to: string): string {
+  return src.replace(new RegExp(`<span data-cs="${escapeRe(from)}">`, "g"), `<span data-cs="${to}">`);
+}
+
+/** 拿掉字元樣式：拆掉 `<span data-cs="名稱">` 與配對的 `</span>`，文字留著（裡面還有別的 span 也照樣配對） */
+export function removeCharStyle(src: string, name: string): string {
+  const open = `<span data-cs="${name}">`;
+  let out = src;
+  for (let at = out.indexOf(open); at >= 0; at = out.indexOf(open, at)) {
+    let depth = 1;
+    const tag = /<span\b[^>]*>|<\/span>/g;
+    tag.lastIndex = at + open.length;
+    let m: RegExpExecArray | null;
+    let close = -1;
+    while ((m = tag.exec(out))) {
+      depth += m[0] === "</span>" ? -1 : 1;
+      if (depth === 0) {
+        close = m.index;
+        break;
+      }
+    }
+    if (close < 0) {
+      // 沒有配對的結尾：只拿掉開頭
+      out = out.slice(0, at) + out.slice(at + open.length);
+      continue;
+    }
+    out = out.slice(0, at) + out.slice(at + open.length, close) + out.slice(close + "</span>".length);
+  }
+  return out;
 }

@@ -253,6 +253,8 @@ export interface EditorStatus {
   box: string;
   /** 區塊套用的已存樣式名稱（沒有就是空字串） */
   boxName: string;
+  /** 編輯中的區塊裡選取了文字（沒有選取時，功能區的粗斜體、顏色作用在整段） */
+  textSel: boolean;
 }
 
 /** 功能區的指令：編輯中就作用在編輯中的區塊／選取的文字，否則作用在選取的區塊 */
@@ -261,6 +263,8 @@ export interface EditorCommands {
   release: () => void;
   mark: (m: Mark) => void;
   color: (kind: "color" | "highlight", c: Color | null) => void;
+  /** 選取的文字套用字元樣式（`<span data-cs="名稱">`；null 是拿掉） */
+  charStyle: (name: string | null) => void;
   blockBg: (c: Color | null) => void;
   turnInto: (t: BlockType) => void;
   indent: (outdent: boolean) => void;
@@ -286,6 +290,7 @@ const NO_STATUS: EditorStatus = {
   align: "left",
   box: "",
   boxName: "",
+  textSel: false,
 };
 const handles = new Map<object, { status: EditorStatus; cmds: EditorCommands }>();
 const busListeners = new Set<() => void>();
@@ -463,12 +468,19 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
 
   // 行內格式：游標所在文字的狀態（下方格式列用），以及套用格式後要恢復的選取
   const [marks, setMarks] = useState<Marks | null>(null);
+  /** 編輯中的區塊裡有沒有選取文字（功能區用：有選取作用在選取的字，沒有作用在整段） */
+  const [textSel, setTextSel] = useState(false);
   const pendingSel = useRef<[number, number] | null>(null);
 
   const refreshMarks = useCallback(() => {
     const surf = surfRef.current;
-    if (!surf || !stateRef.current.region) return setMarks(null);
-    const next = surf.marks() ?? marksAt(surf.text(), ...surf.sel());
+    if (!surf || !stateRef.current.region) {
+      setTextSel(false);
+      return setMarks(null);
+    }
+    const [sa, sb] = surf.sel();
+    setTextSel(sa !== sb);
+    const next = surf.marks() ?? marksAt(surf.text(), sa, sb);
     setMarks((cur) =>
       cur && (Object.keys(next) as (keyof Marks)[]).every((k) => cur[k] === next[k]) ? cur : next,
     );
@@ -701,6 +713,20 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
     const r = setColor(text, a, b, kind, color);
     if (r.text === text) return;
     commitFormatted(r);
+  };
+
+  /** 選取的文字套用（或拿掉）字元樣式；沒有選取時讓接著打的字套用。只有所見即所得編輯有。 */
+  const applyCharStyle = (name: string | null) => {
+    const surf = surfRef.current;
+    if (!surf || !stateRef.current.region || !surf.rich) return;
+    const [a, b] = surf.sel();
+    const spec: FormatSpec = { tag: "cs", name };
+    if (a === b) {
+      if (surf.typingStyle(spec)) refreshMarks();
+      return;
+    }
+    const r = surf.format(spec, name ? "on" : "off");
+    if (r) commitFormatted(r);
   };
 
   /** 設定正在編輯的整個區塊的背景顏色，然後繼續編輯同一個區塊。 */
@@ -1989,6 +2015,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
     },
     mark: (m) => applyMark(m),
     color: (kind, c) => applyColor(kind, c),
+    charStyle: (n) => applyCharStyle(n),
     blockBg: (c) => {
       if (stateRef.current.region) applyBlockBg(c);
       else if (selRef.current.length) applyMany(setBlocksBg(stateRef.current.source, selectedBlocks(), c));
@@ -2069,6 +2096,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       align: statusAlign,
       box: boxNow.css,
       boxName: boxNow.name ?? "",
+      textSel: !!region && textSel,
     };
     const same = prev && (Object.keys(next) as (keyof EditorStatus)[]).every((k) => prev[k] === next[k]);
     const status = same ? prev : next;
@@ -2078,6 +2106,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         release: () => cmdRef.current.release(),
         mark: (m) => cmdRef.current.mark(m),
         color: (k, c) => cmdRef.current.color(k, c),
+        charStyle: (n) => cmdRef.current.charStyle(n),
         blockBg: (c) => cmdRef.current.blockBg(c),
         turnInto: (t) => cmdRef.current.turnInto(t),
         indent: (o) => cmdRef.current.indent(o),

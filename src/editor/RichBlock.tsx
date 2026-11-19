@@ -304,6 +304,7 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
         // 等待中的格式：狀態列顯示接著打的字會是什麼樣子
         if (pend.spec.tag === "span") return { ...m, color: pend.on ? pend.spec.color : null };
         if (pend.spec.tag === "mark") return { ...m, highlight: pend.on ? pend.spec.color : null };
+        if (pend.spec.tag === "cs") return { ...m, charStyle: pend.on ? pend.spec.name : null };
         return { ...m, [MARK_OF[pend.spec.tag]]: pend.on };
       },
       format: (spec, mode) => {
@@ -334,6 +335,7 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
         if (!m) return false;
         let on: boolean;
         if (spec.tag === "span" || spec.tag === "mark") on = spec.color !== null;
+        else if (spec.tag === "cs") on = spec.name !== null;
         else {
           const cur = pending.current && pending.current.spec.tag === spec.tag ? pending.current.on : m[MARK_OF[spec.tag]];
           on = !cur;

@@ -9,7 +9,7 @@
 
 | # | 功能 | 狀態 | 說明 |
 |---|---|---|---|
-| 1 | 粗體、斜體、底線、刪除線 | ✅ | 檢閱器 Format → Text、Ctrl＋B／I／U |
+| 1 | 粗體、斜體、底線、刪除線 | ✅ | 檢閱器 Format → Style → Font（有選取作用在選取的字，沒有作用在整段）、Ctrl＋B／I／U |
 | 2 | 文字顏色 | ✅ | |
 | 3 | 螢光標記 | ✅ | |
 | 4 | 段落樣式（標題、內文、引言） | ✅ | |
@@ -18,9 +18,9 @@
 | 7 | 縮排、減少縮排 | ✅ | |
 | 8 | 項目符號、編號清單 | ✅ | |
 | 9 | 核取方塊清單 | ✅ | |
-| 10 | 選取文字的字型 | 🟡 | 整份文件一個字型（Document → Body Text）；每個段落可以單獨設定（Format → Paragraph，2026-11-19），選取的一段文字還不行 |
-| 11 | 選取文字的字級 | 🟡 | 整份文件一個字級；每個段落可以單獨設定（Format → Paragraph） |
-| 12 | 行距 | ✅ | 整份文件；每個段落也可以單獨設定（Format → Paragraph → Spacing） |
+| 10 | 選取文字的字型 | 🟡 | 整份文件一個字型（Document → Body Text）；每個段落可以單獨設定（Format → Style → Font，2026-11-19），選取的一段文字還不行 |
+| 11 | 選取文字的字級 | 🟡 | 整份文件一個字級；每個段落可以單獨設定（Format → Style → Font） |
+| 12 | 行距 | ✅ | 整份文件；每個段落也可以單獨設定（Format → Layout → Spacing） |
 | 13 | 段落底色 | ✅ | |
 | 14 | 上標、下標 | ✅ 🆕 | 工具列與下方格式列 x²／x₂、Ctrl＋.／Ctrl＋,；存成 `<sup>`／`<sub>`，匯出 .docx、.pptx 也保留 |
 | 15 | 清除格式 | ✅ 🆕 | Format → Style → Clear Formatting |
@@ -56,11 +56,13 @@
 | 45 | 書籤、文件內連結 | ❌ | |
 | 46 | 多人同時編輯 | ❌ | |
 | 47 | 開啟／匯入其他格式 | ✅ 🆕 | 工具列 Import（接在最後面）或 Dock 的 Import a File…：.docx（含圖片）、.doc（Word 97–2003，只有文字與表格）、.odt、.rtf、.html、.md、.txt |
-| 48 | 段落前後間距、左右縮排（點數） | ✅ 🆕 | Format → Paragraph → Spacing 的 Margin（四邊一起或分開，pt）；另有 Padding |
-| 49 | 段落框線 | ✅ 🆕 | Format → Paragraph → Border（粗細、顏色、圓角） |
-| 50 | 自訂樣式（新增、更新、改名、刪除） | ✅ 🆕 | Format → Style → Paragraph Style（跟內建樣式同一個選單）：用段落現在的類型與樣子（含整段的粗體、斜體、底線、刪除線、文字顏色、字距）存成樣式，所有文件共用；改過的區塊按 Update 更新所有文件裡用到它的區塊 |
+| 48 | 段落前後間距、左右縮排（點數） | ✅ 🆕 | Format → Layout → Spacing 的 Before／After 與 Indents 的 Left／Right（pt）；另有 Padding |
+| 49 | 段落框線 | ✅ 🆕 | Format → Layout → Border & Fill（粗細、顏色、圓角、內距、底色） |
+| 50 | 自訂樣式（新增、更新、改名、刪除） | ✅ 🆕 | Format → Style → Paragraph Style（跟內建樣式同一個選單，動作在「⋯」）：用段落現在的類型與樣子（含整段的粗體、斜體、底線、刪除線、文字顏色、字距）存成樣式，所有文件共用；改過的區塊按 Update 更新所有文件裡用到它的區塊 |
+| 51 | 字元樣式（套用在選取的文字） | ✅ 🆕 | Format → Style → Character Style：新增（用選取文字的粗斜體、底線、刪除線、顏色）、套用、改樣式設定（所有用到的字一起變）、改名、刪除；所有文件共用 |
+| 52 | 首行縮排 | ✅ 🆕 | Format → Layout → Indents → First line（pt） |
 
-**40.5 ／ 50 ≈ 81%**（這次之前約 24 ／ 46 ≈ 52%）
+**42.5 ／ 52 ≈ 82%**（這次之前約 24 ／ 46 ≈ 52%）
 
 ## PowerPoint ／ Google 簡報 → Banyan Slides
 

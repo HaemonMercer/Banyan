@@ -190,6 +190,13 @@ type FormatKey = string | null;
 
 const PALETTE = COLORS as readonly string[];
 const colorClass = (el: Element) => [...el.classList].find((c) => PALETTE.includes(c)) ?? null;
+/** 字元樣式（已存的樣式名稱，`<span data-cs="名稱">`；樣子由共用的樣式表決定） */
+const charStyleOf = (el: Element) => (el.tagName === "SPAN" ? el.getAttribute("data-cs") || null : null);
+
+/** 有「值」的格式（顏色、螢光、字元樣式）：元素的值，跟 spec 的值比較用 */
+const specValue = (spec: FormatSpec): string | null => (spec.tag === "span" || spec.tag === "mark" ? spec.color : spec.tag === "cs" ? spec.name : null);
+const elValue = (el: Element, spec: FormatSpec): string | null => (spec.tag === "cs" ? charStyleOf(el) : colorClass(el));
+const valued = (spec: FormatSpec) => spec.tag === "span" || spec.tag === "mark" || spec.tag === "cs";
 
 /** 元素代表的格式；相同格式的相鄰元素會合併。 */
 function formatKey(el: Element): FormatKey {
@@ -217,6 +224,7 @@ function formatKey(el: Element): FormatKey {
       if (el.classList.contains("page-ref")) return null;
       return "a:" + (el.getAttribute("href") ?? "");
     case "SPAN":
+      if (charStyleOf(el)) return "cs:" + charStyleOf(el);
       return colorClass(el) ? "span:" + colorClass(el) : null;
     case "MARK":
       return "mark:" + (colorClass(el) ?? "yellow");
@@ -361,6 +369,8 @@ function serializeNode(node: Node, o: SerOptions): string {
     case "DEL":
       return wrap(inner(), "<s>", "</s>");
     case "SPAN": {
+      const cs = charStyleOf(el);
+      if (cs) return wrap(inner(), `<span data-cs="${cs.replace(/["<>&]/g, "")}">`, "</span>");
       const c = colorClass(el);
       return c ? wrap(inner(), `<span class="${c}">`, "</span>") : inner();
     }
@@ -591,6 +601,7 @@ export function domMarks(root: HTMLElement): Marks | null {
     link: false,
     color: null,
     highlight: null,
+    charStyle: null,
   };
   for (let n: Node | null = node; n && n !== root; n = n.parentNode) {
     if (n.nodeType !== Node.ELEMENT_NODE) continue;
@@ -606,6 +617,7 @@ export function domMarks(root: HTMLElement): Marks | null {
     else if (key.startsWith("a:")) m.link = true;
     else if (key.startsWith("span:") && !m.color) m.color = key.slice(5) as Color;
     else if (key.startsWith("mark:") && !m.highlight) m.highlight = key.slice(5) as Color;
+    else if (key.startsWith("cs:") && !m.charStyle) m.charStyle = key.slice(3);
   }
   return m;
 }
@@ -615,6 +627,8 @@ export function domMarks(root: HTMLElement): Marks | null {
 export type FormatSpec =
   | { tag: "strong" | "em" | "u" | "s" | "sup" | "sub" | "code" }
   | { tag: "span" | "mark"; color: Color | null }
+  /** 字元樣式（`<span data-cs="名稱">`；name 是 null 表示拿掉） */
+  | { tag: "cs"; name: string | null }
   | { tag: "a"; href: string };
 
 function matches(el: Element, spec: FormatSpec): boolean {
@@ -633,6 +647,8 @@ function matches(el: Element, spec: FormatSpec): boolean {
       return key === spec.tag;
     case "span":
       return key.startsWith("span:");
+    case "cs":
+      return key.startsWith("cs:");
     case "mark":
       return key.startsWith("mark:");
     case "a":
@@ -641,7 +657,12 @@ function matches(el: Element, spec: FormatSpec): boolean {
 }
 
 function makeEl(doc: Document, spec: FormatSpec): HTMLElement | null {
-  if ((spec.tag === "span" || spec.tag === "mark") && !spec.color) return null;
+  if (valued(spec) && !specValue(spec)) return null;
+  if (spec.tag === "cs") {
+    const el = doc.createElement("span");
+    el.setAttribute("data-cs", spec.name!);
+    return el;
+  }
   const el = doc.createElement(spec.tag);
   if (spec.tag === "a") el.setAttribute("href", spec.href);
   if ((spec.tag === "span" || spec.tag === "mark") && spec.color) el.className = spec.color;
@@ -677,7 +698,7 @@ export function toggleAtCaret(root: HTMLElement, spec: FormatSpec): boolean {
     if (visible(after)) zw.after(after);
     // 換顏色：中間放新顏色的空元素
     const fresh = makeEl(doc, spec);
-    if (fresh && (spec.tag === "span" || spec.tag === "mark") && !matchesColor(host, spec)) {
+    if (fresh && valued(spec) && !matchesColor(host, spec)) {
       fresh.append(zw.cloneNode());
       zw.replaceWith(fresh);
       placeCaret(root, [fresh.firstChild!, 1]);
@@ -695,7 +716,7 @@ export function toggleAtCaret(root: HTMLElement, spec: FormatSpec): boolean {
 }
 
 function matchesColor(el: Element, spec: FormatSpec): boolean {
-  return (spec.tag === "span" || spec.tag === "mark") && colorClass(el) === spec.color;
+  return valued(spec) && elValue(el, spec) === specValue(spec);
 }
 
 /** 游標是否在第一行／最後一行（用來決定上下方向鍵要不要跳到別的區塊）。 */
@@ -823,8 +844,7 @@ export function forceFormat(
   if (range.collapsed) return null;
 
   const host = hostOf(root, range.commonAncestorContainer, spec);
-  const colored = spec.tag === "span" || spec.tag === "mark";
-  if (on && host && (!colored || colorClass(host) === spec.color)) return null; // 已經是這個格式
+  if (on && host && (!valued(spec) || elValue(host, spec) === specValue(spec))) return null; // 已經是這個格式
   if (!on && !host) return null; // 本來就沒有
 
   let frag: DocumentFragment;
@@ -953,7 +973,8 @@ function isolateMarkers(root: Node): { a: Text | null; b: Text | null } {
 function hasFormat(root: Node, node: Node, spec: FormatSpec): boolean {
   for (let n: Node | null = node.parentNode; n && n !== root; n = n.parentNode) {
     if (n.nodeType !== Node.ELEMENT_NODE || !matches(n as Element, spec)) continue;
-    if ((spec.tag === "span" || spec.tag === "mark") && colorClass(n as Element) !== spec.color) return false;
+    // 拿掉（值是 null）：任何值都算有；加上：要同一個值才算
+    if (valued(spec) && specValue(spec) !== null && elValue(n as Element, spec) !== specValue(spec)) return false;
     return true;
   }
   return false;
@@ -999,11 +1020,11 @@ export function formatSelection(
   const solid = segs.filter((t) => t.data.replace(/[\s\u200B\uE000\uE001]/g, ""));
   const all = (solid.length ? solid : segs).every((t) => hasFormat(clone, t, spec));
   const on = mode === "toggle" ? !all : mode === "on";
-  if (on && (spec.tag === "span" || spec.tag === "mark") && !spec.color) return null;
+  if (on && valued(spec) && !specValue(spec)) return null;
   // 由後往前處理，前面的節點不受影響
   for (const t of [...segs].reverse()) {
     if (!t.isConnected && !clone.contains(t)) continue;
-    if (hasFormat(clone, t, spec) === on && !(on && (spec.tag === "span" || spec.tag === "mark"))) continue;
+    if (hasFormat(clone, t, spec) === on && !(on && valued(spec))) continue;
     forceFormat(clone, [t, 0], [t, t.data.length], spec, on);
   }
   return serializeMarked(clone, env);
@@ -1029,7 +1050,7 @@ export function selectionMarks(root: HTMLElement): Marks | null {
   }
   if (!segs.length) return domMarks(root);
   const each = segs.map((t) => {
-    const m: Marks = { bold: false, italic: false, strike: false, underline: false, sup: false, sub: false, code: false, link: false, color: null, highlight: null };
+    const m: Marks = { bold: false, italic: false, strike: false, underline: false, sup: false, sub: false, code: false, link: false, color: null, highlight: null, charStyle: null };
     for (let n: Node | null = t.parentNode; n && n !== root; n = n.parentNode) {
       if (n.nodeType !== Node.ELEMENT_NODE) continue;
       const key = formatKey(n as Element);
@@ -1044,6 +1065,7 @@ export function selectionMarks(root: HTMLElement): Marks | null {
       else if (key.startsWith("a:")) m.link = true;
       else if (key.startsWith("span:") && !m.color) m.color = key.slice(5) as Color;
       else if (key.startsWith("mark:") && !m.highlight) m.highlight = key.slice(5) as Color;
+      else if (key.startsWith("cs:") && !m.charStyle) m.charStyle = key.slice(3);
     }
     return m;
   });
@@ -1059,5 +1081,6 @@ export function selectionMarks(root: HTMLElement): Marks | null {
     link: each.every((m) => m.link),
     color: each.every((m) => m.color === first.color) ? first.color : null,
     highlight: each.every((m) => m.highlight === first.highlight) ? first.highlight : null,
+    charStyle: each.every((m) => m.charStyle === first.charStyle) ? first.charStyle : null,
   };
 }

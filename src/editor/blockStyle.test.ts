@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BLOCK_FONTS, blockStyleClasses, blockStyleCss, cleanStyles, formatBlockStyle, freeStyleName, parseBlockStyle, patchBlockStyle, styleModified } from "./blockStyle";
+import { BLOCK_FONTS, blockStyleClasses, blockStyleCss, charStyleSheet, cleanStyles, removeCharStyle, renameCharStyle, formatBlockStyle, freeStyleName, parseBlockStyle, patchBlockStyle, styleModified } from "./blockStyle";
 import { blockBox, restyleBoxes, setBlockBox, setBlocksBox, setBlockBg } from "./layout";
 import { parseDoc, renderMarkdown } from "./markdown";
 
@@ -32,6 +32,13 @@ describe("區塊樣式 blockStyle", () => {
     expect(patchBlockStyle(css, { italic: undefined, color: undefined })).toBe(
       "font-weight: 400; text-decoration: underline line-through; letter-spacing: 1.5pt",
     );
+  });
+
+  it("首行縮排：text-indent（pt），不認得的單位丟掉", () => {
+    expect(formatBlockStyle({ firstLine: 24 })).toBe("text-indent: 24pt");
+    expect(parseBlockStyle("text-indent: 24pt")).toEqual({ firstLine: 24 });
+    expect(parseBlockStyle("text-indent: 2em")).toEqual({});
+    expect(patchBlockStyle("text-indent: 24pt; margin: 6pt 0pt 0pt 0pt", { firstLine: undefined })).toBe("margin: 6pt 0pt 0pt 0pt");
   });
 
   it("CSS 縮寫：兩個值是上下、左右；超出範圍夾住", () => {
@@ -133,3 +140,16 @@ describe("已存的樣式（data-style）", () => {
   });
 });
 
+
+describe("字元樣式", () => {
+  it("只留字元方面的屬性；樣式表用 data-cs 選取", () => {
+    const list = [{ name: "Key", css: "padding: 4pt 4pt 4pt 4pt; font-weight: 700; color: var(--tc-red)" }, { name: "Empty", css: "margin: 2pt 2pt 2pt 2pt" }];
+    expect(charStyleSheet(list)).toBe('span[data-cs="Key"] { font-weight: 700; color: var(--tc-red) }');
+  });
+
+  it("改名只動參照；拿掉時拆掉配對的 </span>，裡面的顏色 span 留著", () => {
+    const src = 'a <span data-cs="Key">b <span class="red">c</span> d</span> e <span data-cs="Keys">f</span>';
+    expect(renameCharStyle(src, "Key", "Term")).toBe('a <span data-cs="Term">b <span class="red">c</span> d</span> e <span data-cs="Keys">f</span>');
+    expect(removeCharStyle(src, "Key")).toBe('a b <span class="red">c</span> d e <span data-cs="Keys">f</span>');
+  });
+});

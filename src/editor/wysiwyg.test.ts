@@ -257,6 +257,28 @@ describe("有選取時切換格式（以畫面上的字為準）", () => {
     );
   });
 
+  it("字元樣式：選取的字包上 <span data-cs>，讀得到名稱；換一個、拿掉", () => {
+    renderInto(el, "abc def ghi", null);
+    const t = el.firstChild!;
+    select([t, 4], [t, 7]);
+    const r = formatSelection(el, { tag: "cs", name: "Key" }, "on")!;
+    expect(r.content).toBe('abc <span data-cs="Key">def</span> ghi');
+    renderInto(el, r.content, null);
+    const span = el.querySelector("span[data-cs]")!;
+    select([span.firstChild!, 0], [span.firstChild!, 3]);
+    expect(selectionMarks(el)!.charStyle).toBe("Key");
+    expect(formatSelection(el, { tag: "cs", name: "Term" }, "on")!.content).toBe('abc <span data-cs="Term">def</span> ghi');
+    select([span.firstChild!, 0], [span.firstChild!, 3]);
+    expect(formatSelection(el, { tag: "cs", name: null }, "off")!.content).toBe("abc def ghi");
+  });
+
+  it("選取有顏色的字，選「預設」拿掉顏色", () => {
+    renderInto(el, 'a <span class="red">bc</span> d', null);
+    const span = el.querySelector("span.red")!;
+    select([span.firstChild!, 0], [span.firstChild!, 2]);
+    expect(formatSelection(el, { tag: "span", color: null }, "off")!.content).toBe("a bc d");
+  });
+
   it("再按一次加回粗體", () => {
     renderInto(el, "s**fafa** fdfasfas", null);
     const t = el.lastChild!; // 「 fdfasfas」

@@ -38,11 +38,10 @@ import {
   FormatInspector,
   Inspector,
   MenuItem,
-  ParagraphLayoutFormat,
-  ParagraphStyleFormat,
+  LayoutFormat,
   Section,
   TBtn,
-  TextStyleFormat,
+  TextFormat,
   TMenu,
   Toolbar,
   useEditorRun,
@@ -406,7 +405,6 @@ export function SlideDeck(props: {
     setBoxSel([MAIN]);
     setAutoEdit(MAIN);
   };
-  const editingText = st.active && (st.editing || st.selected > 0);
   /** 背景、跳過：套用到選取的投影片（記復原） */
   const setSlideMeta = (patch: Partial<SlideAnim>) =>
     commit(
@@ -614,18 +612,17 @@ export function SlideDeck(props: {
         </>
         )}
         {panel === "format" && (
-          // 分頁：Style（段落樣式、物件或投影片的外觀）、Text、Paragraph（含區塊樣式）；選了物件才有 Arrange
-          <FormatInspector tabs={boxSel.length ? ["style", "text", "paragraph", "arrange"] : ["style", "text", "paragraph"]} tab={fmtTab} onTab={setFmtTab}>
+          // 分頁：Style（物件或投影片的外觀）、Text（段落樣式、字元樣式、字型）、Layout；選了物件才有 Arrange
+          <FormatInspector tabs={boxSel.length ? ["style", "text", "layout", "arrange"] : ["style", "text", "layout"]} tab={fmtTab} onTab={setFmtTab}>
             {(t) =>
               t === "text" ? (
-                <TextStyleFormat st={st} run={run} hint={TEXT_HINT} />
-              ) : t === "paragraph" ? (
-                <ParagraphLayoutFormat st={st} run={run} hint={TEXT_HINT} />
+                <TextFormat st={st} run={run} styles={SLIDE_STYLES} lib={props.styles} hint={TEXT_HINT} />
+              ) : t === "layout" ? (
+                <LayoutFormat st={st} run={run} hint={TEXT_HINT} />
               ) : t === "arrange" ? (
                 <BoxFormat part="arrange" meta={meta} sel={boxSel} onMeta={(fn) => editMeta(fn)} onSel={setBoxSel} onDeleteBody={deleteBody} />
               ) : (
           <>
-            {editingText && <ParagraphStyleFormat st={st} run={run} styles={SLIDE_STYLES} lib={props.styles} />}
             {meta.noBody && !boxSel.length && !(slides[current] ?? "").trim() && (
               <Section title="Slide Layout">
                 <button className="dp-btn" onClick={addBody}>

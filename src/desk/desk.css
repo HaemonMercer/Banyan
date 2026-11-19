@@ -3156,8 +3156,14 @@ body.dock-resizing iframe {
 }
 .dc-border-colors {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 6px;
+}
+/* 沒有框線：虛線框＋斜線 */
+.dc-border-color.none {
+  border-style: dashed;
+  border-color: var(--ed-muted);
+  background: linear-gradient(to top right, transparent calc(50% - 1px), var(--tc-red) calc(50% - 1px), var(--tc-red) calc(50% + 1px), transparent calc(50% + 1px));
 }
 .dc-border-color {
   height: 22px;
@@ -3208,16 +3214,73 @@ body.dock-resizing iframe {
 .dc-sides .dc-nums {
   margin-bottom: 0;
 }
-/* 已存的樣式：改過的提示、按鈕、名稱輸入框、選單裡的樣子 */
-.dc-style-mod,
-.dc-style-actions {
-  flex-wrap: wrap;
+/* 已存的樣式：選單＋「⋯」一行、改過的提示（Update／Revert 是文字按鈕）、名稱輸入框、選單裡的樣子 */
+.dc-style-line {
+  display: flex;
+  align-items: center;
   gap: 6px;
-  margin-top: 8px;
 }
-.dc-style-mod .dc-note {
-  flex: 1 1 100%;
-  margin: 0;
+.dc-style-line > .dc-popup {
+  flex: 1;
+  min-width: 0;
+}
+.dc-more-wrap {
+  position: relative;
+  flex: none;
+}
+.dc-more {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text-soft);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dc-more:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+.dc-more:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.dc-more-menu {
+  left: auto;
+  right: 0;
+  min-width: 210px;
+}
+.dc-style-mod {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+.dc-style-mod span {
+  flex: 1;
+}
+.dc-link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ed-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dc-link-btn:hover {
+  text-decoration: underline;
+}
+/* 字型：粗斜體那一排與顏色放同一行 */
+.dc-font-row {
+  justify-content: space-between;
+  margin: 8px 0 0;
 }
 .dc-name-input {
   width: 100%;
@@ -3243,4 +3306,18 @@ body.dock-resizing iframe {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 字元樣式的設定（改了所有用到它的字一起變） */
+.dc-cs-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ed-faint);
+}
+.dc-cs-edit .dc-note,
+.dc-cs-edit .dc-nums,
+.dc-cs-edit .dc-row {
+  margin: 0;
 }

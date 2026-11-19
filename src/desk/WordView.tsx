@@ -9,14 +9,13 @@ import {
   FormatInspector,
   Inspector,
   MenuItem,
-  ParagraphLayoutFormat,
-  ParagraphStyleFormat,
+  LayoutFormat,
   Popup,
   Section,
   Seg,
   SegBtn,
   TBtn,
-  TextStyleFormat,
+  TextFormat,
   TMenu,
   Toolbar,
   useEditorRun,
@@ -334,15 +333,13 @@ export function WordView(props: { value: string; onChange: (md: string) => void;
           )}
         </div>
         {panel === "format" && (
-          // Word 只有文字（沒有可以自由擺放的物件），所以沒有 Arrange
-          <FormatInspector tabs={["style", "text", "paragraph"]} tab={fmtTab} onTab={setFmtTab}>
+          // Word 只有文字（沒有可以自由擺放的物件）：Style（文字）與 Layout 兩個分頁，跟 Pages 一樣
+          <FormatInspector tabs={["text", "layout"]} tab={fmtTab} onTab={setFmtTab}>
             {(t) =>
-              t === "style" ? (
-                <ParagraphStyleFormat st={st} run={run} styles={STYLES} shading clear lib={props.styles} />
-              ) : t === "text" ? (
-                <TextStyleFormat st={st} run={run} code />
+              t === "text" ? (
+                <TextFormat st={st} run={run} styles={STYLES} lib={props.styles} code />
               ) : (
-                <ParagraphLayoutFormat st={st} run={run} checklist />
+                <LayoutFormat st={st} run={run} checklist shading />
               )
             }
           </FormatInspector>

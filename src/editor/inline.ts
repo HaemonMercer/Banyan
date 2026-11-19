@@ -45,6 +45,8 @@ export interface Marks {
   color: Color | null;
   /** 螢光標記顏色 */
   highlight: Color | null;
+  /** 字元樣式（已存的樣式名稱，`<span data-cs>`；只有所見即所得編輯看得到） */
+  charStyle: string | null;
 }
 
 const NONE: Marks = {
@@ -58,6 +60,7 @@ const NONE: Marks = {
   link: false,
   color: null,
   highlight: null,
+  charStyle: null,
 };
 const A = "\uE000";
 const B = "\uE001";
@@ -164,6 +167,7 @@ function toMarks(stack: Entry[], code: boolean): Marks {
     code,
     color: last("color"),
     highlight: last("highlight"),
+    charStyle: null,
   };
 }
 
@@ -185,6 +189,7 @@ export function marksAt(text: string, a: number, b: number): Marks {
     link: start.link && end.link,
     color: start.color === end.color ? start.color : null,
     highlight: start.highlight === end.highlight ? start.highlight : null,
+    charStyle: null,
   };
 }
 
