@@ -9,11 +9,15 @@ export type ShortcutAction =
   | "today"
   | "view-bujo"
   | "view-desk"
+  | "view-drawer"
   | "back"
   | "forward"
   | "newer-day"
   | "older-day"
   | "favorite"
+  | "desk-switch"
+  | "settings"
+  | "history"
   | "help";
 
 type KeyLike = Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> & { key?: string };
@@ -24,18 +28,22 @@ function codeOf(e: KeyLike): string {
   const k = e.key ?? "";
   if (/^[a-z]$/i.test(k)) return `Key${k.toUpperCase()}`;
   if (/^\d$/.test(k)) return `Digit${k}`;
-  return { "/": "Slash", "\\": "Backslash" }[k] ?? k;
+  return { "/": "Slash", "\\": "Backslash", ",": "Comma" }[k] ?? k;
 }
 
 const ALT: Record<string, ShortcutAction> = {
   KeyT: "today",
   Digit1: "view-bujo",
   Digit2: "view-desk",
+  Digit3: "view-drawer",
   ArrowLeft: "back",
   ArrowRight: "forward",
   ArrowUp: "newer-day",
   ArrowDown: "older-day",
   KeyS: "favorite",
+  KeyD: "desk-switch",
+  KeyH: "history",
+  Comma: "settings",
 };
 
 const CTRL: Record<string, ShortcutAction> = {
@@ -60,6 +68,7 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
       [["Alt", "T"], "Today's journal"],
       [["Alt", "1"], "Calendar"],
       [["Alt", "2"], "Desk"],
+      [["Alt", "3"], "Drawer"],
       [["Alt", "←"], "Back"],
       [["Alt", "→"], "Forward"],
       [["Alt", "↑"], "Next day's journal"],
@@ -71,7 +80,37 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
     items: [
       [["Ctrl", "\\"], "Show/hide sidebar"],
       [["Alt", "S"], "Favorite / unfavorite this page"],
+      [["Alt", "D"], "Cycle Whiteboard / Dock / Tasks (in a Desk file)"],
+      [["Alt", "H"], "Version history"],
+      [["Alt", ","], "Settings"],
       [["Ctrl", "/"], "Keyboard shortcuts"],
+    ],
+  },
+  {
+    // Dock 自己處理（`Dock.tsx`），不經過 matchShortcut
+    title: "Dock",
+    items: [
+      [["Alt", "\\"], "Split right (moves the current tab, or opens the next document)"],
+      [["Alt", "Shift", "\\"], "Split down"],
+      [["Alt", "Click"], "Open a document to the side"],
+      [["Alt", "W"], "Close the current tab"],
+      [["Alt", "Shift", "T"], "Reopen the last closed tab"],
+      [["Alt", "PgUp/PgDn"], "Previous / next tab"],
+      [["Alt", "Shift", "PgUp/PgDn"], "Previous / next group"],
+    ],
+  },
+  {
+    // 白板自己處理（`Whiteboard.tsx`），原本寫在白板下方的提示改放在這裡
+    title: "Whiteboard",
+    items: [
+      [["Double-click"], "Add a sticky note"],
+      [["N"], "Add a sticky note"],
+      [["Enter"], "Edit the selected card"],
+      [["Delete"], "Remove the selected items"],
+      [["Space", "Drag"], "Move around"],
+      [["Ctrl", "Scroll"], "Zoom"],
+      [["Shift", "1"], "Fit to screen"],
+      [["Drag a dot"], "Connect two cards"],
     ],
   },
   {

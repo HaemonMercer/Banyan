@@ -77,6 +77,14 @@ export function mediaUrl(src: string): string {
   return convertFileSrc(base + sep + m[1]);
 }
 
+/** `media/檔名` 在磁碟上的完整路徑（在檔案總管顯示用）；不是 App 裡的媒體檔就是 null。 */
+export function mediaFilePath(src: string): string | null {
+  const m = /^media\/([\w.-]+)$/.exec(src);
+  if (!m || !base) return null;
+  const sep = base.includes("\\") ? "\\" : "/";
+  return base + sep + m[1];
+}
+
 /** 渲染後的 HTML 裡，把 `media/…` 的 src 換成可以顯示的網址（原本的路徑留在 data-src，轉回 Markdown 時用）。 */
 export function resolveMedia(html: string): string {
   if (!base || !html.includes("media/")) return html;

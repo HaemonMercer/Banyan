@@ -8,6 +8,10 @@
  * 名稱不分大小寫（`pageKey`）；`[[2026-11-17]]` 是那天的日記。
  */
 
+import { citeItem, citeLabel, citeReference, citeRemark, remarkTitle } from "../drawer/citeRef";
+import type { Item } from "../drawer/model";
+import { docKindLabel, docLinkOf } from "../desk/docLinks";
+
 /** 原始碼裡的頁面連結（名稱不能有方括號、不能跨行）。 */
 export const REF_SOURCE = /\[\[((?:\\.|[^[\]\n\\])+?)\]\]/g;
 /** 渲染後文字裡的頁面連結 */
@@ -89,11 +93,44 @@ export function linkPagesIn(root: Node, guard = false): void {
     REF_TEXT.lastIndex = 0;
     let last = 0;
     const frag = doc.createDocumentFragment();
+    /** 上一個文中引用的括號（緊接著的引用併進去） */
+    let group: HTMLElement | null = null;
     for (const m of data.matchAll(REF_TEXT)) {
       const name = cleanName(m[1].replace(/[​]/g, ""));
       if (!name) continue;
-      if (m.index! > last) frag.append(data.slice(last, m.index));
-      frag.append(pageRefElement(doc, m[1], name));
+      const between = data.slice(last, m.index);
+      const item = citeItem(name);
+      if (item && !guard) {
+        // 顯示：文中引用（中間只有空白或分號的相鄰引用合成一個括號）
+        const a = citeElement(doc, name, item);
+        if (group && /^[\s;]*$/.test(between)) group.lastChild!.before("; ", a);
+        else {
+          if (between) frag.append(between);
+          group = doc.createElement("span");
+          group.className = "cite";
+          group.append("(", a, ")");
+          frag.append(group);
+        }
+        last = m.index! + m[0].length;
+        continue;
+      }
+      group = null;
+      if (between) frag.append(between);
+      const el = pageRefElement(doc, m[1], name);
+      const dock = docLinkOf(name);
+      if (dock) {
+        // Dock 文件的連結 [[檔案/標題]]
+        el.classList.add("dock-ref");
+        el.setAttribute("data-kind", dock.kind);
+        el.title = `${docKindLabel(dock.kind)} in ${dock.file}`;
+      }
+      if (item) {
+        // 編輯中：保留原始的 [[@引用鍵]]，滑過時顯示文中引用與參考文獻（備註再加上備註的文字）
+        const rm = citeRemark(name);
+        el.classList.add("cite-ref");
+        el.title = rm ? `(${citeLabel(item, undefined, rm.remark.page)}) ${remarkTitle(item, rm.remark)}` : `(${citeLabel(item)}) ${citeReference(item)}`;
+      }
+      frag.append(el);
       if (guard) frag.append(ZWSP);
       last = m.index! + m[0].length;
     }
@@ -115,6 +152,22 @@ function pageRefElement(doc: Document, text: string, name: string): HTMLElement 
   close.className = "pr-b";
   close.textContent = "]]";
   a.append(open, text, close);
+  return a;
+}
+
+/**
+ * 文中引用的一筆：`<a class="page-ref cite-ref" data-page="@引用鍵">Smith, 2020</a>`（點了開啟筆記頁面）。
+ * 引用備註（`@引用鍵#r1`）時加上頁碼與 `data-remark`，滑過看備註，點了在 Drawer 打開那個備註。
+ */
+function citeElement(doc: Document, name: string, item: Item): HTMLElement {
+  const a = doc.createElement("a");
+  const rm = citeRemark(name);
+  a.className = rm ? "page-ref cite-ref remark-ref" : "page-ref cite-ref";
+  a.setAttribute("data-page", name);
+  a.setAttribute("data-cite", item.key);
+  if (rm) a.setAttribute("data-remark", rm.remark.id);
+  a.title = rm ? remarkTitle(item, rm.remark) : citeReference(item);
+  a.textContent = citeLabel(item, undefined, rm?.remark.page);
   return a;
 }
 

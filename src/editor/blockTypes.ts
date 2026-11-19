@@ -29,10 +29,40 @@ export const BLOCK_TYPES: BlockTypeItem[] = [
   { type: "table", label: "Table", description: "A simple table", hint: "", icon: "▦", keywords: "table grid" },
 ];
 
-export function filterBlockTypes(query: string): BlockTypeItem[] {
+/** 斜線選單裡不是區塊類型的指令：引用 Drawer 的條目、插入參考文獻、插入頁面範本。 */
+export type SlashType = BlockType | "cite" | "bibliography" | "template";
+
+export interface SlashItem extends Omit<BlockTypeItem, "type"> {
+  type: SlashType;
+  /** 範本：範本頁面的名稱（`Template/…`，`src/pages/templates.ts`）；沒有範本時是空字串（只顯示說明） */
+  template?: string;
+}
+
+export const SLASH_COMMANDS: SlashItem[] = [
+  { type: "cite", label: "Citation", description: "Cite an item from Drawer", hint: "[[@", icon: "❞", keywords: "cite citation reference drawer source zotero" },
+  { type: "bibliography", label: "Bibliography", description: "List the works cited on this page", hint: "", icon: "☰", keywords: "bibliography references works cited sources drawer" },
+];
+
+/** 頁面範本在斜線選單裡的項目；沒有範本時是一個說明怎麼建立範本的項目 */
+export function templateItems(templates: { page: string; label: string }[]): SlashItem[] {
+  if (!templates.length)
+    return [{ type: "template", template: "", label: "Template", description: "Pages named Template/… show up here", hint: "", icon: "⧉", keywords: "template snippet boilerplate" }];
+  return templates.map((t) => ({
+    type: "template" as const,
+    template: t.page,
+    label: t.label,
+    description: "Insert this template",
+    hint: "",
+    icon: "⧉",
+    keywords: "template snippet boilerplate " + t.label,
+  }));
+}
+
+export function filterBlockTypes(query: string, templates: { page: string; label: string }[] = []): SlashItem[] {
+  const all: SlashItem[] = [...BLOCK_TYPES, ...SLASH_COMMANDS, ...templateItems(templates)];
   const q = query.trim().toLowerCase();
-  if (!q) return BLOCK_TYPES;
-  return BLOCK_TYPES.filter((t) => (t.label + " " + t.keywords).toLowerCase().includes(q));
+  if (!q) return all;
+  return all.filter((t) => (t.label + " " + t.keywords).toLowerCase().includes(q));
 }
 
 /** 編輯中區塊的類型名稱（顯示在編輯框右上角）。 */

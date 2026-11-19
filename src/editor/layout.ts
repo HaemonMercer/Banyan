@@ -202,7 +202,7 @@ interface Slot {
 }
 
 /** 單獨包住一個區塊時算是區塊一部分的容器 */
-const OWN_WRAPPERS = new Set(["bg", "align", "cap", "size"]);
+const OWN_WRAPPERS = new Set(["bg", "align", "cap", "size", "box"]);
 
 function slot(doc: ParsedDoc, r: Range): Slot | null {
   const { tree } = treeWith(doc, r);
@@ -244,7 +244,7 @@ export function canIndent(doc: ParsedDoc, r: Range): boolean {
   if (!s || s.ancestors.some((a) => a.kind === "indent")) return false;
   const prev = s.siblings[s.index - 1];
   if (!prev) return false;
-  if (prev.type === "container") return prev.kind === "indent" || prev.kind === "bg";
+  if (prev.type === "container") return prev.kind === "indent" || prev.kind === "bg" || prev.kind === "box";
   return !prev.unit.tag;
 }
 
@@ -266,6 +266,18 @@ export function groupOf(doc: ParsedDoc, r: Range): Range {
 /** 區塊的背景顏色（沒有就是 null）。 */
 export function blockBg(doc: ParsedDoc, r: Range): string | null {
   return slot(doc, wholeBlock(doc, r))?.wrappers.find((w) => w.kind === "bg")?.color ?? null;
+}
+
+/** 區塊樣式：style 文字（`blockStyle.ts`）與套用的已存樣式名稱（`data-style`） */
+export interface BoxValue {
+  css: string;
+  name?: string;
+}
+
+/** 區塊的樣式（沒有就是空的 css）。 */
+export function blockBox(doc: ParsedDoc, r: Range): BoxValue {
+  const w = slot(doc, wholeBlock(doc, r))?.wrappers.find((x) => x.kind === "box");
+  return w ? { css: w.color ?? "", ...(w.name ? { name: w.name } : {}) } : { css: "" };
 }
 
 export type Align = "left" | "center" | "right";
@@ -384,7 +396,7 @@ export function outdentBlock(source: string, r: Range): Moved | null {
  * 已經有這種容器就只改標籤；沒有就在區塊（連同它現有的外層容器）外面再包一層。
  * 清單項目會套用到整份清單。回傳區塊第一行的新位置。
  */
-function setWrapper(source: string, r: Range, kind: "bg" | "align" | "cap" | "size", value: string | null): Moved {
+function setWrapper(source: string, r: Range, kind: "bg" | "align" | "cap" | "size" | "box", value: string | null, name?: string): Moved {
   const doc = parseDoc(source);
   const whole = wholeBlock(doc, r);
   const s = slot(doc, whole);
@@ -392,20 +404,20 @@ function setWrapper(source: string, r: Range, kind: "bg" | "align" | "cap" | "si
   const id = buf.ids[r.start];
   const own = s?.wrappers.find((w) => w.kind === kind);
   if (own) {
-    if (value) buf.lines[own.open.start] = openTag(kind, undefined, value);
+    if (value !== null) buf.lines[own.open.start] = openTag(kind, undefined, value, name);
     else {
       const rows = unwrapLines(own)
         .filter((l) => isBlank(buf.lines[l]) || l === own.open.start || l === own.close.start)
         .sort((a, b) => b - a);
       for (const l of rows) buf.splice(l, 1);
     }
-  } else if (value) {
+  } else if (value !== null) {
     // 只在前後插入標籤行，不動區塊本身的行
     const R = s?.range ?? whole;
     const after = R.end < buf.lines.length && !isBlank(buf.lines[R.end]) ? [""] : [];
     buf.splice(R.end, 0, "", "</div>", ...after);
     const before = R.start > 0 && !isBlank(buf.lines[R.start - 1]) ? [""] : [];
-    buf.splice(R.start, 0, ...before, openTag(kind, undefined, value), "");
+    buf.splice(R.start, 0, ...before, openTag(kind, undefined, value, name), "");
   }
   normalize(buf);
   return { source: buf.source, start: buf.indexOfId(id) };
@@ -434,6 +446,60 @@ export function setBlockSize(source: string, r: Range, size: MediaSize | null): 
   return setWrapper(source, r, "size", size);
 }
 
+/** 設定區塊樣式（css 空又沒有樣式名稱就拿掉）：`<div class="box" data-style="名稱" style="…">`。 */
+export function setBlockBox(source: string, r: Range, v: BoxValue): Moved {
+  return setWrapper(source, r, "box", v.css || v.name ? v.css : null, v.name || undefined);
+}
+
+/**
+ * 整份文件的區塊樣式一起改（已存樣式的更新、改名、刪除）：fn 回傳 null 或空的樣式就拿掉那層。
+ * 由後往前改，前面的行號不受影響。
+ */
+export function restyleBoxes(source: string, fn: (v: BoxValue) => BoxValue | null): string {
+  const doc = parseDoc(source);
+  const boxes: Container[] = [];
+  const walk = (nodes: TreeNode[]) => {
+    for (const n of nodes) {
+      if (n.type !== "container") continue;
+      if (n.kind === "box") boxes.push(n);
+      walk(n.children);
+    }
+  };
+  walk(doc.tree);
+  const buf = new LineBuf(source);
+  let changed = false;
+  for (const b of boxes.sort((x, y) => y.open.start - x.open.start)) {
+    const cur: BoxValue = { css: b.color ?? "", ...(b.name ? { name: b.name } : {}) };
+    const next = fn(cur);
+    if (next && next.css === cur.css && (next.name ?? "") === (cur.name ?? "")) continue;
+    changed = true;
+    if (next && (next.css || next.name)) buf.lines[b.open.start] = openTag("box", undefined, next.css, next.name || undefined);
+    else {
+      const rows = unwrapLines(b)
+        .filter((l) => isBlank(buf.lines[l]) || l === b.open.start || l === b.close.start)
+        .sort((x, y) => y - x);
+      for (const l of rows) buf.splice(l, 1);
+    }
+  }
+  if (!changed) return source;
+  normalize(buf);
+  return buf.source;
+}
+
+/** 多個區塊一起改樣式：每個區塊用 fn 從自己現在的樣式算出新的（只改動到的欄位，其他照舊）。 */
+export function setBlocksBox(source: string, units: Range[], fn: (v: BoxValue) => BoxValue): MovedMany {
+  let doc = parseDoc(source);
+  const xs = topLevel(doc, units).filter((x) => !x.whole);
+  const texts = xs.map((x) => doc.lines.slice(x.start, x.end).join("\n"));
+  let out = source;
+  for (const x of [...xs].reverse()) {
+    doc = parseDoc(out);
+    const cur = doc.blocks.find((b) => b.start === x.start) ?? x;
+    out = setBlockBox(out, cur, fn(blockBox(doc, cur))).source;
+  }
+  return { source: out, starts: reselect(out, texts) };
+}
+
 /** 多個區塊一起設定背景顏色（由後往前做，前面的行號不受影響）。 */
 export function setBlocksBg(source: string, units: Range[], color: string | null): MovedMany {
   let doc = parseDoc(source);
@@ -444,6 +510,20 @@ export function setBlocksBg(source: string, units: Range[], color: string | null
     doc = parseDoc(out);
     const cur = doc.blocks.find((b) => b.start === x.start) ?? x;
     out = setBlockBg(out, cur, color).source;
+  }
+  return { source: out, starts: reselect(out, texts) };
+}
+
+/** 多個區塊一起設定對齊（Word、簡報功能區的對齊按鈕）。 */
+export function setBlocksAlign(source: string, units: Range[], align: Align): MovedMany {
+  let doc = parseDoc(source);
+  const xs = topLevel(doc, units).filter((x) => !x.whole);
+  const texts = xs.map((x) => doc.lines.slice(x.start, x.end).join("\n"));
+  let out = source;
+  for (const x of [...xs].reverse()) {
+    doc = parseDoc(out);
+    const cur = doc.blocks.find((b) => b.start === x.start) ?? x;
+    out = setBlockAlign(out, cur, align).source;
   }
   return { source: out, starts: reselect(out, texts) };
 }

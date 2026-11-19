@@ -1,0 +1,1231 @@
+/* 試算表（參考 Numbers）：工具列、分頁、公式列、畫布上的表格與圖表、Format 面板 */
+
+.sv {
+  --sv-line: rgba(47, 46, 43, 0.14);
+  --sv-line-strong: rgba(47, 46, 43, 0.28);
+  --sv-canvas: #f4f4f2;
+  --sv-chart-bg: #ffffff;
+  --sv-bar: #f0f0ee;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font-family: var(--ed-font);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sv {
+    --sv-line: rgba(255, 255, 255, 0.12);
+    --sv-line-strong: rgba(255, 255, 255, 0.26);
+    --sv-canvas: #141414;
+    --sv-chart-bg: #1e1e1e;
+    --sv-bar: #262626;
+  }
+}
+:root[data-theme="dark"] .sv {
+  --sv-line: rgba(255, 255, 255, 0.12);
+  --sv-line-strong: rgba(255, 255, 255, 0.26);
+  --sv-canvas: #141414;
+  --sv-chart-bg: #1e1e1e;
+  --sv-bar: #262626;
+}
+
+/* ─── 小按鈕（尋找列、分頁）；工具列與檢閱器用 DocChrome（跟 Word、簡報一樣） ─── */
+.sv-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 28px;
+  justify-content: center;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sv-btn.labeled {
+  padding: 0 10px;
+}
+.sv-btn:hover:not(:disabled) {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.sv-btn.on {
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent);
+}
+.sv-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sv-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--sv-line);
+}
+.sv-gap {
+  flex: 1;
+}
+
+/* ─── 工作表分頁 ─── */
+
+.sv-tabs {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--sv-line);
+  overflow-x: auto;
+}
+.sv-tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 7px 7px 0 0;
+  margin-bottom: -1px;
+}
+.sv-tab button,
+.sv-tab input {
+  height: 28px;
+  padding: 0 14px;
+  border: none;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sv-tab input {
+  width: 120px;
+  cursor: text;
+  color: var(--ed-text);
+  outline: none;
+}
+.sv-tab:hover:not(.on) button {
+  color: var(--ed-text);
+}
+.sv-tab.on {
+  border-color: var(--sv-line);
+  background: var(--ed-bg);
+}
+.sv-tab.on button {
+  color: var(--ed-text);
+  font-weight: 600;
+}
+.sv-tab .sv-tab-x {
+  padding: 0 8px 0 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--ed-muted);
+}
+.sv-tab .sv-tab-x svg {
+  width: 12px;
+  height: 12px;
+}
+.sv-tab .sv-tab-x:hover {
+  color: var(--ed-danger);
+}
+.sv-tab-add {
+  height: 26px;
+  width: 26px;
+  margin: 0 0 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.sv-tab-add:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+
+/* ─── 公式列 ─── */
+
+.sv-formula {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--sv-line);
+}
+.sv-cellname {
+  min-width: 64px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ed-text-soft);
+  font-variant-numeric: tabular-nums;
+}
+.sv-fx {
+  font-style: italic;
+  font-family: Georgia, serif;
+  color: var(--ed-muted);
+}
+.sv-bar {
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--ed-text);
+  font: 13px var(--ed-mono);
+  outline: none;
+}
+.sv-bar:focus {
+  border-color: var(--ed-accent-ring);
+  background: var(--ed-bg);
+}
+.sv-bar:disabled {
+  opacity: 0.5;
+}
+.sv-hint {
+  position: absolute;
+  right: 14px;
+  top: 7px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  font-size: 12px;
+  color: var(--ed-text-soft);
+  pointer-events: none;
+}
+
+/* ─── 畫布 ─── */
+
+.sv-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sv-canvas {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--sv-canvas);
+  outline: none;
+}
+.sv-paper {
+  position: relative;
+  margin: 40px;
+}
+.sv-empty {
+  position: absolute;
+  left: 40px;
+  top: 40px;
+  color: var(--ed-muted);
+  font-size: 14px;
+}
+
+/* ─── 表格 ─── */
+
+.st {
+  position: absolute;
+  --th: #2f7fd8;
+  user-select: none;
+}
+.st.theme-gray {
+  --th: #7a8088;
+}
+.st.theme-green {
+  --th: #2e9e65;
+}
+.st.theme-orange {
+  --th: #e08a1e;
+}
+.st.theme-red {
+  --th: #d9534f;
+}
+.st.theme-purple {
+  --th: #7d5bc9;
+}
+.st-head {
+  position: relative;
+}
+.st-name,
+.st-name-edit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 24px;
+  line-height: 24px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ed-text);
+  white-space: nowrap;
+  cursor: grab;
+}
+.st-name-edit {
+  width: 220px;
+  padding: 0 4px;
+  border: 1px solid var(--ed-accent-ring);
+  border-radius: 4px;
+  background: var(--ed-bg);
+  font: 600 15px var(--ed-font);
+  outline: none;
+  cursor: text;
+}
+.st-grip {
+  position: absolute;
+  left: -30px;
+  bottom: 0;
+  width: 26px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--ed-muted);
+  cursor: grab;
+  opacity: 0;
+}
+.st:hover .st-grip,
+.st.active .st-grip {
+  opacity: 1;
+}
+.st-grip:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.st.object .st-body {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 2px;
+}
+.st-body {
+  position: relative;
+  background: var(--ed-bg);
+  box-shadow: 0 0 0 1px var(--sv-line-strong);
+}
+.st-colbar {
+  position: absolute;
+  left: 0;
+  top: -22px;
+  height: 20px;
+}
+.st-colh,
+.st-rowh {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--ed-muted);
+  background: var(--sv-bar);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.st-colh {
+  top: 0;
+  height: 20px;
+  border-right: 1px solid var(--ed-bg);
+}
+.st-colh:first-child {
+  border-radius: 4px 0 0 0;
+}
+.st-rowbar {
+  position: absolute;
+  left: -30px;
+  top: 0;
+  width: 28px;
+}
+.st-rowh {
+  left: 0;
+  width: 28px;
+  height: 28px;
+  border-bottom: 1px solid var(--ed-bg);
+}
+.st-colh.on,
+.st-rowh.on {
+  background: color-mix(in srgb, var(--ed-accent) 22%, var(--sv-bar));
+  color: var(--ed-text);
+}
+.st-colrs {
+  position: absolute;
+  right: -4px;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.st-colrs:hover {
+  background: var(--ed-accent-ring);
+}
+.st-grid {
+  display: grid;
+}
+
+.sc {
+  overflow: hidden;
+  padding: 0 7px;
+  line-height: 27px; /* 列高不同時由 style 蓋過 */
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--sv-line);
+  border-bottom: 1px solid var(--sv-line);
+  font-variant-numeric: tabular-nums;
+  cursor: cell;
+}
+.sc.h {
+  background: color-mix(in srgb, var(--th) 16%, var(--ed-bg));
+  font-weight: 600;
+  border-bottom-color: color-mix(in srgb, var(--th) 40%, var(--ed-bg));
+}
+.sc.hc {
+  background: color-mix(in srgb, var(--th) 7%, var(--ed-bg));
+  font-weight: 600;
+  border-right-color: color-mix(in srgb, var(--th) 30%, var(--ed-bg));
+}
+.sc.f {
+  background: color-mix(in srgb, var(--th) 10%, var(--ed-bg));
+  font-weight: 600;
+  border-top: 1px solid color-mix(in srgb, var(--th) 40%, var(--ed-bg));
+}
+.sc.band {
+  background: color-mix(in srgb, var(--th) 4%, var(--ed-bg));
+}
+.sc.err {
+  color: var(--ed-danger);
+  font-size: 12px;
+}
+.sc.neg {
+  color: var(--ed-danger);
+}
+/* 框線、藏起來的欄、附註、下拉選單 */
+.sv {
+  --sc-border: var(--ed-text);
+}
+.sc.hid,
+.st-colh.hid {
+  padding: 0;
+  border-right: none;
+  color: transparent;
+}
+.st-colh.before-hid {
+  box-shadow: inset -3px 0 0 var(--sv-line-strong);
+}
+.sc.has-note {
+  position: relative;
+}
+.sc.has-note::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-style: solid;
+  border-width: 0 7px 7px 0;
+  border-color: transparent #e0584f transparent transparent;
+}
+.sc.popup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sc-pop-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc-pop {
+  flex: none;
+  color: var(--ed-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.sc-pop:hover {
+  color: var(--ed-accent);
+}
+.sc-check {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-top: 6px;
+  border: 1.5px solid var(--sv-line-strong);
+  border-radius: 4px;
+  vertical-align: top;
+  cursor: pointer;
+}
+.sc-check.on {
+  border-color: var(--ed-accent);
+  background: var(--ed-accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
+}
+.sc-stars span {
+  color: var(--sv-line-strong);
+  cursor: pointer;
+  padding: 0 1px;
+}
+.sc-stars span.on {
+  color: #f0a030;
+}
+
+.st-sel {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--ed-accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ed-accent);
+}
+.st-cur {
+  position: absolute;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--ed-accent);
+}
+.st-refbox {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid;
+}
+.st-input {
+  position: absolute;
+  z-index: 3;
+  padding: 0 7px;
+  border: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font: 13px var(--ed-font);
+  outline: none;
+  opacity: 0;
+  pointer-events: none;
+}
+.st-input.editing {
+  opacity: 1;
+  color: var(--ed-text);
+  caret-color: auto;
+  background: var(--ed-bg);
+  box-shadow:
+    inset 0 0 0 2px var(--ed-accent),
+    0 2px 8px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+}
+.st-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  border: 2px dashed var(--ed-accent);
+  background: color-mix(in srgb, var(--ed-accent) 6%, transparent);
+}
+.st-ghost span {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--ed-accent);
+  color: #fff;
+  font-size: 11px;
+}
+.st-add {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--sv-line-strong);
+  border-radius: 50%;
+  background: var(--ed-bg);
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.st-add svg {
+  width: 12px;
+  height: 12px;
+}
+.st-add:hover {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+.st-corner {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--ed-bg);
+  border-radius: 50%;
+  background: var(--ed-accent);
+  cursor: nwse-resize;
+  z-index: 4;
+}
+
+/* ─── 圖表 ─── */
+
+.sc-chart {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  background: var(--sv-chart-bg);
+  box-shadow: 0 0 0 1px var(--sv-line);
+  cursor: grab;
+  user-select: none;
+}
+.sc-chart.on {
+  box-shadow: 0 0 0 2px var(--ed-accent);
+}
+.sc-chart-title {
+  flex: none;
+  padding: 8px 12px 0;
+  height: 30px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sc-chart-empty {
+  margin: auto;
+  font-size: 13px;
+  color: var(--ed-muted);
+}
+.sc-plot {
+  display: block;
+}
+.sc-grid {
+  stroke: var(--sv-line);
+}
+.sc-zero {
+  stroke: var(--sv-line-strong);
+}
+.sc-axis {
+  fill: var(--ed-muted);
+  font-size: 11px;
+  font-family: var(--ed-font);
+}
+.sc-pie-label {
+  fill: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.sc-legend {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
+  height: 24px;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--ed-text-soft);
+}
+.sc-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 2px;
+}
+.sc-chart-rs {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--sv-chart-bg);
+  border-radius: 50%;
+  background: var(--ed-accent);
+  cursor: nwse-resize;
+}
+
+/* ─── 檢閱器（DocChrome 的 Inspector，參考 Numbers）裡試算表自己的控制項 ─── */
+
+.sv .dc-insp {
+  border-left-color: var(--sv-line);
+}
+.dc-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 7px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  outline: none;
+  user-select: text;
+}
+.dc-input:focus {
+  border-color: var(--ed-accent);
+}
+.dc-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+.dc-area {
+  height: auto;
+  min-height: 56px;
+  padding: 6px 8px;
+  margin-top: 6px;
+  resize: vertical;
+  line-height: 1.4;
+}
+.sv-dec-row {
+  margin-top: 10px;
+}
+.sv-borders {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.sv-border-btn {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 7px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  cursor: pointer;
+}
+.sv-border-btn:hover {
+  background: var(--ed-hover);
+}
+.sv-fmt-opts {
+  margin-top: 10px;
+}
+.sv-insp-old > section {
+  padding: 12px 16px 14px;
+  border-bottom: 1px solid var(--ed-faint);
+}
+.sv-insp-old > section > h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sv .dc-sec .sv-row.three {
+  margin: 0;
+}
+.sv .dc-sec .sv-field {
+  margin-bottom: 0;
+}
+.sv .dc-sec .sv-themes {
+  flex-wrap: wrap;
+}
+.sv-empty .dp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sv-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.sv-field > span {
+  font-size: 12px;
+  color: var(--ed-text-soft);
+}
+.sv-field input,
+.sv-field select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--sv-line-strong);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  outline: none;
+}
+.sv-field input:focus,
+.sv-field select:focus {
+  border-color: var(--ed-accent);
+}
+.sv-row {
+  display: flex;
+  gap: 8px;
+}
+.sv-row > .sv-field {
+  flex: 1;
+  min-width: 0;
+}
+.sv-row.three .sv-field > span {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.sv-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.sv-seg {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sv-seg button,
+.sv-stepper button {
+  height: 28px;
+  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--sv-line-strong);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  cursor: pointer;
+}
+.sv-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  border: 1px solid var(--sv-line-strong);
+  border-radius: 6px;
+  background: var(--ed-bg);
+}
+.sv-stepper button {
+  border: none;
+  background: none;
+  min-width: 22px;
+  height: 26px;
+}
+.sv-stepper button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.sv-stepper b {
+  font-weight: 600;
+}
+.sv-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.sv-swatches button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--sv-line);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.sv-swatches button.none {
+  background: linear-gradient(135deg, transparent 45%, var(--ed-danger) 45%, var(--ed-danger) 55%, transparent 55%), var(--ed-bg);
+}
+.sv-swatches button.on {
+  box-shadow: 0 0 0 2px var(--ed-chrome), 0 0 0 4px var(--ed-accent);
+}
+.sv-themes {
+  display: flex;
+  gap: 6px;
+}
+.sv-themes button {
+  --th: #2f7fd8;
+  width: 30px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--sv-line);
+  border-radius: 4px;
+  background: linear-gradient(var(--th) 0 35%, color-mix(in srgb, var(--th) 12%, var(--ed-bg)) 35%);
+  cursor: pointer;
+}
+.sv-themes button.theme-gray {
+  --th: #7a8088;
+}
+.sv-themes button.theme-green {
+  --th: #2e9e65;
+}
+.sv-themes button.theme-orange {
+  --th: #e08a1e;
+}
+.sv-themes button.theme-red {
+  --th: #d9534f;
+}
+.sv-themes button.theme-purple {
+  --th: #7d5bc9;
+}
+.sv-themes button.on {
+  box-shadow: 0 0 0 2px var(--ed-chrome), 0 0 0 4px var(--ed-accent);
+}
+.sv-note {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: var(--ed-muted);
+}
+.sv-note.pad {
+  padding: 8px 16px;
+}
+
+/* ─── 狀態列 ─── */
+
+.sv-status {
+  flex: none;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  height: 28px;
+  padding: 0 16px;
+  border-top: 1px solid var(--sv-line);
+  font-size: 12px;
+  color: var(--ed-muted);
+  font-variant-numeric: tabular-nums;
+}
+.sv-status b {
+  color: var(--ed-text);
+  font-weight: 600;
+  margin-left: 4px;
+}
+.sv-tip {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── 浮動選單（portal 到 body） ─── */
+
+.sv-pop {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  font-family: var(--ed-font);
+  font-size: 13px;
+  color: var(--ed-text);
+}
+.sv-pop button {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sv-pop button:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+.sv-pop button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sv-pop button.danger {
+  color: var(--ed-danger);
+}
+.sv-pop .label {
+  flex: 1;
+}
+.sv-pop .hint {
+  font-size: 12px;
+  color: var(--ed-muted);
+}
+.sv-pop-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--sv-line, rgba(127, 127, 127, 0.2));
+}
+
+/* ─── 進階功能：填滿控點、列高、篩選、醒目提示、尋找、自動完成、匯入 ─── */
+
+.st-fill {
+  position: absolute;
+  z-index: 5;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--ed-bg);
+  background: var(--ed-accent);
+  cursor: crosshair;
+}
+.st-fillto {
+  position: absolute;
+  pointer-events: none;
+  border: 1.5px dashed var(--ed-accent);
+}
+.st-rowh {
+  overflow: hidden;
+}
+.st-rowrs {
+  position: absolute;
+  left: 0;
+  bottom: -3px;
+  width: 100%;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 2;
+}
+.st-rowrs:hover {
+  background: var(--ed-accent-ring);
+}
+.st-colh.filter::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: 6px;
+  border: 4px solid transparent;
+  border-top: 6px solid var(--ed-accent);
+}
+.st-filtered {
+  margin-left: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: 2px;
+}
+.sc.found {
+  box-shadow: inset 0 0 0 2px #f0b429;
+  background: #fff4cc;
+}
+.sc.found.now {
+  background: #ffd866;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sc.found {
+    background: #5a4a14;
+  }
+  :root:not([data-theme="light"]) .sc.found.now {
+    background: #8a6d10;
+  }
+}
+:root[data-theme="dark"] .sc.found {
+  background: #5a4a14;
+}
+:root[data-theme="dark"] .sc.found.now {
+  background: #8a6d10;
+}
+
+.sv-find {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--sv-line);
+  background: var(--ed-chrome);
+  font-size: 13px;
+}
+.sv-find input:not([type]) {
+  width: 200px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--sv-line-strong);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  outline: none;
+}
+.sv-find input:not([type]):focus {
+  border-color: var(--ed-accent);
+}
+.sv-find-count {
+  min-width: 70px;
+  color: var(--ed-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.sv-find-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ed-text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sv-ac {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  font: 13px var(--ed-font);
+  color: var(--ed-text);
+}
+.sv-ac button {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sv-ac button b {
+  font-family: var(--ed-mono);
+  font-weight: 600;
+}
+.sv-ac button span {
+  color: var(--ed-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sv-ac button.on,
+.sv-ac button:hover {
+  background: var(--ed-accent-soft);
+}
+.sv-ac p {
+  margin: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--ed-muted);
+}
+
+.sv-rule {
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid var(--sv-line);
+  border-radius: 8px;
+  background: var(--ed-bg);
+}
+.sv-rule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--ed-text-soft);
+}
+.sv-rule select,
+.sv-cond select,
+.sv-cond input {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--sv-line-strong);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  min-width: 0;
+}
+.sv-rule-head select {
+  flex: 1;
+}
+.sv-cond {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sv-cond-values {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ed-muted);
+}
+.sv-cond-values input {
+  flex: 1;
+}
+.sv-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.sv-x svg {
+  width: 12px;
+  height: 12px;
+}
+.sv-x:hover {
+  background: var(--ed-hover);
+  color: var(--ed-danger);
+}
+.sv-looks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.sv-look {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--sv-line);
+  border-radius: 4px;
+  background: var(--ed-bg);
+  font: 12px var(--ed-font);
+  cursor: pointer;
+}
+.sv-look.on {
+  box-shadow: 0 0 0 2px var(--ed-bg), 0 0 0 3.5px var(--ed-accent);
+}
+.sv-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px dashed var(--sv-line-strong);
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sv-add:hover {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+.sv-add svg {
+  width: 13px;
+  height: 13px;
+}
+.sv-muted {
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+.sv-msg {
+  color: var(--ed-text-soft);
+}

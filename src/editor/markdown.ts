@@ -68,16 +68,17 @@ export interface Unit {
 // 標籤仍是 CommonMark 的 HTML 區塊，渲染結果與規格一致；編輯器只是把它們藏起來，
 // 改用欄位與縮排顯示。
 
-export type ContainerKind = "columns" | "column" | "indent" | "bg" | "align" | "cap" | "size";
+export type ContainerKind = "columns" | "column" | "indent" | "bg" | "align" | "cap" | "size" | "box";
 
 export type Tag =
-  | { type: "open"; kind: ContainerKind | "div"; width?: number; color?: string }
+  | { type: "open"; kind: ContainerKind | "div"; width?: number; color?: string; name?: string }
   | { type: "close" };
 
 const LAYOUT_OPEN =
   /^<div class="(columns|column|indent|bg-([a-z]+)|align-(left|center|right)|caption-(top)|width-(25|50|75|100))"(?: style="flex: ?(\d+(?:\.\d+)?)")?>[ \t]*$/;
 const DIV_OPEN = /^<div\b[^>]*>[ \t]*$/i;
-const DIV_CLOSE = /^<\/div>[ \t]*$/i;
+const BOX_OPEN = /^<div class="box"(?: data-style="([^"<>&]*)")? style="([^"<>]*)">[ \t]*$/;
+const DIV_CLOSE =/^<\/div>[ \t]*$/i;
 
 export function parseTag(line: string): Tag | undefined {
   const m = LAYOUT_OPEN.exec(line);
@@ -92,16 +93,21 @@ export function parseTag(line: string): Tag | undefined {
     if (m[5]) return { type: "open", kind: "size", color: m[5] };
     return { type: "open", kind: m[1] as ContainerKind, width: m[6] ? Number(m[6]) : undefined };
   }
+  // 區塊樣式（`blockStyle.ts`）：<div class="box" style="margin: …; padding: …">（color 欄位放 style 的內容）
+  const box = BOX_OPEN.exec(line);
+  if (box) return { type: "open", kind: "box", color: box[2], ...(box[1] ? { name: box[1] } : {}) };
   if (DIV_OPEN.test(line)) return { type: "open", kind: "div" };
   if (DIV_CLOSE.test(line)) return { type: "close" };
   return undefined;
 }
 
-export function openTag(kind: ContainerKind, width?: number, color?: string): string {
+/** name：區塊樣式套用的已存樣式名稱（只有 box 用，`data-style`） */
+export function openTag(kind: ContainerKind, width?: number, color?: string, name?: string): string {
   if (kind === "bg") return `<div class="bg-${color ?? "gray"}">`;
   if (kind === "align") return `<div class="align-${color ?? "center"}">`;
   if (kind === "size") return `<div class="width-${color ?? "100"}">`;
   if (kind === "cap") return `<div class="caption-${color ?? "top"}">`;
+  if (kind === "box") return `<div class="box"${name ? ` data-style="${name}"` : ""} style="${color ?? ""}">`;
   return width !== undefined && Math.abs(width - 1) > 0.005
     ? `<div class="${kind}" style="flex: ${+width.toFixed(2)}">`
     : `<div class="${kind}">`;
@@ -116,6 +122,8 @@ export interface Container {
   width: number;
   /** 區塊背景的顏色（kind 為 bg 時） */
   color?: string;
+  /** 區塊樣式套用的已存樣式名稱（kind 為 box 時，`data-style`） */
+  name?: string;
   children: TreeNode[];
 }
 
@@ -133,6 +141,7 @@ export function buildTree(units: Unit[]): TreeNode[] {
     open: Unit | null;
     width: number;
     color?: string;
+    name?: string;
     children: TreeNode[];
   }
   const stack: Frame[] = [{ kind: "div", open: null, width: 1, children: [] }];
@@ -140,7 +149,7 @@ export function buildTree(units: Unit[]): TreeNode[] {
   for (const u of units) {
     const top = stack[stack.length - 1];
     if (u.tag?.type === "open") {
-      stack.push({ kind: u.tag.kind, open: u, width: u.tag.width ?? 1, color: u.tag.color, children: [] });
+      stack.push({ kind: u.tag.kind, open: u, width: u.tag.width ?? 1, color: u.tag.color, name: u.tag.name, children: [] });
     } else if (u.tag?.type === "close" && stack.length > 1) {
       stack.pop();
       const parent = stack[stack.length - 1];
@@ -153,6 +162,7 @@ export function buildTree(units: Unit[]): TreeNode[] {
           close: u,
           width: top.width,
           color: top.color,
+          ...(top.name ? { name: top.name } : {}),
           children: top.children,
         });
     } else {

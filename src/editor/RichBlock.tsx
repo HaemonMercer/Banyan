@@ -1,5 +1,7 @@
 import {
+  createContext,
   forwardRef,
+  useContext,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -11,6 +13,7 @@ import { TaskGlyph, WhenChip } from "../bujo/TaskGlyph";
 import { whenLabel } from "../bujo/time";
 import { stripTaskShortcut, stripTodoShortcut, taskShortcut, todoShortcut, type TaskState } from "../bujo/tasks";
 import type { ListInfo, UnitKind } from "./markdown";
+import { assistText, typingPrefs } from "./typing";
 import {
   caretLine,
   contentToRegion,
@@ -135,7 +138,11 @@ interface Props {
 }
 
 /** 所見即所得編輯的區塊：可編輯的元素，內容是渲染後的行內 Markdown。 */
+/** 拼字檢查（預設關掉；Word 文件可以在 Document 檢閱器打開） */
+export const SpellCheck = createContext(false);
+
 export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
+  const spell = useContext(SpellCheck);
   const elRef = useRef<HTMLElement | null>(null);
   /** 目前 DOM 代表的原始碼；props.text 不同時才重新渲染（打字時不重畫，游標與輸入法才不會亂） */
   const last = useRef<string | null>(null);
@@ -147,8 +154,72 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
   const pending = useRef<{ spec: FormatSpec; on: boolean } | null>(null);
   /** 上一次輸入時的純文字（判斷任務快捷是不是這次才打出來的） */
   const prevPlain = useRef("");
+  // 輔助打字剛換過：{ 換成的字, 原本打的字 }，緊接著按 Backspace 就還原
+  const punct = useRef<{ text: string; ascii: string } | null>(null);
 
-  const MARK_OF = { strong: "bold", em: "italic", u: "underline", s: "strike", code: "code", a: "link" } as const;
+  /** 游標前面的文字（選取範圍不是一個點、或在行內程式碼裡回傳 null） */
+  const textBeforeCaret = (): string | null => {
+    const el = elRef.current;
+    const sel = el?.ownerDocument.getSelection();
+    if (!el || !sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
+    const r = sel.getRangeAt(0);
+    if (!el.contains(r.startContainer)) return null;
+    const node = r.startContainer.nodeType === 1 ? (r.startContainer as Element) : r.startContainer.parentElement;
+    if (node?.closest("code, kbd")) return null;
+    const pre = el.ownerDocument.createRange();
+    pre.selectNodeContents(el);
+    pre.setEnd(r.startContainer, r.startOffset);
+    return pre.toString().replace(/​/g, "");
+  };
+
+  /** 輔助打字剛換過後緊接著按 Backspace：還原成原本打的字；回傳 true 表示處理掉了 */
+  const punctKey = (e: KeyboardEvent<HTMLElement>): boolean => {
+    const typed = punct.current;
+    punct.current = null;
+    if (e.ctrlKey || e.altKey || e.metaKey || e.nativeEvent.isComposing) return false;
+    if (e.key === "Backspace" && typed) {
+      const before = textBeforeCaret();
+      if (before === null || !before.endsWith(typed.text)) return false;
+      e.preventDefault();
+      for (let i = 0; i < typed.text.length; i++) document.execCommand("delete");
+      document.execCommand("insertText", false, typed.ascii);
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * 輔助打字（`typing.ts`：中文標點、英文標點、句首大寫、中英之間加空格）。
+   * 一般打字在 beforeinput 換（不用 keydown：輸入法送出的字不一定有對應的按鍵事件）。
+   */
+  const onBeforeInput = (e: InputEvent) => {
+    if (e.inputType !== "insertText" || e.isComposing || !e.data) return;
+    const before = textBeforeCaret();
+    if (before === null) return;
+    const out = assistText(before, e.data, typingPrefs());
+    if (!out) return;
+    e.preventDefault();
+    for (let i = 0; i < out.remove; i++) document.execCommand("delete");
+    document.execCommand("insertText", false, out.text);
+    punct.current = { text: out.text, ascii: before.slice(before.length - out.remove) + e.data };
+  };
+
+  /** 輸入法選好字（已經在畫面上了）：把剛送出的 data 換掉 */
+  const assistComposed = (data: string) => {
+    const before = textBeforeCaret();
+    if (before === null || !before.endsWith(data)) return;
+    const pre = before.slice(0, before.length - data.length);
+    const out = assistText(pre, data, typingPrefs());
+    if (!out) return;
+    for (let i = 0; i < data.length + out.remove; i++) document.execCommand("delete");
+    document.execCommand("insertText", false, out.text);
+    punct.current = { text: out.text, ascii: pre.slice(pre.length - out.remove) + data };
+  };
+  const beforeInputRef = useRef(onBeforeInput);
+  beforeInputRef.current = onBeforeInput;
+  const listenBeforeInput = useRef((e: Event) => beforeInputRef.current(e as InputEvent)).current;
+
+  const MARK_OF = { strong: "bold", em: "italic", u: "underline", s: "strike", sup: "sup", sub: "sub", code: "code", a: "link" } as const;
 
   /** 把剛打的 len 個字套上（或拿掉）等待中的格式。 */
   const applyPending = (len: number) => {
@@ -358,12 +429,14 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
 
   const common = {
     ref: (el: HTMLElement | null) => {
+      if (elRef.current && elRef.current !== el) elRef.current.removeEventListener("beforeinput", listenBeforeInput);
+      if (el && elRef.current !== el) el.addEventListener("beforeinput", listenBeforeInput);
       elRef.current = el;
     },
     className: "rich",
     contentEditable: true,
     suppressContentEditableWarning: true,
-    spellCheck: false,
+    spellCheck: spell,
     "data-placeholder": p.placeholder,
     onInput,
     // 輸入法選好字：這時才套用等待中的格式（組字中動 DOM 會打斷輸入法）
@@ -377,20 +450,24 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
       ) {
         // 輸入法一次送出「」 之類的任務快捷
         onInput();
+      } else if (e.data) {
+        assistComposed(e.data);
       }
     },
     onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
       // 游標移走：取消等待中的格式
       if (/^(Arrow|Home|End|Page)/.test(e.key)) pending.current = null;
+      if (punctKey(e)) return;
       p.onKeyDown(e);
     },
     onMouseDown: () => {
       pending.current = null;
+      punct.current = null;
     },
     onPaste: p.onPaste,
     onBlur: (e: React.FocusEvent<HTMLElement>) => {
       const related = e.relatedTarget as Element | null;
-      if (!related?.closest?.(".format-bar")) pending.current = null;
+      if (!related?.closest?.(".format-bar, .editor-ui")) pending.current = null;
       p.onBlur(e.currentTarget, related);
     },
     onSelect: p.onSelect,

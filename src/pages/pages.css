@@ -176,3 +176,76 @@
   color: var(--ed-muted);
   font-size: 13px;
 }
+
+/* ─── 範本（`templates.ts`） ─── */
+
+.page-badge {
+  align-self: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ed-faint);
+  color: var(--ed-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.page-action {
+  align-self: center;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.page-action:hover {
+  color: inherit;
+  background: var(--ed-faint);
+}
+.page-action svg,
+.tpl-chip svg {
+  width: 14px;
+  height: 14px;
+}
+.tpl-help {
+  margin: -6px 0 14px;
+  color: var(--ed-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.tpl-help code {
+  font-size: 12px;
+}
+.tpl-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 2px 0 10px;
+}
+.tpl-start-label {
+  color: var(--ed-muted);
+  font-size: 13px;
+  margin-right: 2px;
+}
+.tpl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tpl-chip:hover {
+  background: var(--ed-faint);
+}

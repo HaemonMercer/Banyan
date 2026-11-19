@@ -12,7 +12,7 @@ import { md } from "./markdown";
  * 解析，看它們落在哪些格式裡——結果與 CommonMark 渲染出來的完全一致。
  */
 
-export type Mark = "bold" | "italic" | "strike" | "underline" | "code" | "link";
+export type Mark = "bold" | "italic" | "strike" | "underline" | "sup" | "sub" | "code" | "link";
 
 /** 文字顏色與螢光標記的顏色（與 Notion 相同的十種，「預設」是沒有顏色） */
 export const COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"] as const;
@@ -35,6 +35,10 @@ export interface Marks {
   italic: boolean;
   strike: boolean;
   underline: boolean;
+  /** 上標 <sup> */
+  sup: boolean;
+  /** 下標 <sub> */
+  sub: boolean;
   code: boolean;
   link: boolean;
   /** 文字顏色 */
@@ -48,6 +52,8 @@ const NONE: Marks = {
   italic: false,
   strike: false,
   underline: false,
+  sup: false,
+  sub: false,
   code: false,
   link: false,
   color: null,
@@ -73,6 +79,10 @@ function htmlEntry(name: string, attrs: string): Entry | null {
       return { mark: "strike", tag: name };
     case "u":
       return { mark: "underline", tag: name };
+    case "sup":
+      return { mark: "sup", tag: name };
+    case "sub":
+      return { mark: "sub", tag: name };
     case "b":
     case "strong":
       return { mark: "bold", tag: name };
@@ -148,6 +158,8 @@ function toMarks(stack: Entry[], code: boolean): Marks {
     italic: has("italic"),
     strike: has("strike"),
     underline: has("underline"),
+    sup: has("sup"),
+    sub: has("sub"),
     link: has("link"),
     code,
     color: last("color"),
@@ -167,6 +179,8 @@ export function marksAt(text: string, a: number, b: number): Marks {
     italic: start.italic && end.italic,
     strike: start.strike && end.strike,
     underline: start.underline && end.underline,
+    sup: start.sup && end.sup,
+    sub: start.sub && end.sub,
     code: start.code && end.code,
     link: start.link && end.link,
     color: start.color === end.color ? start.color : null,
@@ -266,7 +280,7 @@ function toggleDelim(text: string, a: number, b: number, mark: Delim, active: bo
 
 // ─── 刪除線、底線、顏色、螢光（行內 HTML 標籤） ─────────────────
 
-type TagName = "s" | "u" | "span" | "mark";
+type TagName = "s" | "u" | "sup" | "sub" | "span" | "mark";
 
 interface Pair {
   name: TagName;
@@ -277,7 +291,7 @@ interface Pair {
   ce: number;
 }
 
-const TAG_SCAN = /<(\/?)(s|u|span|mark)\b[^>]*>/gi;
+const TAG_SCAN = /<(\/?)(s|u|sup|sub|span|mark)\b[^>]*>/gi;
 
 /** 找出文字中成對的標籤。 */
 function tagPairs(text: string, name: TagName): Pair[] {
@@ -409,6 +423,10 @@ export function toggleMark(text: string, a: number, b: number, mark: Mark, activ
       return setTag(text, a, b, "s", on ? null : "<s>");
     case "underline":
       return setTag(text, a, b, "u", on ? null : "<u>");
+    case "sup":
+      return setTag(text, a, b, "sup", on ? null : "<sup>");
+    case "sub":
+      return setTag(text, a, b, "sub", on ? null : "<sub>");
     default:
       return toggleDelim(text, a, b, mark, on);
   }

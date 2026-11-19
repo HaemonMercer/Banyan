@@ -1,0 +1,56 @@
+/* ─── 輔助對齊（AlignMarks.tsx）：Draw、白板、試算表共用 ─── */
+
+:root {
+  --align-color: #e0407b;
+}
+:root[data-theme="dark"] {
+  --align-color: #f06595;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --align-color: #f06595;
+  }
+}
+
+/* 放在套用畫布變換的 HTML 容器裡：從原點開始，內容畫在外面 */
+.al-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 30;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+.al-marks {
+  pointer-events: none;
+}
+.al-guide {
+  stroke: var(--align-color);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.al-measure line {
+  stroke: var(--align-color);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.al-measure rect {
+  fill: var(--align-color);
+}
+.al-measure text {
+  fill: #fff;
+  font-family: var(--ed-font);
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  font-variant-numeric: tabular-nums;
+}
+.al-measure.equal line {
+  stroke-width: 1.5;
+}
+.al-measure.equal rect {
+  fill: color-mix(in srgb, var(--align-color) 85%, #000);
+}

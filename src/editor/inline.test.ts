@@ -160,3 +160,16 @@ describe("刪除線、底線、顏色、螢光（行內 HTML）", () => {
     expect(r.text).toBe('<span class="blue">xay</span>');
   });
 });
+
+describe("上標、下標", () => {
+  it("切換成 <sup>、<sub>，判斷游標所在的格式", () => {
+    const up = toggleMark("x2", 1, 2, "sup");
+    expect(up.text).toBe("x<sup>2</sup>");
+    expect(renderMarkdown(up.text)).toBe("<p>x<sup>2</sup></p>\n");
+    expect(marksAt(up.text, up.a, up.b).sup).toBe(true);
+    expect(toggleMark(up.text, 6, 7, "sup").text).toBe("x2");
+    const down = toggleMark("H2O", 1, 2, "sub");
+    expect(down.text).toBe("H<sub>2</sub>O");
+    expect(marksAt(down.text, down.a, down.b)).toMatchObject({ sub: true, sup: false });
+  });
+});

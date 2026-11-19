@@ -13,6 +13,8 @@ export interface Run {
   italic?: boolean;
   strike?: boolean;
   underline?: boolean;
+  sup?: boolean;
+  sub?: boolean;
   code?: boolean;
   highlight?: boolean;
   link?: string;
@@ -37,7 +39,9 @@ export type MdBlock =
   | { type: "para"; runs: Run[]; list?: ListInfo; quote: number }
   | { type: "code"; text: string }
   | { type: "image"; src: string; alt: string }
-  | { type: "hr" };
+  | { type: "hr" }
+  /** 分頁符號（`<div class="page-break"></div>`） */
+  | { type: "pagebreak" };
 
 /** 子彈筆記與待辦清單的標記 → 文字符號 */
 const TASK_GLYPH: Record<string, string> = { "": "☐", " ": "☐", x: "☑", X: "☑", "<": "→", "-": "✕", o: "○", O: "○" };
@@ -48,7 +52,7 @@ const unref = (s: string) => s.replace(/\[\[([^\]\n]+)\]\]/g, "$1");
 
 function inlineRuns(children: Token[]): Run[] {
   const runs: Run[] = [];
-  const st = { bold: 0, italic: 0, strike: 0, underline: 0, highlight: 0 };
+  const st = { bold: 0, italic: 0, strike: 0, underline: 0, sup: 0, sub: 0, highlight: 0 };
   const links: string[] = [];
   const push = (text: string, extra: Partial<Run> = {}) => {
     if (!text && !extra.br) return;
@@ -57,6 +61,8 @@ function inlineRuns(children: Token[]): Run[] {
     if (st.italic) r.italic = true;
     if (st.strike) r.strike = true;
     if (st.underline) r.underline = true;
+    if (st.sup) r.sup = true;
+    if (st.sub) r.sub = true;
     if (st.highlight) r.highlight = true;
     if (links.length) r.link = links[links.length - 1];
     runs.push({ ...r, ...extra });
@@ -97,7 +103,7 @@ function inlineRuns(children: Token[]): Run[] {
         push(t.content || "");
         break;
       case "html_inline": {
-        const m = /^<(\/?)(s|del|strike|u|mark|br)\b[^>]*>$/i.exec(t.content.trim());
+        const m = /^<(\/?)(s|del|strike|u|sup|sub|mark|br)\b[^>]*>$/i.exec(t.content.trim());
         if (!m) break;
         const tag = m[2].toLowerCase();
         if (tag === "br") {
@@ -106,6 +112,8 @@ function inlineRuns(children: Token[]): Run[] {
         }
         const d = m[1] ? -1 : 1;
         if (tag === "u") st.underline = Math.max(0, st.underline + d);
+        else if (tag === "sup") st.sup = Math.max(0, st.sup + d);
+        else if (tag === "sub") st.sub = Math.max(0, st.sub + d);
         else if (tag === "mark") st.highlight = Math.max(0, st.highlight + d);
         else st.strike = Math.max(0, st.strike + d);
         break;
@@ -211,6 +219,10 @@ export function mdBlocks(source: string): MdBlock[] {
         break;
       case "html_block": {
         // 影片、表格、排版標籤：只留看得到的文字
+        if (/class="page-break"/.test(t.content)) {
+          out.push({ type: "pagebreak" });
+          break;
+        }
         if (/^\s*<\/?div\b[^>]*>\s*$/i.test(t.content)) break;
         const text = stripTags(t.content);
         if (text) out.push({ type: "para", runs: [{ text }], quote });

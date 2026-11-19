@@ -17,6 +17,7 @@ import {
   sectionAround,
   sectionMembers,
   serializeBoard,
+  setCardLook,
   toWorld,
   zoomAt,
   ZOOM_MAX,
@@ -205,5 +206,63 @@ describe("便利貼", () => {
     at(0, 300, "左下");
     const heights = Object.fromEntries(b.cards.map((c) => [c.id, 100]));
     expect(readingOrder(b.cards, heights).map((c) => c.text)).toEqual(["左上", "右上", "左下", "下面"]);
+  });
+});
+
+describe("card looks", () => {
+  it("sets fill, shape, bold and color on several cards and round-trips through JSON", () => {
+    let b = addNote(emptyBoard(), 0, 0, "a").board;
+    b = addNote(b, 300, 0, "b").board;
+    const [a, c] = b.cards.map((x) => x.id);
+    b = setCardLook(b, [a, c], { fill: "solid", shape: "pill", bold: true, color: "blue" });
+    expect(b.cards.every((x) => x.color === "blue" && x.look?.fill === "solid" && x.look?.shape === "pill" && x.look?.bold)).toBe(true);
+    expect(parseBoard(serializeBoard(b))).toEqual(b);
+    b = setCardLook(b, [a], { bold: false, fill: "soft", shape: "rounded" });
+    expect(b.cards[0].look).toBeUndefined();
+    b = setCardLook(b, [c], null);
+    expect(b.cards[1].look).toBeUndefined();
+    expect(b.cards[1].color).toBe("blue");
+  });
+
+  it("ignores unknown values and leaves untouched boards alone", () => {
+    const b = parseBoard({ cards: [{ id: "x", ref: { kind: "note" }, x: 0, y: 0, w: 240, h: null, color: null, text: "", look: { fill: "neon", shape: "star", bold: 1 } }] });
+    expect(b.cards[0].look).toBeUndefined();
+    expect(setCardLook(b, ["x"], { bold: false })).toBe(b);
+  });
+});
+
+describe("section looks", () => {
+  it("sections take the same look as cards, together with cards, and round-trip", () => {
+    let b = addNote(emptyBoard(), 0, 0, "a").board;
+    const s = addSection(b, { x: -50, y: -50, w: 400, h: 300 });
+    b = setCardLook(s.board, [s.id, b.cards[0].id], { fill: "outline", shape: "rect", bold: true, color: "green" });
+    expect(b.sections[0]).toMatchObject({ color: "green", look: { fill: "outline", shape: "rect", bold: true } });
+    expect(b.cards[0].look).toEqual({ fill: "outline", shape: "rect", bold: true });
+    expect(parseBoard(serializeBoard(b))).toEqual(b);
+    b = setCardLook(b, [s.id], null);
+    expect(b.sections[0].look).toBeUndefined();
+    expect(b.sections[0].color).toBe("green");
+  });
+});
+
+describe("code cards", () => {
+  it("keep their code and language through JSON, and old files still open", async () => {
+    const { addCode } = await import("./board");
+    const { board, id } = addCode(emptyBoard(), 10, 20, "print('hi')", "python");
+    const back = parseBoard(serializeBoard(board));
+    expect(back).toEqual(board);
+    expect(back.cards[0]).toMatchObject({ id, ref: { kind: "code", lang: "python" }, text: "print('hi')", h: null });
+    const old = parseBoard({ cards: [{ id: "c", ref: { kind: "code" }, x: 0, y: 0, w: 300, text: "x" }] });
+    expect(old.cards[0].ref).toEqual({ kind: "code", lang: "" });
+    expect(old.cards[0].text).toBe("x");
+  });
+
+  it("are sent to the Dock as a fenced block", async () => {
+    const { addCode } = await import("./board");
+    const { cardsMarkdown } = await import("./file");
+    const { codeFence } = await import("../editor/codeHighlight");
+    const c = addCode(emptyBoard(), 0, 0, "let a = 1", "js").board.cards[0];
+    const md = cardsMarkdown([c], (x) => ({ title: "Code", content: x.ref.kind === "code" ? codeFence(x.text, x.ref.lang) : "" }), "word");
+    expect(md).toBe("```js\nlet a = 1\n```");
   });
 });

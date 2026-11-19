@@ -3,6 +3,7 @@ import { addNote, emptyBoard } from "./board";
 import {
   addDoc,
   appendMarkdown,
+  cardsDiagram,
   cardsMarkdown,
   emptyFile,
   moveDoc,
@@ -10,6 +11,18 @@ import {
   removeDoc,
   serializeFile,
   splitSlides,
+  joinSlides,
+  setSlide,
+  insertSlide,
+  removeSlide,
+  moveSlide,
+  moveSlides,
+  removeSlides,
+  duplicateSlides,
+  moveDocs,
+  removeDocs,
+  moveGroup,
+  sameSlide,
   updateDoc,
 } from "./file";
 import { mdBlocks, runsText } from "./mdblocks";
@@ -63,6 +76,33 @@ describe("簡報分張", () => {
   it("空的文件是一張空投影片", () => {
     expect(splitSlides("")).toEqual([""]);
   });
+  it("空的投影片保留；第一行的縮排不動", () => {
+    expect(splitSlides("A\n\n---\n\n---\n\nB")).toEqual(["A", "", "B"]);
+    expect(splitSlides("\n    code\n\n---\n\nB")).toEqual(["    code", "B"]);
+  });
+  it("改、插入、刪除、搬移投影片", () => {
+    const md = "# A\n\n---\n\n## B\n";
+    expect(setSlide(md, 1, "## B2\n\ntext\n")).toBe("# A\n\n---\n\n## B2\n\ntext\n");
+    expect(splitSlides(insertSlide(md, 1))).toEqual(["# A", "", "## B"]);
+    expect(removeSlide(md, 0)).toBe("## B\n");
+    expect(removeSlide("# A\n", 0)).toBe("\n");
+    expect(moveSlide(md, 1, 0)).toBe("## B\n\n---\n\n# A\n");
+    expect(joinSlides(splitSlides(md))).toBe(md);
+    expect(sameSlide("## B\n", "## B")).toBe(true);
+  });
+  it("好幾張一起刪、複製、搬移", () => {
+    const md = joinSlides(["A", "B", "C", "D"]);
+    expect(splitSlides(removeSlides(md, [1, 3]))).toEqual(["A", "C"]);
+    expect(removeSlides(md, [0, 1, 2, 3])).toBe("\n");
+    const d = duplicateSlides(md, [2, 0]);
+    expect(splitSlides(d.md)).toEqual(["A", "B", "C", "A", "C", "D"]);
+    expect(d.added).toEqual([3, 4]);
+    const m = moveSlides(md, [1, 3], 0);
+    expect(splitSlides(m.md)).toEqual(["B", "D", "A", "C"]);
+    expect(m.moved).toEqual([0, 1]);
+    expect(splitSlides(moveSlides(md, [0, 1], 4).md)).toEqual(["C", "D", "A", "B"]);
+    expect(splitSlides(moveSlides(md, [0, 2], 2).md)).toEqual(["B", "A", "C", "D"]);
+  });
 });
 
 describe("送到 Dock", () => {
@@ -115,5 +155,54 @@ describe("匯出用的段落", () => {
     const bl = mdBlocks('```\nx = 1\n```\n\n---\n\n![圖](media/a.png)\n\n<div class="indent">\n\n文字\n\n</div>\n');
     expect(bl.map((b) => b.type)).toEqual(["code", "hr", "image", "para"]);
     expect(bl[2]).toEqual({ type: "image", src: "media/a.png", alt: "圖" });
+  });
+});
+
+describe("好幾份文件", () => {
+  it("一起搬移、刪除", () => {
+    let f = emptyFile();
+    for (const t of ["A", "B", "C", "D"]) f = addDoc(f, "note", t).file;
+    const id = (t: string) => f.docs.find((d) => d.title === t)!.id;
+    const titles = (x: typeof f) => x.docs.map((d) => d.title);
+    expect(titles(moveDocs(f, [id("A"), id("C")], 4))).toEqual(["B", "D", "A", "C"]);
+    expect(titles(moveDocs(f, [id("D"), id("B")], 0))).toEqual(["B", "D", "A", "C"]);
+    expect(titles(moveDocs(f, [id("B")], 1))).toEqual(["A", "B", "C", "D"]);
+    expect(titles(removeDocs(f, [id("A"), id("D")]))).toEqual(["B", "C"]);
+    expect(moveGroup([1, 2, 3], () => false, 1)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("Draw 文件", () => {
+  it("新的 Draw 文件有範例流程圖，存檔寫成 draw 物件、讀回來一樣", () => {
+    const r = addDoc(emptyFile(), "draw");
+    const doc = r.file.docs[0];
+    expect(doc.title).toBe("Diagram");
+    const saved = JSON.parse(serializeFile(r.file));
+    expect(saved.docs[0].content).toBeUndefined();
+    expect(saved.docs[0].draw.shapes.length).toBeGreaterThan(0);
+    expect(parseFile(serializeFile(r.file)).docs[0]).toEqual(doc);
+  });
+  it("卡片送到圖表：便利貼變便利貼，頁面變標題", () => {
+    const f = addNote(emptyBoard(), 0, 0, "An idea");
+    const json = cardsDiagram("", f.board.cards, (c) => ({ title: "", content: c.text }));
+    const d = JSON.parse(json);
+    expect(d.shapes).toHaveLength(1);
+    expect(d.shapes[0]).toMatchObject({ kind: "note", text: "An idea" });
+  });
+});
+
+describe("已存的區塊樣式 styles", () => {
+  it("Word、簡報存得回來；空的不寫；其他文件種類不留", () => {
+    let f = addDoc(emptyFile(), "word").file;
+    f = addDoc(f, "note").file;
+    f = { ...f, docs: f.docs.map((d) => ({ ...d, styles: [{ name: "Card", css: "padding: 6pt" }] })) };
+    const saved = JSON.parse(serializeFile(f));
+    expect(saved.docs[0].styles).toEqual([{ name: "Card", css: "padding: 6pt" }]);
+    expect(saved.docs[1].styles).toBeUndefined();
+    const back = parseFile(serializeFile(f));
+    expect(back.docs[0].styles).toEqual([{ name: "Card", css: "padding: 6pt 6pt 6pt 6pt" }]);
+    expect(back.docs[1].styles).toBeUndefined();
+    const none = addDoc(emptyFile(), "slides").file;
+    expect(JSON.parse(serializeFile(none)).docs[0].styles).toBeUndefined();
   });
 });

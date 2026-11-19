@@ -38,6 +38,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFEOTcxN0U3MjQ0QUNDODcKUldTSHpFb2s1eGVYSGE0U3lzb0pIM241OXdDL3dWc25GSklZQlJoRFhoaU40SUJqWUFDSDE3Y2MK",
+      "endpoints": [
+        "https://github.com/HaemonMercer/Banyan/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

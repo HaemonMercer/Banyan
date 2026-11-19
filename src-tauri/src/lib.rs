@@ -1,10 +1,144 @@
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager};
+
+// ─── 儲存位置 ────────────────────────────────────────────────────
+//
+// 所有資料（journals/、pages/、media/、desk/、drawer/、databases/）放在同一個資料夾。
+// 預設是 App 資料夾；使用者在設定裡可以換成別的資料夾（例如同步資料夾），
+// 位置記在 App 設定資料夾的 settings.json（`{"dataDir": "..."}`）。
+
+/// 資料夾裡屬於 Banyan 的子資料夾（換位置時複製這些）。
+const DATA_SUBDIRS: [&str; 9] = ["journals", "pages", "media", "desk", "desk-templates", "drawer", "databases", "history", "styles"];
+
+fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json"))
+}
+
+fn default_root(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+/// settings.json 裡自訂的資料夾（沒設定、格式不對就是 None）。
+fn custom_root(app: &AppHandle) -> Option<PathBuf> {
+    let text = fs::read_to_string(settings_file(app).ok()?).ok()?;
+    parse_data_dir(&text)
+}
+
+fn parse_data_dir(text: &str) -> Option<PathBuf> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let dir = v.get("dataDir")?.as_str()?.trim();
+    if dir.is_empty() { None } else { Some(PathBuf::from(dir)) }
+}
+
+/// 目前的資料夾：自訂的優先，否則是 App 資料夾。
+fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
+    match custom_root(app) {
+        Some(p) => Ok(p),
+        None => default_root(app),
+    }
+}
+
+/// 讓 asset protocol 可以讀目前資料夾的 media/（預設位置已寫在 tauri.conf.json）。
+fn allow_media(app: &AppHandle) {
+    if let Ok(root) = data_root(app) {
+        let _ = app.asset_protocol_scope().allow_directory(root.join("media"), true);
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageInfo {
+    dir: String,
+    default_dir: String,
+    custom: bool,
+}
+
+#[tauri::command]
+fn storage_info(app: AppHandle) -> Result<StorageInfo, String> {
+    let default_dir = default_root(&app)?;
+    let custom = custom_root(&app);
+    Ok(StorageInfo {
+        dir: custom.clone().unwrap_or_else(|| default_dir.clone()).to_string_lossy().into_owned(),
+        default_dir: default_dir.to_string_lossy().into_owned(),
+        custom: custom.is_some(),
+    })
+}
+
+/// 把 from 底下的檔案複製到 to（遞迴）；to 已經有的檔案不覆蓋。
+fn copy_missing(from: &Path, to: &Path) -> Result<(), String> {
+    if !from.is_dir() {
+        return Ok(());
+    }
+    fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(from).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        if src.is_dir() {
+            copy_missing(&src, &dst)?;
+        } else if !dst.exists() {
+            fs::copy(&src, &dst).map_err(|e| format!("Couldn't copy {}: {e}", src.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// 換資料夾。`dir` 是 None 就回到預設位置；`copy` 時把目前的資料複製過去（不覆蓋新位置已有的檔案，原檔留著）。
+#[tauri::command]
+fn storage_set(app: AppHandle, dir: Option<String>, copy: bool) -> Result<StorageInfo, String> {
+    let target = match dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) => {
+            let p = PathBuf::from(d);
+            if !p.is_absolute() {
+                return Err("Choose a full folder path".into());
+            }
+            fs::create_dir_all(&p).map_err(|e| format!("Couldn't use {d}: {e}"))?;
+            Some(p)
+        }
+        None => None,
+    };
+    let old = data_root(&app)?;
+    let new = match &target {
+        Some(p) => p.clone(),
+        None => default_root(&app)?,
+    };
+    if copy && !same_dir(&old, &new) {
+        for sub in DATA_SUBDIRS {
+            copy_missing(&old.join(sub), &new.join(sub))?;
+        }
+    }
+    let file = settings_file(&app)?;
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut v: serde_json::Value = fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .filter(|v: &serde_json::Value| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    match &target {
+        Some(p) => v["dataDir"] = serde_json::Value::String(p.to_string_lossy().into_owned()),
+        None => {
+            v.as_object_mut().map(|o| o.remove("dataDir"));
+        }
+    }
+    fs::write(&file, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    allow_media(&app);
+    storage_info(app)
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
 
 // ─── 媒體檔案（圖片、GIF、影片） ─────────────────────────────────
 //
@@ -13,10 +147,7 @@ use tauri::{AppHandle, Manager};
 
 /// media 資料夾（不存在就建立）。
 fn media_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
+    let dir = data_root(app)?
         .join("media");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -86,10 +217,7 @@ fn import_media(app: AppHandle, path: String) -> Result<String, String> {
 // journals/ 與 media/ 在同一層，所以日記裡的 `media/檔名` 不用改。
 
 fn journals_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
+    let dir = data_root(app)?
         .join("journals");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -156,10 +284,7 @@ fn journal_write(app: AppHandle, date: String, content: String) -> Result<(), St
 // 檔名就是頁面名稱，Windows 不允許的字元（與 `%`）寫成 `%XX`（和 Logseq 一樣是 URL 編碼）。
 
 fn pages_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
+    let dir = data_root(app)?
         .join("pages");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -172,6 +297,11 @@ fn page_file(name: &str) -> Result<String, String> {
 
 /// 名稱 → URL 編碼的檔名（頁面 `.md`、白板 `.json` 共用）。
 fn encoded_file(name: &str, ext: &str) -> Result<String, String> {
+    Ok(format!("{}.{ext}", encoded_stem(name)?))
+}
+
+/// 名稱 → URL 編碼、沒有副檔名的檔名（版本歷史的資料夾名稱也用它）。
+fn encoded_stem(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 200 {
         return Err("頁面名稱不能是空的或太長".into());
@@ -196,7 +326,7 @@ fn encoded_file(name: &str, ext: &str) -> Result<String, String> {
         out.pop();
         out.push_str("%2E");
     }
-    Ok(format!("{out}.{ext}"))
+    Ok(out)
 }
 
 /// 檔名 → 頁面名稱（解開 `%XX`）。
@@ -258,15 +388,10 @@ fn page_write(app: AppHandle, name: String, content: String) -> Result<(), Strin
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
-// ─── 資料庫（參考 Notion 的 Database） ────────────────────────────
-//
-// 每個資料庫一個 databases/名稱.json（欄位、資料列、檢視），檔名編碼和頁面相同。
+// ─── 資料夾、讀寫的共用函式 ──────────────────────────────────────
 
 fn data_dir(app: &AppHandle, sub: &str) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
+    let dir = data_root(app)?
         .join(sub);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -289,28 +414,6 @@ fn write_or_remove(path: &PathBuf, content: &str) -> Result<(), String> {
         return Ok(());
     }
     fs::write(path, content).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn database_list(app: AppHandle) -> Result<Vec<String>, String> {
-    let mut names: Vec<String> = fs::read_dir(data_dir(&app, "databases")?)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| decoded_name(&e.file_name().to_string_lossy(), ".json"))
-        .collect();
-    names.sort();
-    Ok(names)
-}
-
-#[tauri::command]
-fn database_read(app: AppHandle, name: String) -> Result<String, String> {
-    read_or_empty(&data_dir(&app, "databases")?.join(encoded_file(&name, "json")?))
-}
-
-/// 寫入資料庫；內容是空的就刪掉檔案。
-#[tauri::command]
-fn database_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
-    write_or_remove(&data_dir(&app, "databases")?.join(encoded_file(&name, "json")?), &content)
 }
 
 // ─── Desk（白板發想＋Dock 整理） ──────────────────────────────────
@@ -337,6 +440,151 @@ fn desk_read(app: AppHandle, name: String) -> Result<String, String> {
 #[tauri::command]
 fn desk_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
     write_or_remove(&data_dir(&app, "desk")?.join(encoded_file(&name, "json")?), &content)
+}
+
+/// 改名：搬 desk/舊.json → desk/新.json，版本歷史的資料夾 history/desk/舊 → history/desk/新 一起搬。
+/// 只差大小寫也可以（Windows 檔名不分大小寫，同一個檔案直接改名）；新名稱已經有別的檔案就失敗。
+#[tauri::command]
+fn desk_rename(app: AppHandle, from: String, to: String) -> Result<(), String> {
+    let (a, b) = (encoded_stem(&from)?, encoded_stem(&to)?);
+    if a == b {
+        return Ok(());
+    }
+    let same = a.to_lowercase() == b.to_lowercase();
+    let dir = data_dir(&app, "desk")?;
+    let (src, dst) = (dir.join(format!("{a}.json")), dir.join(format!("{b}.json")));
+    if dst.exists() && !same {
+        return Err(format!("A file named {to} already exists"));
+    }
+    if src.exists() {
+        fs::rename(&src, &dst).map_err(|e| e.to_string())?;
+    }
+    let hist = data_dir(&app, "history")?.join("desk");
+    let (hs, hd) = (hist.join(&a), hist.join(&b));
+    if hs.exists() && (same || !hd.exists()) {
+        fs::rename(&hs, &hd).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// 使用者存的 Desk 檔案範本：desk-templates/名稱.json，內容和 Desk 檔案相同。
+
+#[tauri::command]
+fn desk_template_list(app: AppHandle) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = fs::read_dir(data_dir(&app, "desk-templates")?)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| decoded_name(&e.file_name().to_string_lossy(), ".json"))
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+#[tauri::command]
+fn desk_template_read(app: AppHandle, name: String) -> Result<String, String> {
+    read_or_empty(&data_dir(&app, "desk-templates")?.join(encoded_file(&name, "json")?))
+}
+
+/// 寫入範本；內容是空的就刪掉。
+#[tauri::command]
+fn desk_template_write(app: AppHandle, name: String, content: String) -> Result<(), String> {
+    write_or_remove(&data_dir(&app, "desk-templates")?.join(encoded_file(&name, "json")?), &content)
+}
+
+// ─── 版本歷史（參考 Google Docs 的 Version history） ──────────────────
+//
+// history/<種類>/<編碼後的名稱>/ 底下：index.json（版本清單，前端管理）與每個版本一個 <id>.txt。
+// 種類是 journals、pages、desk；名稱的編碼和頁面檔名相同。合併、刪除舊版本的規則都在前端（src/history/）。
+
+fn history_path(app: &AppHandle, kind: &str, key: &str, file: &str) -> Result<PathBuf, String> {
+    if !matches!(kind, "journals" | "pages" | "desk") {
+        return Err(format!("Unknown history kind: {kind}"));
+    }
+    if !history_file_ok(file) {
+        return Err(format!("Bad history file name: {file}"));
+    }
+    let dir = data_dir(app, "history")?.join(kind).join(encoded_stem(key)?);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(file))
+}
+
+/// 只允許 `index.json` 與 `英數字-_.txt`（不能跳出資料夾）。
+fn history_file_ok(file: &str) -> bool {
+    if file == "index.json" {
+        return true;
+    }
+    match file.strip_suffix(".txt") {
+        Some(stem) => !stem.is_empty() && stem.len() <= 64 && stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        None => false,
+    }
+}
+
+#[tauri::command]
+fn history_read(app: AppHandle, kind: String, key: String, file: String) -> Result<String, String> {
+    read_or_empty(&history_path(&app, &kind, &key, &file)?)
+}
+
+/// 寫入版本歷史的一個檔案；內容是空的就刪掉。
+#[tauri::command]
+fn history_write(app: AppHandle, kind: String, key: String, file: String, content: String) -> Result<(), String> {
+    let path = history_path(&app, &kind, &key, &file)?;
+    if content.is_empty() {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+// ─── Drawer（文獻庫，參考 Zotero） ────────────────────────────────
+//
+// 整個文獻庫是一份 drawer/library.json；附件和圖片一樣存在 media/。
+
+fn drawer_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(data_dir(app, "drawer")?.join("library.json"))
+}
+
+#[tauri::command]
+fn drawer_read(app: AppHandle) -> Result<String, String> {
+    read_or_empty(&drawer_file(&app)?)
+}
+
+/// 寫入文獻庫；先寫暫存檔再改名，寫到一半當掉也不會弄壞原本的檔案。內容是空的就刪掉。
+#[tauri::command]
+fn drawer_write(app: AppHandle, content: String) -> Result<(), String> {
+    let path = drawer_file(&app)?;
+    if content.trim().is_empty() {
+        return write_or_remove(&path, &content);
+    }
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+// ─── 區塊樣式（Word、簡報共用的已存樣式） ────────────────────────
+//
+// 所有文件共用一份 styles/block-styles.json（前端 `desk/styleLibrary.ts`）。
+
+fn styles_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(data_dir(app, "styles")?.join("block-styles.json"))
+}
+
+#[tauri::command]
+fn styles_read(app: AppHandle) -> Result<String, String> {
+    read_or_empty(&styles_file(&app)?)
+}
+
+/// 寫入已存的樣式；跟文獻庫一樣先寫暫存檔再改名。內容是空的就刪掉。
+#[tauri::command]
+fn styles_write(app: AppHandle, content: String) -> Result<(), String> {
+    let path = styles_file(&app)?;
+    if content.trim().is_empty() {
+        return write_or_remove(&path, &content);
+    }
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
 // ─── 匯出（Word、PowerPoint） ─────────────────────────────────────
@@ -401,6 +649,13 @@ fn export_save(app: AppHandle, request: Request<'_>) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            allow_media(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             media_dir,
             save_media,
@@ -411,13 +666,22 @@ pub fn run() {
             page_list,
             page_read,
             page_write,
-            database_list,
-            database_read,
-            database_write,
             desk_list,
             desk_read,
             desk_write,
-            export_save
+            desk_rename,
+            desk_template_list,
+            desk_template_read,
+            desk_template_write,
+            drawer_read,
+            drawer_write,
+            styles_read,
+            styles_write,
+            history_read,
+            history_write,
+            export_save,
+            storage_info,
+            storage_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -426,6 +690,29 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_dir_setting() {
+        assert_eq!(parse_data_dir(r#"{"dataDir":"D:\\Notes"}"#), Some(PathBuf::from(r"D:\Notes")));
+        assert_eq!(parse_data_dir(r#"{"dataDir":"  "}"#), None);
+        assert_eq!(parse_data_dir(r#"{}"#), None);
+        assert_eq!(parse_data_dir("not json"), None);
+    }
+
+    #[test]
+    fn copies_without_overwriting() {
+        let base = std::env::temp_dir().join(format!("banyan-copy-{}", std::process::id()));
+        let (from, to) = (base.join("from"), base.join("to"));
+        fs::create_dir_all(from.join("sub")).unwrap();
+        fs::create_dir_all(&to).unwrap();
+        fs::write(from.join("a.md"), "old a").unwrap();
+        fs::write(from.join("sub").join("b.md"), "b").unwrap();
+        fs::write(to.join("a.md"), "kept").unwrap();
+        copy_missing(&from, &to).unwrap();
+        assert_eq!(fs::read_to_string(to.join("a.md")).unwrap(), "kept");
+        assert_eq!(fs::read_to_string(to.join("sub").join("b.md")).unwrap(), "b");
+        let _ = fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn ext_is_cleaned() {
@@ -465,6 +752,16 @@ mod tests {
             assert_eq!(page_name(&file).as_deref(), Some(name), "{file}");
         }
         assert_eq!(page_name("notes.txt"), None);
+    }
+
+    #[test]
+    fn history_files() {
+        assert!(history_file_ok("index.json"));
+        assert!(history_file_ok("m3k9x2-ab_1.txt"));
+        assert!(!history_file_ok("../x.txt"));
+        assert!(!history_file_ok(".txt"));
+        assert!(!history_file_ok("a.md"));
+        assert_eq!(encoded_stem("a/b").unwrap(), "a%2Fb");
     }
 
     #[test]

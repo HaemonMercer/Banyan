@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { contentHtml, escapeWithRefs } from "../editor/wysiwyg";
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, JournalIcon } from "../editor/icons";
+import { BoardIcon, CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, JournalIcon } from "../editor/icons";
+import { parseFile, serializeFile } from "../desk/file";
+import { dueCards, updateCard } from "../desk/tasks";
 import { addDays, dateKey, isDateKey, monthGrid, monthName, monthShort, parseKey, weekday, weekdayShort, WEEKDAYS_MIN } from "../journal/journal";
 import type { Docs } from "../journal/useJournals";
 import { openPage } from "../pages/pageRef";
@@ -19,8 +21,10 @@ import {
 import { clock, duration, layoutTimed, parseClock, parseTime, setTimeAt, timeLabel, timeText, type TaskTime } from "./time";
 import "./bujo.css";
 
-/** 行事曆上的一項：日記裡的任務或事件 */
+/** 行事曆上的一項：日記裡的任務或事件，或 Desk 檔案 Tasks 看板上有截止日的卡片（`board`） */
 interface CalItem extends TaskItem {
+  /** 來自 Tasks 看板：檔名、卡片 id、清單名稱（date 是截止日，line 沒有意義） */
+  board?: { file: string; card: string; list: string };
   /** 寫在哪一天的日記 */
   date: string;
   /** 內容開頭的時間 */
@@ -262,8 +266,15 @@ interface QuickInit {
  * 拖曳改日期與時間；右邊是小月曆與以前沒做完的任務（排程、取消）。
  * 所有資料仍然寫在日記的 Markdown 裡，這裡只是整理與總覽。
  */
-export function CalendarView(props: { journals: Docs; now: string }) {
-  const { journals, now } = props;
+export function CalendarView(props: {
+  journals: Docs;
+  now: string;
+  /** Desk 檔案：Tasks 看板上有截止日的卡片也放上行事曆 */
+  desks?: Docs;
+  /** 打開某個 Desk 檔案的 Tasks 分頁 */
+  onOpenTasks?: (file: string) => void;
+}) {
+  const { journals, now, desks } = props;
   const [view, setViewState] = useState<View>(loadView);
   const [cursor, setCursor] = useState(now);
   const [showKey, setShowKey] = useState(false);
@@ -293,6 +304,25 @@ export function CalendarView(props: { journals: Docs; now: string }) {
         out.push({ ...t, date, time, title: rest, key: date + ":" + t.line });
       }
     }
+    // Tasks 看板上有截止日的卡片：排在截止日，有截止時間就在時間表上
+    for (const [file, content] of Object.entries(desks?.contents ?? {})) {
+      if (!content.includes('"due"')) continue;
+      const board = parseFile(content).tasks;
+      if (!board) continue;
+      for (const { card, list } of dueCards(board)) {
+        const start = card.time ? parseClock(card.time) : null;
+        out.push({
+          line: -1,
+          state: card.done ? "done" : "open",
+          text: card.title,
+          date: card.due!,
+          time: start === null ? null : { start },
+          title: escapeWithRefs(card.title),
+          key: `desk:${file}:${card.id}`,
+          board: { file, card: card.id, list },
+        });
+      }
+    }
     return out.sort(
       (a, b) =>
         dayOf(a).localeCompare(dayOf(b)) ||
@@ -300,7 +330,7 @@ export function CalendarView(props: { journals: Docs; now: string }) {
         a.date.localeCompare(b.date) ||
         a.line - b.line,
     );
-  }, [journals.contents]);
+  }, [journals.contents, desks?.contents]);
 
   const byDay = useMemo(() => {
     const map = new Map<string, CalItem[]>();
@@ -310,8 +340,20 @@ export function CalendarView(props: { journals: Docs; now: string }) {
 
   const find = (key: string) => tasks.find((t) => t.key === key);
 
+  /** 改 Tasks 看板上的卡片（存回那個 Desk 檔案） */
+  const modifyCard = (t: CalItem, patch: Parameters<typeof updateCard>[2]) => {
+    const b = t.board;
+    if (!b || !desks) return;
+    desks.modify(b.file, (src) => {
+      const f = parseFile(src);
+      return f.tasks ? serializeFile({ ...f, tasks: updateCard(f.tasks, b.card, patch) }) : src;
+    });
+  };
+
   const setState = (t: CalItem, state: TaskState | null) =>
-    journals.modify(t.date, (src) => setTaskAt(src, t.line, state));
+    t.board
+      ? modifyCard(t, { done: state === "done" })
+      : journals.modify(t.date, (src) => setTaskAt(src, t.line, state));
 
   /**
    * 改日期與時間。同一天只改時間；換到別天就是排程：任務留在原處，標成 <、行尾寫上日期
@@ -319,6 +361,13 @@ export function CalendarView(props: { journals: Docs; now: string }) {
    */
   const move = (t: CalItem, date: string, time?: TaskTime | null) => {
     if (date !== dayOf(t) && !movable(t)) return;
+    // 看板卡片：換日期就是改截止日，時間是截止時間（只有開始）
+    if (t.board) {
+      return modifyCard(t, {
+        due: date,
+        ...(time !== undefined ? { time: time ? clock(time.start) : undefined } : {}),
+      });
+    }
     journals.modify(t.date, (src) => {
       let s = src;
       if (date !== dayOf(t)) s = scheduleAt(s, t.line, date === t.date ? null : date);
@@ -329,7 +378,10 @@ export function CalendarView(props: { journals: Docs; now: string }) {
 
   /** 排程到某一天（未完成清單的「Schedule」）。 */
   const send = (items: CalItem[], date: string) => {
-    for (const t of items) journals.modify(t.date, (src) => scheduleAt(src, t.line, date === t.date ? null : date));
+    for (const t of items) {
+      if (t.board) modifyCard(t, { due: date });
+      else journals.modify(t.date, (src) => scheduleAt(src, t.line, date === t.date ? null : date));
+    }
   };
 
   const add = (kind: "open" | "event", text: string, date: string, time: TaskTime | null) =>
@@ -509,7 +561,7 @@ export function CalendarView(props: { journals: Docs; now: string }) {
               </div>
               {!overdue.length && <p className="cal-empty">All caught up</p>}
               {overdue.map((t) => (
-                <OverdueRow key={t.key} task={t} now={now} onState={setState} onSend={send} />
+                <OverdueRow key={t.key} task={t} now={now} onState={setState} onSend={send} onOpenTasks={props.onOpenTasks} />
               ))}
             </section>
           </aside>
@@ -533,6 +585,7 @@ export function CalendarView(props: { journals: Docs; now: string }) {
           now={now}
           onState={(s) => setState(detailTask, s)}
           onMove={(date, time) => move(detailTask, date, time)}
+          onOpenTasks={props.onOpenTasks}
           onClose={() => setDetail(null)}
         />
       )}
@@ -742,8 +795,8 @@ function CellItem(props: {
   const html = useMemo(() => contentHtml(task.title), [task.title]);
   return (
     <div
-      className={`cal-item t-${task.state}${isLate(task, now) ? " late" : ""}`}
-      title={`${TASK_LABEL[task.state]}: ${task.text}`}
+      className={`cal-item t-${task.state}${isLate(task, now) ? " late" : ""}${task.board ? " from-board" : ""}`}
+      title={task.board ? `Tasks · ${task.board.file} · ${task.board.list}: ${task.text}` : `${TASK_LABEL[task.state]}: ${task.text}`}
       onClick={(e) => {
         e.stopPropagation();
         if (!clickRef(e)) props.onOpen(task, e);
@@ -752,10 +805,18 @@ function CellItem(props: {
     >
       <TaskGlyph state={task.state} onClick={() => props.onState(task)} />
       {props.showTime && task.time && <span className="cal-item-time">{clock(task.time.start)}</span>}
+      {task.board && <BoardSource />}
       <span className="cal-item-text" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }
+
+/** 看板卡片的小圖示（來自 Desk 的 Tasks） */
+const BoardSource = () => (
+  <span className="cal-src" aria-label="From Tasks">
+    <BoardIcon />
+  </span>
+);
 
 // ─── 週檢視、日檢視（時間表） ──────────────────────────────────
 
@@ -866,7 +927,7 @@ function TimedItem(props: ViewProps & { task: CalItem; col: number; cols: number
   const height = Math.max(len, 22) / 60 * HOUR - 2;
   return (
     <div
-      className={`tg-item t-${task.state}${isLate(task, now) ? " late" : ""}${len <= 30 ? " short" : ""}`}
+      className={`tg-item t-${task.state}${isLate(task, now) ? " late" : ""}${len <= 30 ? " short" : ""}${task.board ? " from-board" : ""}`}
       style={{
         top: (time.start / 60) * HOUR + 1,
         height,
@@ -887,6 +948,7 @@ function TimedItem(props: ViewProps & { task: CalItem; col: number; cols: number
     >
       <div className="tg-item-head">
         <TaskGlyph state={task.state} onClick={() => props.onState(task)} />
+        {task.board && <BoardSource />}
         <span className="tg-item-text" dangerouslySetInnerHTML={{ __html: html }} />
       </div>
       <span className="tg-item-time">{timeLabel(time)}</span>
@@ -1016,9 +1078,11 @@ function Detail(props: {
   now: string;
   onState: (s: TaskState) => void;
   onMove: (date: string, time?: TaskTime | null) => void;
+  onOpenTasks?: (file: string) => void;
   onClose: () => void;
 }) {
   const { task, now } = props;
+  const board = task.board;
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, props.onClose);
   const pos = usePlace(ref, props.x, props.y);
@@ -1032,8 +1096,9 @@ function Detail(props: {
     if (s && !time) return; // 還在輸入
     props.onMove(dayOf(task), time);
   };
-  const states: TaskState[] =
-    task.state === "event"
+  const states: TaskState[] = board
+    ? ["open", "done"]
+    : task.state === "event"
       ? ["event", "open"]
       : task.due
         ? ["scheduled", "done", "cancelled"]
@@ -1050,8 +1115,11 @@ function Detail(props: {
         <DateChip date={dayOf(task)} state={task.state} onOpen={openPage} />
         {movable(task) && (
           // 換日期就是排程：原本的標成 <，那天的日記加一份
-          <label className="cal-schedule cal-detail-schedule" title="Schedule to another day (marks this one <)">
-            <TaskIcon state="scheduled" size={12} /> Schedule
+          <label
+            className="cal-schedule cal-detail-schedule"
+            title={board ? "Change the due date" : "Schedule to another day (marks this one <)"}
+          >
+            <TaskIcon state="scheduled" size={12} /> {board ? "Due date" : "Schedule"}
             <input
               type="date"
               onChange={(e) => {
@@ -1097,25 +1165,44 @@ function Detail(props: {
             key={s}
             className={task.state === s ? "on" : ""}
             onClick={() => props.onState(s)}
-            title={TASK_LABEL[s]}
+            title={board && s === "open" ? "Not done" : TASK_LABEL[s]}
           >
             <TaskIcon state={s} size={13} />
-            {TASK_LABEL[s]}
+            {board && s === "open" ? "Not done" : TASK_LABEL[s]}
           </button>
         ))}
       </div>
-      <div className="cal-pop-actions">
-        <span className="cal-pop-hint">Written on {shortDay(task.date)}</span>
-        <button
-          className="cal-btn"
-          onClick={() => {
-            props.onClose();
-            openPage(task.date);
-          }}
-        >
-          <JournalIcon /> Open journal
-        </button>
-      </div>
+      {board ? (
+        <div className="cal-pop-actions">
+          <span className="cal-pop-hint">
+            Tasks · {board.file} · {board.list}
+          </span>
+          {props.onOpenTasks && (
+            <button
+              className="cal-btn"
+              onClick={() => {
+                props.onClose();
+                props.onOpenTasks!(board.file);
+              }}
+            >
+              <BoardIcon /> Open Tasks
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="cal-pop-actions">
+          <span className="cal-pop-hint">Written on {shortDay(task.date)}</span>
+          <button
+            className="cal-btn"
+            onClick={() => {
+              props.onClose();
+              openPage(task.date);
+            }}
+          >
+            <JournalIcon /> Open journal
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1176,9 +1263,12 @@ function OverdueRow(props: {
   now: string;
   onState: (t: CalItem, s: TaskState | null) => void;
   onSend: (items: CalItem[], date: string) => void;
+  onOpenTasks?: (file: string) => void;
 }) {
   const { task, now } = props;
-  const html = useMemo(() => contentHtml(task.text), [task.text]);
+  const board = task.board;
+  // 看板卡片的標題是純文字（title 是跳脫過的）
+  const html = useMemo(() => contentHtml(board ? task.title : task.text), [board, task.title, task.text]);
   return (
     <div className="cal-od">
       <div className="cal-od-main">
@@ -1186,15 +1276,17 @@ function OverdueRow(props: {
         <span
           className="cal-od-text"
           onClick={(e) => {
-            if (!clickRef(e)) openPage(task.date);
+            if (clickRef(e)) return;
+            if (board) props.onOpenTasks?.(board.file);
+            else openPage(task.date);
           }}
           dangerouslySetInnerHTML={{ __html: html }}
         />
         <DateChip date={dayOf(task)} state={task.state} onOpen={openPage} />
       </div>
       <div className="cal-od-actions">
-        <label className="cal-schedule" title="Schedule to a day (marks the original <)">
-          <TaskIcon state="scheduled" size={12} /> Schedule
+        <label className="cal-schedule" title={board ? "Change the due date" : "Schedule to a day (marks the original <)"}>
+          <TaskIcon state="scheduled" size={12} /> {board ? "New due date" : "Schedule"}
           <input
             type="date"
             min={now}
@@ -1203,9 +1295,11 @@ function OverdueRow(props: {
             }}
           />
         </label>
-        <button onClick={() => props.onState(task, "cancelled")} title="Won't do">
-          <TaskIcon state="cancelled" size={12} /> Cancel
-        </button>
+        {!board && (
+          <button onClick={() => props.onState(task, "cancelled")} title="Won't do">
+            <TaskIcon state="cancelled" size={12} /> Cancel
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1255,6 +1349,9 @@ function Key(props: { onClose: () => void }) {
         </li>
         <li>
           Items go on the day they were written. Scheduling keeps the item where it is, marks it <code>{"{<}"}</code> and adds the date at the end; it then shows on that day here and in that day's journal.
+        </li>
+        <li>
+          Cards on a Desk file's Tasks board that have a due date show here too, with a board icon; dragging one changes its due date.
         </li>
         <li>Click empty space to add, click an item for details, drag to another day to schedule it (same day: change the time); click a symbol to toggle done.</li>
       </ul>

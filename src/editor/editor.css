@@ -11,9 +11,13 @@
   --ed-code-bg: #f6f5f3;
   --ed-inline-code: #d4483f;
   --ed-inline-code-bg: rgba(135, 131, 120, 0.13);
-  --ed-accent: #2383e2;
-  --ed-accent-soft: rgba(35, 131, 226, 0.1);
-  --ed-accent-ring: rgba(35, 131, 226, 0.35);
+  --ed-accent: #2b7a52;
+  --ed-accent-soft: rgba(43, 122, 82, 0.1);
+  --ed-accent-ring: rgba(43, 122, 82, 0.35);
+  /* 品牌色（標誌、App 圖示）：深榕樹綠，淺色／深色模式都一樣 */
+  --brand: #1f5a40;
+  --ed-select: rgba(43, 122, 82, 0.2);
+  --ed-select-box: rgba(43, 122, 82, 0.08);
   --ed-danger: #d44c47;
   --ed-danger-soft: rgba(212, 76, 71, 0.1);
   --ed-popover: #ffffff;
@@ -36,9 +40,11 @@
     --ed-code-bg: #232323;
     --ed-inline-code: #ff7b72;
     --ed-inline-code-bg: rgba(135, 131, 120, 0.22);
-    --ed-accent: #4a9eed;
-    --ed-accent-soft: rgba(74, 158, 237, 0.14);
-    --ed-accent-ring: rgba(74, 158, 237, 0.45);
+    --ed-accent: #46a575;
+    --ed-accent-soft: rgba(70, 165, 117, 0.14);
+    --ed-accent-ring: rgba(70, 165, 117, 0.45);
+    --ed-select: rgba(70, 165, 117, 0.28);
+    --ed-select-box: rgba(70, 165, 117, 0.1);
     --ed-danger: #ff6b66;
     --ed-danger-soft: rgba(255, 107, 102, 0.12);
     --ed-popover: #262626;
@@ -57,9 +63,11 @@
   --ed-code-bg: #232323;
   --ed-inline-code: #ff7b72;
   --ed-inline-code-bg: rgba(135, 131, 120, 0.22);
-  --ed-accent: #4a9eed;
-  --ed-accent-soft: rgba(74, 158, 237, 0.14);
-  --ed-accent-ring: rgba(74, 158, 237, 0.45);
+  --ed-accent: #46a575;
+  --ed-accent-soft: rgba(70, 165, 117, 0.14);
+  --ed-accent-ring: rgba(70, 165, 117, 0.45);
+  --ed-select: rgba(70, 165, 117, 0.28);
+  --ed-select-box: rgba(70, 165, 117, 0.1);
   --ed-danger: #ff6b66;
   --ed-danger-soft: rgba(255, 107, 102, 0.12);
   --ed-popover: #262626;
@@ -77,7 +85,7 @@
 }
 
 .md-editor ::selection {
-  background: rgba(35, 131, 226, 0.24);
+  background: var(--ed-select);
 }
 
 kbd {
@@ -243,9 +251,6 @@ kbd {
   width: 20px;
 }
 .column .row .gutter .add {
-  display: none;
-}
-.column .edit-badge {
   display: none;
 }
 
@@ -498,26 +503,6 @@ kbd {
   padding: 12px 16px;
 }
 
-/* 編輯框右側的類型標籤 */
-.edit-badge {
-  position: absolute;
-  top: 3px;
-  left: calc(100% + 14px);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  font-size: 12px;
-  line-height: 20px;
-  color: var(--ed-muted);
-  pointer-events: none;
-}
-@media (max-width: 1080px) {
-  .edit-badge {
-    display: none;
-  }
-}
-
 /* ─── 浮動選單 ─── */
 
 .popover {
@@ -714,7 +699,7 @@ kbd {
   z-index: 15;
   border: 1px solid var(--ed-accent-ring);
   border-radius: 3px;
-  background: rgba(35, 131, 226, 0.08);
+  background: var(--ed-select-box);
   pointer-events: none;
 }
 .popover-count {
@@ -940,6 +925,20 @@ kbd {
 }
 .block-bg > .row .gutter {
   left: -66px;
+}
+/* 區塊樣式（blockStyle.ts）：外距、內距、字型、框線寫在 style 上；flow-root 讓裡面區塊的外距不穿出框外 */
+.block-box {
+  display: flow-root;
+}
+.block-box.dragging {
+  opacity: 0.35;
+}
+/* 把手留在框外：往左再移內距＋框線（--box-inset，blockStyleCss 算的） */
+.block-box > .row .gutter {
+  left: calc(-58px - var(--box-inset, 0pt));
+}
+.block-bg.block-box > .row .gutter {
+  left: calc(-66px - var(--box-inset, 0pt));
 }
 .content span.gray,
 .tc-gray {
@@ -1583,9 +1582,52 @@ li.task.t-cancelled > .task-glyph {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+/* 連到 Dock 文件的 [[檔案/標題]]：前面一個小文件圖示（偽元素，不影響文字與游標） */
+.page-ref.dock-ref::before {
+  content: "";
+  display: inline-block;
+  width: 0.62em;
+  height: 0.78em;
+  margin-right: 0.28em;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  vertical-align: -0.04em;
+  opacity: 0.7;
+}
+/* 引用 Drawer 的條目 [[@引用鍵]]：顯示成文中引用 (Smith, 2020; Lee, 2019) */
+.cite {
+  color: var(--ed-muted);
+}
+.cite .cite-ref {
+  color: var(--ed-accent);
+}
+.row:not(.editing) .cite .cite-ref:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* 編輯中仍是原始的 [[@引用鍵]]：虛線底線表示認得這個條目（滑過顯示參考文獻） */
+.row.editing .cite-ref {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
 .ref-menu .tile {
   font-size: 12px;
   color: var(--ed-muted);
+}
+/* 分級選單：檔案後面的 ›、第二層上方的「‹ 檔案名稱」 */
+.ref-menu .chev {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--ed-muted);
+  font-size: 15px;
+}
+.ref-menu .ref-back {
+  font-weight: 600;
+  font-size: 12px;
+}
+.ref-menu .ref-back .chev {
+  margin-left: 0;
+  padding: 0 4px 0 0;
 }
 
 /* ─── 待辦清單的核取方塊（* [ ]） ─── */
@@ -1746,4 +1788,302 @@ li.task.t-cancelled .when-chip {
   padding: 2px 6px;
   color: var(--ed-accent);
   font-size: 12px;
+}
+
+/* ─── 程式碼區塊：語法上色（codeHighlight.ts，highlight.js 的 class）與右上角的語言、複製（CodeTools.tsx）─── */
+
+:root {
+  --hl-keyword: #a626a4;
+  --hl-string: #50a14f;
+  --hl-number: #986801;
+  --hl-comment: #a0a1a7;
+  --hl-title: #4078f2;
+  --hl-type: #c18401;
+  --hl-attr: #986801;
+  --hl-tag: #e45649;
+  --hl-meta: #0184bc;
+  --hl-add: #50a14f;
+  --hl-del: #e45649;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --hl-keyword: #c678dd;
+    --hl-string: #98c379;
+    --hl-number: #d19a66;
+    --hl-comment: #7f848e;
+    --hl-title: #61afef;
+    --hl-type: #e5c07b;
+    --hl-attr: #d19a66;
+    --hl-tag: #e06c75;
+    --hl-meta: #56b6c2;
+    --hl-add: #98c379;
+    --hl-del: #e06c75;
+  }
+}
+:root[data-theme="dark"] {
+  --hl-keyword: #c678dd;
+  --hl-string: #98c379;
+  --hl-number: #d19a66;
+  --hl-comment: #7f848e;
+  --hl-title: #61afef;
+  --hl-type: #e5c07b;
+  --hl-attr: #d19a66;
+  --hl-tag: #e06c75;
+  --hl-meta: #56b6c2;
+  --hl-add: #98c379;
+  --hl-del: #e06c75;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in.hljs-keyword,
+.hljs-doctag,
+.hljs-section {
+  color: var(--hl-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-char.escape_ {
+  color: var(--hl-string);
+}
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--hl-number);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-function .hljs-title {
+  color: var(--hl-title);
+}
+.hljs-type,
+.hljs-title.class_,
+.hljs-built_in,
+.hljs-class .hljs-title {
+  color: var(--hl-type);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-property,
+.hljs-params {
+  color: var(--hl-attr);
+}
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--hl-tag);
+}
+.hljs-meta,
+.hljs-link,
+.hljs-subst {
+  color: var(--hl-meta);
+}
+.hljs-addition {
+  color: var(--hl-add);
+}
+.hljs-deletion {
+  color: var(--hl-del);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+.code-tools {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.row.kind-code:hover .code-tools,
+.code-tools.open,
+.code-tools:focus-within {
+  opacity: 1;
+}
+.code-tools button {
+  padding: 2px 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: var(--ed-popover);
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.code-tools button:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.popover.code-lang-menu {
+  position: fixed;
+  z-index: 40;
+  width: 170px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.code-lang-menu button.current .label {
+  font-weight: 600;
+}
+.code-lang-menu .check {
+  margin-left: auto;
+  color: var(--ed-accent);
+}
+
+/* ─── 嵌入的頁面 ![[名稱]]（唯讀，點標題開啟那一頁） ─── */
+
+.page-embed {
+  margin: 2px 0;
+  padding: 6px 12px 8px;
+  border-left: 3px solid var(--ed-accent-soft);
+  border-radius: 4px;
+  background: var(--ed-hover);
+}
+.page-embed .pe-head {
+  font-size: 0.8em;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.page-embed .pe-body > :first-child {
+  margin-top: 0;
+}
+.page-embed .pe-body > :last-child {
+  margin-bottom: 0;
+}
+.page-embed .pe-note {
+  color: var(--ed-muted);
+  font-size: 0.9em;
+}
+.page-embed .page-embed {
+  background: transparent;
+}
+/* 嵌入 Drawer 的備註：引用＋條目標題，內容用引言的樣子 */
+.remark-embed {
+  border-left-color: var(--ed-accent);
+}
+.remark-embed .pe-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.remark-embed .pe-sub {
+  overflow: hidden;
+  color: var(--ed-muted);
+  font-weight: 400;
+  font-style: italic;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page-embed li.pe-item {
+  list-style: none;
+  margin-left: -1.2em;
+}
+.page-embed .pe-task,
+.page-embed .pe-check {
+  display: inline-block;
+  width: 1.2em;
+  color: var(--ed-muted);
+  text-align: center;
+}
+.page-embed .pe-check {
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: 0.3em;
+  border: 1.5px solid var(--ed-muted);
+  border-radius: 3px;
+  font-size: 0.75em;
+  line-height: 0.9em;
+  vertical-align: 0.05em;
+}
+.page-embed .pe-check.on {
+  background: var(--ed-accent);
+  border-color: var(--ed-accent);
+  color: #fff;
+}
+.page-embed li.pe-done,
+.page-embed li.pe-cancelled {
+  color: var(--ed-muted);
+}
+.page-embed li.pe-cancelled {
+  text-decoration: line-through;
+}
+
+/* ─── 上標、下標 ─── */
+
+/* 不撐開行高 */
+.md-editor sup,
+.md-editor sub {
+  font-size: 0.75em;
+  line-height: 0;
+}
+.fb-script {
+  font-size: 13px;
+  line-height: 1;
+}
+.fb-script sup,
+.fb-script sub {
+  font-size: 0.7em;
+  line-height: 0;
+}
+
+/* ─── 類型選單（Turn into、斜線選單）：名稱用該類型的樣子顯示（所見即所得） ─── */
+
+.popover .look {
+  line-height: 1.25;
+}
+.popover .look-h1 {
+  font-size: 20px;
+  font-weight: 700;
+}
+.popover .look-h2 {
+  font-size: 17px;
+  font-weight: 700;
+}
+.popover .look-h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+.popover .look-quote {
+  flex: none;
+  align-self: center;
+  padding-left: 8px;
+  border-left: 3px solid currentColor;
+  font-style: italic;
+}
+.popover .look-code {
+  flex: none;
+  align-self: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--ed-code-bg);
+  font-family: var(--ed-mono);
+  font-size: 0.9em;
+}
+.popover .look-task,
+.popover .look-event,
+.popover .look-todo {
+  font-weight: 400;
+}
+.popover .look-hr {
+  color: var(--ed-text-soft);
+}
+.popover .text > .look-quote,
+.popover .text > .look-code {
+  align-self: flex-start;
 }

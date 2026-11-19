@@ -287,3 +287,15 @@ describe("有選取時切換格式（以畫面上的字為準）", () => {
     expect(formatSelection(el, { tag: "span", color: "red" }, "on")!.content).toBe('看<span class="red">這裡</span>');
   });
 });
+
+describe("上標、下標的所見即所得", () => {
+  it("<sup>、<sub> 轉回 Markdown 原樣", () => {
+    expect(roundTrip("E = mc<sup>2</sup>，H<sub>2</sub>O")).toBe("E = mc<sup>2</sup>，H<sub>2</sub>O");
+  });
+});
+
+describe("有上標、下標的區塊仍是所見即所得", () => {
+  it("decompose 接受 <sup>、<sub>", () => {
+    expect(decompose("H<sub>2</sub>O 與 x<sup>2</sup>", "paragraph")).not.toBeNull();
+  });
+});

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { DayAgenda } from "../bujo/DayAgenda";
+import { TemplateStart } from "../pages/TemplateStart";
 import { Editor } from "../editor/Editor";
 import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon } from "../editor/icons";
-import { addDays, dayTitle, monthGrid, monthName, parseKey, relativeLabel, streamDays, weekday, WEEKDAYS_MIN } from "./journal";
+import { addDays, dayTitle, isBlank, monthGrid, monthName, parseKey, relativeLabel, streamDays, weekday, WEEKDAYS_MIN } from "./journal";
 import type { Docs, Journals } from "./useJournals";
 import "./journal.css";
 
@@ -69,10 +70,14 @@ function DaySection(props: {
     <section className={`journal-day${date === now ? " is-today" : ""}`}>
       <DayHeading date={date} now={now} onOpen={() => props.onOpenDay(date)} />
       <DayAgenda date={date} now={now} journals={journals} pages={props.pages} />
+      {date === now && content !== undefined && isBlank(content) && (
+        <TemplateStart pages={props.pages} vars={{ date }} onPick={(md) => journals.update(date, md)} />
+      )}
       {content === undefined ? (
         <div className="journal-loading">Loading…</div>
       ) : (
         <Editor
+          date={date}
           compact
           value={content}
           onChange={(md) => journals.update(date, md)}
@@ -143,11 +148,15 @@ export function JournalDay(props: {
       </nav>
       <DayHeading date={date} now={now} big />
       <DayAgenda date={date} now={now} journals={journals} pages={props.pages} />
+      {content !== undefined && isBlank(content) && (
+        <TemplateStart pages={props.pages} vars={{ date }} onPick={(md) => journals.update(date, md)} />
+      )}
       {content === undefined ? (
         <div className="journal-loading">Loading…</div>
       ) : (
         <Editor
           key={date}
+          date={date}
           compact
           value={content}
           onChange={(md) => journals.update(date, md)}

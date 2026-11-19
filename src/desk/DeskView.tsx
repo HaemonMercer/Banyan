@@ -1,143 +1,115 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DeskIcon, PlusIcon, TrashIcon, WhiteboardIcon } from "../editor/icons";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { BoardIcon, DeskIcon, WhiteboardIcon } from "../editor/icons";
 import { dayTitle } from "../journal/journal";
 import type { Docs } from "../journal/useJournals";
-import { pageKey } from "../pages/pageRef";
-import { newDatabase, parseDatabase, serializeDatabase } from "../database/model";
+import { newWorkbook, parseWorkbook, serializeWorkbook } from "../sheet/model";
 import { parseBoard, serializeBoard, type Card, type CardRef } from "./board";
-import { cardsToRows, placeNotes } from "./bridge";
-import { Dock, kindIcon } from "./Dock";
-import { addDoc, appendMarkdown, cardsMarkdown, fileStats, parseFile, updateDoc, type DeskFile } from "./file";
-import { forgetCamera, loadDockDoc, saveDockDoc } from "./store";
+import { cardsIntoWorkbook, placeNotes } from "./bridge";
+import { sheetMarkdown } from "./boardSheet";
+import { mediaCardMarkdown } from "./boardMedia";
+import { codeFence } from "../editor/codeHighlight";
+import { Dock } from "./Dock";
+import { addDoc, appendMarkdown, cardsDiagram, cardsMarkdown, dockOrder, isDataKind, parseFile, updateDoc, type DeskFile } from "./file";
+import { appendTaskCards, markdownCard, parseTasks, serializeTasks, starterTasks } from "./tasks";
+import { TasksView } from "./TasksView";
+import { diagramText } from "./draw";
+import { forgetCamera, loadDockDoc, saveDockDoc, touchFile } from "./store";
 import { Whiteboard, type SendTarget } from "./Whiteboard";
-import "../database/database.css";
 import "./board.css";
 import "./desk.css";
 
-export type DeskTab = "board" | "dock";
+export type DeskTab = "board" | "dock" | "tasks";
 
-/**
- * Desk（側邊欄「Desk」）：所有檔案的清單。每個檔案是一個專案，裡面有 Whiteboard（發想）與 Dock（整理）。
- */
-export function DeskView(props: {
-  files: Docs;
-  onOpen: (name: string) => void;
-  onCreate: (name: string) => void;
-  onDelete: (name: string) => void;
-}) {
-  const [adding, setAdding] = useState(false);
-  const names = useMemo(() => [...(props.files.dates ?? [])].sort((a, b) => a.localeCompare(b, "zh-Hant")), [props.files.dates]);
-  const contents = props.files.contents;
+/** Alt+D：Whiteboard → Dock → Tasks → Whiteboard */
+export const nextDeskTab = (t: DeskTab): DeskTab => (t === "board" ? "dock" : t === "dock" ? "tasks" : "board");
+
+/** Desk 首頁（檔案清單）在 `DeskHome.tsx` */
+export { DeskView } from "./DeskHome";
+
+/* ─── 一個檔案：Whiteboard／Dock／Tasks ─── */
+
+/** Whiteboard／Dock／Tasks 切換：只有圖示的分段按鈕，放在 App 頂端列的標題後面（名稱在提示裡，Alt+D 輪流換） */
+export function DeskSwitch(props: { tab: DeskTab; onTab: (t: DeskTab) => void }) {
+  const item = (t: DeskTab, label: string, icon: ReactNode) => (
+    <button
+      className={props.tab === t ? "on" : ""}
+      role="tab"
+      aria-selected={props.tab === t}
+      aria-label={label}
+      title={`${label} (Alt+D to switch)`}
+      onClick={() => props.onTab(t)}
+    >
+      {icon}
+    </button>
+  );
   return (
-    <div className="dbs-view desk-list">
-      <h1 className="dbs-title">Desk</h1>
-      <p className="desk-intro">
-        Each file is one project: a <b>Whiteboard</b> to think out loud — stick ideas anywhere, in any order — and a <b>Dock</b> to
-        shape them into Word documents, slides, databases and notes you can publish.
-      </p>
-      <button className="dbs-new no-box" onClick={() => setAdding(true)} disabled={adding}>
-        <PlusIcon /> New file
-      </button>
-      {props.files.ready && !names.length && !adding ? (
-        <div className="dbs-empty no-box">
-          <strong>Your desk is clear</strong>
-          Click <b>New file</b> to start a project.
-        </div>
-      ) : (
-        <div className="dbs-list no-box">
-          {adding && (
-            <NewRow
-              taken={names}
-              onDone={(name) => {
-                setAdding(false);
-                if (name) props.onCreate(name);
-              }}
-            />
-          )}
-          {names.map((n) => {
-            const s = fileStats(contents[n] ?? "");
-            const f = parseFile(contents[n] ?? "");
-            return (
-              <div
-                key={n}
-                className="dbs-row"
-                role="button"
-                tabIndex={0}
-                onClick={() => props.onOpen(n)}
-                onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && props.onOpen(n)}
-              >
-                <DeskIcon className="dbs-icon" />
-                <span className="dbs-name">{n}</span>
-                <span className="desk-docs">
-                  {f.docs.slice(0, 3).map((d) => (
-                    <span key={d.id} className="desk-doc" title={d.title}>
-                      {kindIcon(d.kind)}
-                      {d.title}
-                    </span>
-                  ))}
-                  {f.docs.length > 3 && <span className="desk-doc more">+{f.docs.length - 3}</span>}
-                </span>
-                <span className="dbs-meta">
-                  {s.cards === 1 ? "1 card" : `${s.cards} cards`} · {s.docs === 1 ? "1 document" : `${s.docs} documents`}
-                </span>
-                <button
-                  className="dbs-del"
-                  title="Delete file"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    props.onDelete(n);
-                  }}
-                >
-                  <TrashIcon />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
+    <div className="desk-switch" role="tablist" aria-label="Whiteboard, Dock or Tasks">
+      {item("board", "Whiteboard", <WhiteboardIcon />)}
+      {item("dock", "Dock", <DeskIcon />)}
+      {item("tasks", "Tasks", <BoardIcon />)}
     </div>
   );
 }
 
-function NewRow(props: { taken: string[]; onDone: (name: string) => void }) {
+/** 改名的文字框：Enter 或離開時確定、Esc 取消（點擊不會傳到外面的卡片） */
+export function RenameField(props: { value: string; className?: string; onDone: (name: string | null) => void }) {
   const ref = useRef<HTMLInputElement>(null);
   const done = useRef(false);
-  const [value, setValue] = useState("");
-  useEffect(() => ref.current?.focus(), []);
-  const finish = (v: string) => {
+  useEffect(() => ref.current?.select(), []);
+  const finish = (v: string | null) => {
     if (done.current) return;
     done.current = true;
-    props.onDone(v.trim());
+    props.onDone(v);
   };
-  const exists = props.taken.find((n) => pageKey(n) === pageKey(value.trim()));
   return (
-    <div className="dbs-row editing">
-      <DeskIcon className="dbs-icon" />
-      <input
-        ref={ref}
-        className="dbs-input"
-        value={value}
-        placeholder="File name"
-        spellCheck={false}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing) return;
-          if (e.key === "Enter") finish(value);
-          else if (e.key === "Escape") finish("");
-        }}
-        onBlur={() => finish(value)}
-      />
-      {exists && <span className="dbs-meta">Opens “{exists}”</span>}
-    </div>
+    <input
+      ref={ref}
+      className={`rename-field${props.className ? " " + props.className : ""}`}
+      defaultValue={props.value}
+      spellCheck={false}
+      aria-label="File name"
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") finish(e.currentTarget.value);
+        else if (e.key === "Escape") finish(null);
+      }}
+      onBlur={(e) => finish(e.currentTarget.value)}
+    />
   );
 }
 
-/* ─── 一個檔案：Whiteboard／Dock ─── */
+/** 頂端列的檔案名稱：按兩下改名 */
+export function FileTitle(props: { name: string; onRename: (to: string) => Promise<string | null> }) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <RenameField
+        value={props.name}
+        className="doc-title-input"
+        onDone={(v) => {
+          setEditing(false);
+          if (v !== null && v.trim() && v.trim() !== props.name) void props.onRename(v).then((err) => err && window.alert(err));
+        }}
+      />
+    );
+  }
+  return (
+    <span className="doc-title file-title" title="Double-click to rename" onDoubleClick={() => setEditing(true)}>
+      {props.name}
+    </span>
+  );
+}
 
 export function FileView(props: {
   name: string;
   json: string | undefined;
   tab: DeskTab;
+  /** Dock 開著的文件（App 決定） */
+  doc: string | null;
+  /** 選了 Dock 的文件：換到 Dock 並開那份 */
+  onDoc: (id: string) => void;
   onTab: (t: DeskTab) => void;
   onModify: (fn: (f: DeskFile) => DeskFile) => void;
   pages: Docs;
@@ -145,6 +117,8 @@ export function FileView(props: {
   pageNames: string[];
   now: string;
   onOpenRef: (ref: CardRef) => void;
+  /** 刪除卡片指向的頁面或日記（App 確認），回傳是否刪了 */
+  onDeleteRef?: (ref: CardRef) => boolean;
   /** 資料庫的列標題連到同名頁面 */
   onOpenPage: (title: string) => void;
   hasPage: (title: string) => boolean;
@@ -152,30 +126,69 @@ export function FileView(props: {
   const { name, onModify, pages, journals, now } = props;
   const file = useMemo(() => parseFile(props.json ?? ""), [props.json]);
   const boardJson = useMemo(() => serializeBoard(file.board), [file.board]);
-  const [active, setActiveState] = useState<string | null>(() => loadDockDoc(name));
+  // 還沒用過 Tasks 的檔案先給一個 To do／Doing／Done 的看板（第一次修改才寫進檔案）
+  const tasksJson = useMemo(() => serializeTasks(file.tasks ?? starterTasks()), [file]);
+  const onTasks = useCallback((j: string) => onModify((f) => ({ ...f, tasks: parseTasks(j) })), [onModify]);
+  // Dock 開著的文件由 App 的畫面決定（會記進最近、可以收藏）；選別份文件就換畫面並記住
+  const { onDoc } = props;
+  const active = props.doc ?? loadDockDoc(name);
   const setActive = useCallback(
     (id: string | null) => {
-      setActiveState(id);
-      if (id) saveDockDoc(name, id);
+      if (!id) return;
+      saveDockDoc(name, id);
+      onDoc(id);
     },
-    [name],
+    [name, onDoc],
   );
+
+  // 首頁的「Opened／Edited …」：打開時記一次，之後內容每次改變記成編輯
+  useEffect(() => touchFile(name, "opened"), [name]);
+  const seen = useRef<{ name: string; json: string | undefined }>({ name, json: props.json });
+  useEffect(() => {
+    const prev = seen.current;
+    seen.current = { name, json: props.json };
+    if (prev.name === name && prev.json !== undefined && props.json !== undefined && prev.json !== props.json) touchFile(name, "edited");
+  }, [name, props.json]);
 
   const onWrite = useCallback((j: string) => onModify((f) => ({ ...f, board: parseBoard(j) })), [onModify]);
 
   const source = (c: Card) => {
     if (c.ref.kind === "note") return { title: "", content: c.text };
+    if (c.ref.kind === "code") return { title: "Code", content: codeFence(c.text, c.ref.lang) };
+    if (c.ref.kind === "media") return { title: c.ref.type === "image" ? "Image" : "Video", content: mediaCardMarkdown(c.ref) };
+    // 圖表卡片送到 Draw 是整張圖表（`cardsDiagram`）；送到 Markdown 文件時寫出圖上的文字
+    if (c.ref.kind === "draw") return { title: "Diagram", content: diagramText(c.text) };
+    // 表格卡片送到 Excel 是整份活頁簿（`cardsIntoWorkbook`）；送到 Markdown 文件時是表格區塊（顯示的值）
+    if (c.ref.kind === "sheet") return { title: "Table", content: sheetMarkdown(c.text) };
     if (c.ref.kind === "page") return { title: c.ref.name, content: pages.contents[c.ref.name] ?? "" };
     return { title: dayTitle(c.ref.date, now), content: journals.contents[c.ref.date] ?? "" };
   };
+  // 送到任務看板：便利貼的第一行是卡片標題、其他是說明；其他卡片用它的名稱
+  const taskItems = (cards: Card[]) =>
+    cards.map((c) => {
+      const s = source(c);
+      return c.ref.kind === "note" ? markdownCard(s.content, "Note") : { title: s.title || "Untitled" };
+    });
   const onSend = (cards: Card[], to: SendTarget): string => {
+    if ("tasks" in to) {
+      const items = taskItems(cards);
+      onModify((f) => ({ ...f, tasks: appendTaskCards(f.tasks ?? starterTasks(), items) }));
+      return "Tasks";
+    }
     if ("doc" in to) {
       const doc = file.docs.find((d) => d.id === to.doc);
       if (!doc) return "";
-      if (doc.kind === "database") {
+      if (doc.kind === "sheet") {
         onModify((f) => {
           const d = f.docs.find((x) => x.id === to.doc);
-          return d ? updateDoc(f, d.id, { content: serializeDatabase(cardsToRows(parseDatabase(d.content), cards, source)) }) : f;
+          return d ? updateDoc(f, d.id, { content: serializeWorkbook(cardsIntoWorkbook(parseWorkbook(d.content), cards, source)) }) : f;
+        });
+        return doc.title;
+      }
+      if (doc.kind === "draw") {
+        onModify((f) => {
+          const d = f.docs.find((x) => x.id === to.doc);
+          return d ? updateDoc(f, d.id, { content: cardsDiagram(d.content, cards, source) }) : f;
         });
         return doc.title;
       }
@@ -187,30 +200,22 @@ export function FileView(props: {
       return doc.title;
     }
     const add =
-      to.kind === "database"
-        ? serializeDatabase(cardsToRows({ ...newDatabase(), rows: [] }, cards, source))
-        : cardsMarkdown(cards, source, to.kind);
-    const r = addDoc(file, to.kind, undefined, to.kind === "database" ? add : add ? add + "\n" : "");
+      to.kind === "sheet"
+        ? serializeWorkbook(cardsIntoWorkbook({ sheets: newWorkbook().sheets.map((s) => ({ ...s, tables: [] })) }, cards, source))
+        : to.kind === "draw"
+          ? cardsDiagram("", cards, source)
+          : cardsMarkdown(cards, source, to.kind);
+    const r = addDoc(file, to.kind, undefined, isDataKind(to.kind) ? add : add ? add + "\n" : "");
     const made = r.file.docs[r.file.docs.length - 1];
     onModify((f) => ({ ...f, docs: [...f.docs, made] }));
-    setActive(made.id);
+    // 留在白板上；之後打開 Dock 就是這份
+    saveDockDoc(name, made.id);
     return made.title;
   };
 
   if (props.json === undefined) return <div className="board-loading">Loading…</div>;
   return (
     <div className="desk-file">
-      <div className="desk-tabs" role="tablist">
-        <button className={props.tab === "board" ? "on" : ""} role="tab" aria-selected={props.tab === "board"} onClick={() => props.onTab("board")}>
-          <WhiteboardIcon /> Whiteboard
-          <span className="dt-count">{file.board.cards.length}</span>
-        </button>
-        <button className={props.tab === "dock" ? "on" : ""} role="tab" aria-selected={props.tab === "dock"} onClick={() => props.onTab("dock")}>
-          <DeskIcon /> Dock
-          <span className="dt-count">{file.docs.length}</span>
-        </button>
-        <span className="dt-hint">{props.tab === "board" ? "Think: put ideas anywhere, in any order" : "Shape: turn ideas into something to publish"}</span>
-      </div>
       {props.tab === "board" ? (
         <Whiteboard
           key={name}
@@ -222,13 +227,14 @@ export function FileView(props: {
           pageNames={props.pageNames}
           now={now}
           onOpen={props.onOpenRef}
-          dock={file.docs.map((d) => ({ id: d.id, title: d.title, kind: d.kind }))}
+          onDeleteRef={props.onDeleteRef}
+          dock={dockOrder(file).map((d) => ({ id: d.id, title: d.title, kind: d.kind }))}
           onSend={onSend}
-          onOpenDoc={(id) => {
-            if (id) setActive(id);
-            props.onTab("dock");
-          }}
+          onOpenDoc={(id) => (id ? setActive(id) : props.onTab("dock"))}
+          onOpenTasks={() => props.onTab("tasks")}
         />
+      ) : props.tab === "tasks" ? (
+        <TasksView stateKey={name} title={name} value={tasksJson} onChange={onTasks} />
       ) : (
         <Dock
           name={name}

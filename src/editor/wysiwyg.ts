@@ -50,7 +50,7 @@ function inlineOnly(content: string): boolean {
 }
 
 /** 行內內容裡有編輯器不認得的 HTML 標籤時，不用所見即所得編輯（避免轉換時遺失）。 */
-const UNKNOWN_HTML = /<(?!\/?(?:s|u|span|mark|strong|em|b|i|br)\b)[a-zA-Z/!?]/;
+const UNKNOWN_HTML = /<(?!\/?(?:s|u|sup|sub|span|mark|strong|em|b|i|br)\b)[a-zA-Z/!?]/;
 
 /**
  * 拆開區塊原始碼。只處理單純的段落、ATX 標題、單段的清單項目與引用；
@@ -202,6 +202,10 @@ function formatKey(el: Element): FormatKey {
       return "i";
     case "U":
       return "u";
+    case "SUP":
+      return "sup";
+    case "SUB":
+      return "sub";
     case "S":
     case "STRIKE":
     case "DEL":
@@ -348,6 +352,10 @@ function serializeNode(node: Node, o: SerOptions): string {
       return o.html ? wrap(inner(), "<em>", "</em>") : wrap(inner(), "*");
     case "U":
       return wrap(inner(), "<u>", "</u>");
+    case "SUP":
+      return wrap(inner(), "<sup>", "</sup>");
+    case "SUB":
+      return wrap(inner(), "<sub>", "</sub>");
     case "S":
     case "STRIKE":
     case "DEL":
@@ -577,6 +585,8 @@ export function domMarks(root: HTMLElement): Marks | null {
     italic: false,
     strike: false,
     underline: false,
+    sup: false,
+    sub: false,
     code: false,
     link: false,
     color: null,
@@ -589,6 +599,8 @@ export function domMarks(root: HTMLElement): Marks | null {
     if (key === "b") m.bold = true;
     else if (key === "i") m.italic = true;
     else if (key === "u") m.underline = true;
+    else if (key === "sup") m.sup = true;
+    else if (key === "sub") m.sub = true;
     else if (key === "s") m.strike = true;
     else if (key === "code") m.code = true;
     else if (key.startsWith("a:")) m.link = true;
@@ -601,7 +613,7 @@ export function domMarks(root: HTMLElement): Marks | null {
 // ─── 沒有選取時切換格式：讓接著打的字有（或沒有）這個格式 ─────────
 
 export type FormatSpec =
-  | { tag: "strong" | "em" | "u" | "s" | "code" }
+  | { tag: "strong" | "em" | "u" | "s" | "sup" | "sub" | "code" }
   | { tag: "span" | "mark"; color: Color | null }
   | { tag: "a"; href: string };
 
@@ -615,6 +627,8 @@ function matches(el: Element, spec: FormatSpec): boolean {
       return key === "i";
     case "u":
     case "s":
+    case "sup":
+    case "sub":
     case "code":
       return key === spec.tag;
     case "span":
@@ -1015,7 +1029,7 @@ export function selectionMarks(root: HTMLElement): Marks | null {
   }
   if (!segs.length) return domMarks(root);
   const each = segs.map((t) => {
-    const m: Marks = { bold: false, italic: false, strike: false, underline: false, code: false, link: false, color: null, highlight: null };
+    const m: Marks = { bold: false, italic: false, strike: false, underline: false, sup: false, sub: false, code: false, link: false, color: null, highlight: null };
     for (let n: Node | null = t.parentNode; n && n !== root; n = n.parentNode) {
       if (n.nodeType !== Node.ELEMENT_NODE) continue;
       const key = formatKey(n as Element);
@@ -1023,6 +1037,8 @@ export function selectionMarks(root: HTMLElement): Marks | null {
       if (key === "b") m.bold = true;
       else if (key === "i") m.italic = true;
       else if (key === "u") m.underline = true;
+      else if (key === "sup") m.sup = true;
+      else if (key === "sub") m.sub = true;
       else if (key === "s") m.strike = true;
       else if (key === "code") m.code = true;
       else if (key.startsWith("a:")) m.link = true;
@@ -1037,6 +1053,8 @@ export function selectionMarks(root: HTMLElement): Marks | null {
     italic: each.every((m) => m.italic),
     strike: each.every((m) => m.strike),
     underline: each.every((m) => m.underline),
+    sup: each.every((m) => m.sup),
+    sub: each.every((m) => m.sub),
     code: each.every((m) => m.code),
     link: each.every((m) => m.link),
     color: each.every((m) => m.color === first.color) ? first.color : null,

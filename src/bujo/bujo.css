@@ -1213,3 +1213,15 @@ body.cal-dragging * {
 .cal-ym-day.drop-over {
   box-shadow: inset 0 0 0 2px var(--ed-accent);
 }
+
+/* Desk 的 Tasks 看板上的卡片：標題前面一個小看板圖示 */
+.cal-src {
+  flex: none;
+  display: inline-flex;
+  margin-right: 3px;
+  color: var(--ed-muted);
+}
+.cal-src svg {
+  width: 11px;
+  height: 11px;
+}

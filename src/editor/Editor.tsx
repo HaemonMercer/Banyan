@@ -7,13 +7,17 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
   type KeyboardEvent,
   type MouseEvent,
   type ClipboardEvent as ReactClipboardEvent,
   type ReactNode,
 } from "react";
-import { BLOCK_TYPES, filterBlockTypes, kindLabel } from "./blockTypes";
+import { BLOCK_TYPES, filterBlockTypes, kindLabel, type SlashItem } from "./blockTypes";
+import { expandTemplate, findTemplate, getTemplates } from "../pages/templates";
+import { bibliographyMarkdown, citeStamp, subscribeCites, suggestCites } from "../drawer/citeRef";
+import { docKindLabel, getDocLinks, linkMenu } from "../desk/docLinks";
 import { TaskGlyph, TaskIcon, WhenChip } from "../bujo/TaskGlyph";
 import { clock, contentWhen, lineWhen, parseClock, setTimeAt, stripWhenHtml, whenLabel, type TaskTime } from "../bujo/time";
 import {
@@ -44,7 +48,9 @@ import {
 } from "./icons";
 import { COLORS, COLOR_LABELS, marksAt, setColor, toggleMark, type Color, type Mark, type Marks } from "./inline";
 import { caretFromPoint } from "./caret";
-import { RichBlock, textareaSurface, type Shortcut, type Surface } from "./RichBlock";
+import { RichBlock, SpellCheck, textareaSurface, type Shortcut, type Surface } from "./RichBlock";
+import { highlightBlocksHtml, parseCodeBlock, setCodeLang } from "./codeHighlight";
+import { CodeTools } from "./CodeTools";
 import { decompose, type FormatSpec } from "./wysiwyg";
 import { isTauri } from "@tauri-apps/api/core";
 import {
@@ -92,12 +98,18 @@ import {
   type Align,
   setBlockBg,
   setBlocksBg,
+  setBlocksAlign,
+  setBlockBox,
+  setBlocksBox,
+  blockBox,
   setColumnWidths,
   treeWith,
+  type BoxValue,
   type DropPos,
   type Picked,
 } from "./layout";
 import { parseDoc, type Container, type ParsedDoc, type TreeNode, type Unit } from "./markdown";
+import { blockStyleCss } from "./blockStyle";
 import {
   EMPTY_BLOCK,
   activate,
@@ -116,16 +128,24 @@ import {
   type BlockType,
   type EditorState,
 } from "./ops";
+import { embedPages } from "./embed";
 import "./editor.css";
 
 // ─── 共用小工具 ────────────────────────────────────────────────
 
 const sanitized = new Map<string, string>();
+let sanitizedStamp = -1;
 function clean(html: string): string {
+  // 文獻庫或引用格式變了：[[@引用鍵]] 的顯示跟著變
+  if (sanitizedStamp !== citeStamp()) {
+    sanitized.clear();
+    sanitizedStamp = citeStamp();
+  }
   let out = sanitized.get(html);
   if (out === undefined) {
     if (sanitized.size > 2000) sanitized.clear();
-    out = linkPages(DOMPurify.sanitize(resolveMedia(html), PURIFY));
+    // ``` 區塊在清理之後才上色（highlight.js 的輸出已經跳脫）
+    out = linkPages(embedPages(highlightBlocksHtml(DOMPurify.sanitize(resolveMedia(html), PURIFY))));
     sanitized.set(html, out);
   }
   return out;
@@ -192,6 +212,14 @@ export interface EditorProps {
   compact?: boolean;
   /** 文件是空的時候的提示 */
   placeholder?: string;
+  /** 編輯時浮在區塊上方的格式列；Word、簡報用固定的功能區（`editorBus`）就關掉 */
+  formatBar?: boolean;
+  /** 插入範本時的 `{{title}}`（頁面名稱） */
+  title?: string;
+  /** 拼字檢查（Word 文件的設定；其他地方關掉） */
+  spellCheck?: boolean;
+  /** 插入範本時的 `{{date}}` 等（日記那一天，`YYYY-MM-DD`；沒有就是今天） */
+  date?: string;
 }
 
 // ─── 好幾個編輯器並存 ──────────────────────────────────────────
@@ -200,6 +228,104 @@ export interface EditorProps {
 // window／document 上的處理，只交給最後操作的編輯器（在裡面按下滑鼠或取得焦點）。
 
 let currentEditor: object | null = null;
+
+// ─── 外部工具列（Word、簡報的功能區） ──────────────────────────
+//
+// 功能區不在編輯器裡：透過 `editorBus` 看「最後操作的編輯器」的狀態、對它下指令。
+// 功能區的元素要加 `editor-ui` class，並在 mousedown 時 preventDefault：
+// 按下去不會結束編輯、不會搶走焦點（框選與失去焦點的處理會跳過它）。
+
+/** 功能區看得到的編輯器狀態 */
+export interface EditorStatus {
+  /** 編輯器的根元素（功能區只管自己文件裡的編輯器） */
+  root: HTMLElement | null;
+  editing: boolean;
+  /** 選取了幾個區塊 */
+  selected: number;
+  /** 編輯中的區塊能不能加行內格式（程式碼、HTML 不行） */
+  formattable: boolean;
+  marks: Marks | null;
+  /** 編輯中（或第一個選取）的區塊類型 */
+  type: BlockType | null;
+  bg: Color | null;
+  align: Align;
+  /** 區塊樣式（`blockStyle.ts` 的 style 文字；編輯中或第一個選取的區塊，沒有就是空字串） */
+  box: string;
+  /** 區塊套用的已存樣式名稱（沒有就是空字串） */
+  boxName: string;
+}
+
+/** 功能區的指令：編輯中就作用在編輯中的區塊／選取的文字，否則作用在選取的區塊 */
+export interface EditorCommands {
+  /** 結束編輯、取消選取的區塊（簡報的文字方塊按 Esc：改成選取整個文字方塊） */
+  release: () => void;
+  mark: (m: Mark) => void;
+  color: (kind: "color" | "highlight", c: Color | null) => void;
+  blockBg: (c: Color | null) => void;
+  turnInto: (t: BlockType) => void;
+  indent: (outdent: boolean) => void;
+  align: (a: Align) => void;
+  /** 改區塊樣式：fn 從區塊現在的樣式算出新的（多選時每個區塊各算各的） */
+  box: (fn: (v: BoxValue) => BoxValue) => void;
+  /** 插入：編輯中的區塊或選取的區塊後面，都沒有就是文件最後 */
+  insert: (kind: "image" | "video" | "table" | "hr") => void;
+  /** 在編輯中（或選取）的區塊後面插入一段 Markdown（分頁、目錄…） */
+  insertMarkdown: (md: string) => void;
+  undo: () => void;
+  redo: () => void;
+}
+
+const NO_STATUS: EditorStatus = {
+  root: null,
+  editing: false,
+  selected: 0,
+  formattable: false,
+  marks: null,
+  type: null,
+  bg: null,
+  align: "left",
+  box: "",
+  boxName: "",
+};
+const handles = new Map<object, { status: EditorStatus; cmds: EditorCommands }>();
+const busListeners = new Set<() => void>();
+const notifyBus = () => busListeners.forEach((f) => f());
+
+export const editorBus = {
+  subscribe(fn: () => void) {
+    busListeners.add(fn);
+    return () => {
+      busListeners.delete(fn);
+    };
+  },
+  /** 最後操作的編輯器的狀態（同一個狀態是同一個物件，可以給 useSyncExternalStore） */
+  status(): EditorStatus {
+    return (currentEditor && handles.get(currentEditor)?.status) || NO_STATUS;
+  },
+  /** 對最後操作的編輯器下指令；within 給了就只在它在 within 裡面時才做 */
+  run(within: Element | null, fn: (c: EditorCommands) => void) {
+    const h = currentEditor && handles.get(currentEditor);
+    if (!h || (within && !(h.status.root && within.contains(h.status.root)))) return false;
+    fn(h.cmds);
+    return true;
+  },
+  /** 讓 within 裡的編輯器成為最後操作的編輯器（功能區按下去前，例如還沒點過文件） */
+  focusWithin(within: Element) {
+    for (const [me, h] of handles) {
+      if (h.status.root && within.contains(h.status.root)) {
+        setCurrent(me);
+        return true;
+      }
+    }
+    return false;
+  },
+};
+
+function setCurrent(me: object | null) {
+  if (currentEditor === me) return;
+  currentEditor = me;
+  notifyBus();
+}
 
 /** 離 y 最近的編輯器（點在頁面左右空白處、從檔案總管拖進檔案時，用來決定是哪一個）。 */
 function nearestEditor(y: number): Element | null {
@@ -218,16 +344,19 @@ function nearestEditor(y: number): Element | null {
 
 // ─── 編輯器 ────────────────────────────────────────────────────
 
-export function Editor({ value, onChange, compact = false, placeholder = "Click here to start writing…" }: EditorProps) {
+export function Editor({ value, onChange, compact = false, placeholder = "Click here to start writing…", formatBar = true, title, date, spellCheck = false }: EditorProps) {
   /** 這個編輯器的識別（比對 currentEditor 用） */
   const me = useRef({}).current;
   const rootRef = useRef<HTMLDivElement>(null);
+  /** Drawer 的文獻庫或引用格式改變時重畫（[[@引用鍵]] 顯示成文中引用） */
+  const citeVer = useSyncExternalStore(subscribeCites, citeStamp);
   const isCurrent = () => currentEditor === me;
   const rowEls = () => rootRef.current?.querySelectorAll<HTMLElement>(".row[data-start]") ?? [];
   useEffect(() => {
-    if (!currentEditor) currentEditor = me;
+    if (!currentEditor) setCurrent(me);
     return () => {
-      if (currentEditor === me) currentEditor = null;
+      handles.delete(me);
+      if (currentEditor === me) setCurrent(null);
     };
   }, [me]);
   const [state, setStateRaw] = useState<EditorState>({ source: value, region: null, caret: 0 });
@@ -418,7 +547,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         next.caret <= pos ||
         nextText[pos] !== "/" ||
         /\s/.test(query) ||
-        (!filterBlockTypes(query).length && query.length > 3)
+        (!filterBlockTypes(query, getTemplates()).length && query.length > 3)
       ) {
         setSlash(null);
       } else if (shift) {
@@ -428,7 +557,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   };
 
   const slashQuery = slash && region ? editText.slice(slash.pos + 1, state.caret) : "";
-  const slashItems = slash ? filterBlockTypes(slashQuery) : [];
+  const slashItems = slash ? filterBlockTypes(slashQuery, getTemplates()) : [];
 
   // 頁面連結：游標前面是 `[[`（打字時被跳脫成 `\[\[`）加上還沒打完的名稱
   const refFound =
@@ -437,13 +566,48 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       : null;
   const refAsk = refFound && refFound.from !== refClosed ? refFound : null;
   const refQuery = refAsk ? cleanName(refAsk.query) : null;
-  const refItems = useMemo(() => {
+  // `[[@`：引用 Drawer 的條目（依標題、作者、年份、引用鍵搜尋）
+  const citeMode = !!refQuery?.startsWith("@");
+  const refItems = useMemo((): RefItem[] => {
     if (refQuery === null) return [];
-    const names = suggestPages(refQuery, getPageNames());
-    const items = names.map((name) => ({ name, create: false }));
-    if (refQuery && !names.some((n) => pageKey(n) === pageKey(refQuery))) items.push({ name: refQuery, create: true });
+    if (refQuery.startsWith("@")) {
+      const q = refQuery.slice(1);
+      const cites: RefItem[] = suggestCites(q).map((c) => ({ name: "@" + c.key, create: false, label: c.title, desc: [c.detail, "@" + c.key].filter(Boolean).join(" · ") }));
+      // 打了引用鍵、但文獻庫沒有：照常可以連到（新的）頁面（`引用鍵#…` 是備註，不提供新頁面）
+      if (q && !/[\s#]/.test(q) && !cites.some((c) => pageKey(c.name) === pageKey(refQuery))) cites.push({ name: refQuery, create: true });
+      return cites;
+    }
+    // 分級選單：第一層是頁面與 Desk 的檔案，選了檔案進到它的 Dock 文件（`linkMenu`）
+    const menu = linkMenu(refQuery, (q) => suggestPages(q, getPageNames()), getDocLinks());
+    if (menu.folder) return menu.docs.map((d) => ({ name: d.name, create: false, label: d.title, desc: docKindLabel(d.kind), dock: true }));
+    const items: RefItem[] = menu.pages.map((name) => ({ name, create: false }));
+    for (const f of menu.files) {
+      items.push({ name: f.file + "/", create: false, label: f.file, desc: f.count === 1 ? "1 document" : `${f.count} documents`, folder: f.file });
+    }
+    for (const d of menu.docs) {
+      if (!items.some((i) => !i.folder && pageKey(i.name) === pageKey(d.name))) items.push({ name: d.name, create: false, label: d.title, desc: `${docKindLabel(d.kind)} in ${d.file}`, dock: true });
+    }
+    if (refQuery && !items.some((n) => !n.folder && pageKey(n.name) === pageKey(refQuery))) items.push({ name: refQuery, create: true });
     return items;
-  }, [refQuery]);
+    // citeVer：文獻庫改變時重新搜尋
+  }, [refQuery, citeVer]);
+
+  /** 分級選單第二層的檔案（打的字是「檔案/…」時） */
+  const refFolder = refQuery !== null && !citeMode ? linkMenu(refQuery, () => [], getDocLinks()).folder : null;
+
+  /** 把 `[[` 後面打的字換成 t（`[[` 保持打開，選單跟著換層）。 */
+  const setRefText = (t: string) => {
+    const s = stateRef.current;
+    if (!refAsk || !s.region) return;
+    const text = regionText(s.source.split("\n"), s.region);
+    const ins = "[[" + t.replace(/[\\`*_<]/g, "\\$&");
+    const out = text.slice(0, refAsk.from) + ins + text.slice(s.caret);
+    const at = refAsk.from + ins.length;
+    setRefIndex(0);
+    commitFormatted({ text: out, a: at, b: at });
+  };
+  /** 選了選單的一項：檔案就進到它的文件，其他寫成連結。 */
+  const pickRefItem = (it: RefItem) => (it.folder ? setRefText(it.folder + "/") : pickRef(it.name));
 
   /** 選了自動完成的頁面：寫成 `[[名稱]]`，游標放在後面。 */
   const pickRef = (name: string) => {
@@ -479,7 +643,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
     commit(next);
   };
 
-  const TAG_OF = { bold: "strong", italic: "em", underline: "u", strike: "s", code: "code" } as const;
+  const TAG_OF = { bold: "strong", italic: "em", underline: "u", strike: "s", sup: "sup", sub: "sub", code: "code" } as const;
 
   const applyMark = (mark: Mark) => {
     const surf = surfRef.current;
@@ -597,11 +761,46 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
     commit(applyText(s, t.text, caret));
   };
 
-  const pickSlash = (type: BlockType) => {
+  const pickSlash = (item: SlashItem) => {
+    const type = item.type;
     if (!slash) return;
     const s = stateRef.current;
     const text = editText.slice(0, slash.pos) + editText.slice(s.caret);
     setSlash(null);
+    if (type === "cite") {
+      // 換成 `[[@`，接著打字就是搜尋 Drawer 的條目
+      const at = slash.pos + 3;
+      setRefClosed(null);
+      setRefIndex(0);
+      commitFormatted({ text: text.slice(0, slash.pos) + "[[@" + text.slice(slash.pos), a: at, b: at });
+      return;
+    }
+    if (type === "template") {
+      // 頁面範本：換掉變數後放在這個區塊（空白區塊就整個換掉；有文字就放在下面）
+      const typed = applyText(s, text, text.length);
+      const t = item.template ? findTemplate(item.template) : undefined;
+      const body = t ? expandTemplate(t.content, { title, date }) : "";
+      if (!body) return commit(typed);
+      if (!text.trim() && s.region) {
+        const lines = s.source.split("\n");
+        lines.splice(s.region.start, s.region.end - s.region.start, ...body.split("\n"));
+        commit({ source: lines.join("\n"), region: null, caret: 0 });
+      } else commit({ source: pasteAfter(typed.source, typed.region, body).source, region: null, caret: 0 });
+      return;
+    }
+    if (type === "bibliography") {
+      // 這份文件引用到的條目，依格式排好，一筆一個清單項目（放在這個區塊；有文字就放在下面）
+      const typed = applyText(s, text, text.length);
+      const refs = bibliographyMarkdown(typed.source);
+      // 還沒有引用：只拿掉「/指令」
+      if (!refs) return commit(typed);
+      if (!text.trim() && s.region) {
+        const lines = s.source.split("\n");
+        lines.splice(s.region.start, s.region.end - s.region.start, ...refs.split("\n"));
+        commit({ source: lines.join("\n"), region: null, caret: 0 });
+      } else commit({ source: pasteAfter(typed.source, typed.region, refs).source, region: null, caret: 0 });
+      return;
+    }
     if (type === "table") {
       // 空白區塊直接變成表格；有文字就在下面加一個表格
       if (!text.trim()) commit(applyText(s, newTable(), 0));
@@ -625,6 +824,21 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   // ─── 圖片、GIF、影片 ───────────────────────────────────────
 
   /** 改圖片、影片的圖說（寫在圖片標題、影片的 title 屬性），改完選取它。 */
+  /** 改程式碼區塊的語言（``` 後面的字） */
+  const langBlock = (unit: Unit, lang: string) => {
+    const map = leaveEditing();
+    const source = stateRef.current.source;
+    const cur = parseDoc(source);
+    const u = cur.blocks.find((b) => b.start === map(unit.start));
+    if (!u) return;
+    const old = regionText(cur.lines, u);
+    const next = setCodeLang(old, lang);
+    if (next === old) return;
+    const lines = source.split("\n");
+    lines.splice(u.start, u.end - u.start, ...next.split("\n"));
+    commit({ source: lines.join("\n"), region: null, caret: 0 });
+  };
+
   const captionBlock = (unit: Unit, caption: string) => {
     const map = leaveEditing();
     const source = stateRef.current.source;
@@ -728,8 +942,11 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   };
 
   /** 從檔案總管拖進來的檔案（Tauri 會攔截拖放，給的是檔案路徑）。 */
-  const dropPaths = useRef<(paths: string[], y: number) => void>(() => {});
-  dropPaths.current = async (paths, y) => {
+  const dropPaths = useRef<(paths: string[], x: number, y: number) => void>(() => {});
+  dropPaths.current = async (paths, x, y) => {
+    // 白板上：放在畫布空白處由白板處理（媒體卡片），放在這個編輯器上才是這個編輯器的
+    const hit = document.elementFromPoint(x, y);
+    if (hit?.closest(".board") && !rootRef.current?.contains(hit)) return;
     // 好幾個編輯器時，由離放開位置最近的那個處理
     if (nearestEditor(y) !== rootRef.current) return;
     const parts: string[] = [];
@@ -767,8 +984,8 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       getCurrentWebview()
         .onDragDropEvent((ev) => {
           if (ev.payload.type !== "drop") return;
-          const y = ev.payload.position.y / window.devicePixelRatio;
-          dropPaths.current(ev.payload.paths, y);
+          const r = window.devicePixelRatio;
+          dropPaths.current(ev.payload.paths, ev.payload.position.x / r, ev.payload.position.y / r);
         })
         .then((fn) => {
           if (alive) off = fn;
@@ -803,7 +1020,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         ? key === "x"
           ? "strike"
           : undefined
-        : ({ b: "bold", i: "italic", u: "underline", e: "code", k: "link" } as Record<string, Mark>)[key];
+        : ({ b: "bold", i: "italic", u: "underline", e: "code", k: "link", ".": "sup", ",": "sub" } as Record<string, Mark>)[key];
       if (mark && formattable) {
         e.preventDefault();
         applyMark(mark);
@@ -820,7 +1037,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        pickSlash(slashItems[Math.min(slash.index, slashItems.length - 1)].type);
+        pickSlash(slashItems[Math.min(slash.index, slashItems.length - 1)]);
         return;
       }
     }
@@ -859,9 +1076,22 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       }
       if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
         e.preventDefault();
-        pickRef(refItems[Math.min(refIndex, refItems.length - 1)].name);
+        pickRefItem(refItems[Math.min(refIndex, refItems.length - 1)]);
         return;
       }
+      // → 進到檔案（分級選單）
+      const it = refItems[Math.min(refIndex, refItems.length - 1)];
+      if (e.key === "ArrowRight" && it.folder) {
+        e.preventDefault();
+        setRefText(it.folder + "/");
+        return;
+      }
+    }
+    // ← 在檔案的第一層（斜線後面還沒打字）：回到上一層
+    if (refAsk && refFolder && e.key === "ArrowLeft" && refQuery?.endsWith("/")) {
+      e.preventDefault();
+      setRefText("");
+      return;
     }
 
     // Ctrl+Enter：清單項目切換任務（任務 ↔ 完成）；段落變成任務
@@ -953,7 +1183,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
 
   const onBlur = (el: HTMLElement, renderedStart: number, related: Element | null = null) => {
     if (!document.hasFocus()) return; // 只是切換到別的視窗
-    if (related?.closest?.(".link-ask, .format-bar")) return; // 焦點移到網址輸入框、格式列
+    if (related?.closest?.(".link-ask, .format-bar, .editor-ui")) return; // 焦點移到網址輸入框、格式列
     const s = stateRef.current;
     // 已經換到別的編輯區（舊的編輯元素卸載或被新的搶走焦點）就不處理
     if (!s.region || s.region.start !== renderedStart || surfRef.current?.el !== el || !el.isConnected) return;
@@ -1539,6 +1769,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   boxDown.current = (e) => {
     if (e.button !== 0) return;
     const t = e.target as HTMLElement;
+    if (t.closest?.(".editor-ui")) return; // 功能區：不結束編輯
     if (!t.closest?.(".page, .md-editor")) return;
     const root = rootRef.current;
     if (!root) return;
@@ -1553,7 +1784,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       setMenu(null);
       return;
     }
-    currentEditor = me;
+    setCurrent(me);
     if (t.closest(".row .content, .gutter, .popover, .grip, textarea, .format-bar")) return;
     e.preventDefault();
     const x0 = e.clientX;
@@ -1630,7 +1861,19 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       className={`row editing ${shape ? "wysiwyg" : "raw"} kind-${editUnit?.kind ?? "paragraph"}${editUnit && isTitle(editUnit, doc) ? " is-title" : ""}`}
       key={`edit:${region.start}`}
     >
-      <div className="gutter" />
+      {/* 編輯中的區塊也有把手（拖曳、區塊選單）：按下去不會先結束編輯，拖動或放開時才由 onHandlePointerDown 結束 */}
+      <div className="gutter">
+        {editUnit && (
+          <>
+            <button className="add" title="Add a block below" onMouseDown={(e) => e.preventDefault()} onClick={() => addAfter(editUnit)}>
+              <PlusIcon />
+            </button>
+            <button className="handle" title="Drag to move · click for menu" onPointerDown={(e) => onHandlePointerDown(e, editUnit)}>
+              <GripIcon />
+            </button>
+          </>
+        )}
+      </div>
       <div
         className="content"
         onMouseDown={(e) => {
@@ -1704,10 +1947,6 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
             onBlur={(e) => onBlur(e.currentTarget, region.start, e.relatedTarget as Element | null)}
           />
         )}
-        <span className="edit-badge" aria-hidden>
-          {editKind}
-          <kbd>Esc</kbd>
-        </span>
         {slash && (
           <Floating>
             <SlashMenu
@@ -1721,9 +1960,12 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         {refAsk && !slash && (
           <Floating>
             <RefMenu
+              cite={citeMode}
               items={refItems}
+              folder={refFolder}
+              onBack={() => setRefText("")}
               active={Math.min(refIndex, Math.max(0, refItems.length - 1))}
-              onPick={pickRef}
+              onPick={pickRefItem}
               onHover={setRefIndex}
             />
           </Floating>
@@ -1736,6 +1978,119 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   const view = useMemo(() => (region ? treeWith(doc, region) : { tree: doc.tree, self: null }), [doc, region]);
 
   const dragRanges = drag ? drag.many.map((m) => rangeOf(doc, m)) : [];
+
+  // ─── 功能區（editorBus）：指令與狀態 ─────────────────────────
+
+  const commands: EditorCommands = {
+    release: () => {
+      leaveEditing();
+      setMenu(null);
+      select([], null, null);
+    },
+    mark: (m) => applyMark(m),
+    color: (kind, c) => applyColor(kind, c),
+    blockBg: (c) => {
+      if (stateRef.current.region) applyBlockBg(c);
+      else if (selRef.current.length) applyMany(setBlocksBg(stateRef.current.source, selectedBlocks(), c));
+    },
+    turnInto: (t) => {
+      if (stateRef.current.region) turnEditingInto(t);
+      else if (selRef.current.length) turnSelectedInto(t);
+    },
+    indent: (outdent) => {
+      const s = stateRef.current;
+      if (s.region) shiftIndent(s.region, outdent, s.caret);
+      else if (selRef.current.length) applyMany(indentBlocks(s.source, selectedBlocks(), outdent));
+    },
+    align: (a) => {
+      const s = stateRef.current;
+      if (s.region) {
+        // 跟區塊背景一樣：包一層容器，繼續編輯同一個區塊
+        const surf = surfRef.current;
+        const sel: [number, number] = surf ? surf.sel() : [s.caret, s.caret];
+        const res = setBlockAlign(s.source, s.region, a);
+        if (res.source === s.source || res.start < 0) return;
+        const len = s.region.end - s.region.start;
+        pendingSel.current = sel;
+        commit(activate({ source: res.source, region: null, caret: 0 }, { start: res.start, end: res.start + len }, sel[1]));
+      } else if (selRef.current.length) applyMany(setBlocksAlign(s.source, selectedBlocks(), a));
+    },
+    box: (fn) => {
+      const s = stateRef.current;
+      if (s.region) {
+        // 跟對齊一樣：包一層（或改）樣式容器，繼續編輯同一個區塊
+        const surf = surfRef.current;
+        const sel: [number, number] = surf ? surf.sel() : [s.caret, s.caret];
+        const doc = parseDoc(s.source);
+        const res = setBlockBox(s.source, s.region, fn(blockBox(doc, s.region)));
+        if (res.source === s.source || res.start < 0) return;
+        const len = s.region.end - s.region.start;
+        pendingSel.current = sel;
+        commit(activate({ source: res.source, region: null, caret: 0 }, { start: res.start, end: res.start + len }, sel[1]));
+      } else if (selRef.current.length) applyMany(setBlocksBox(s.source, selectedBlocks(), fn));
+    },
+    insert: (kind) => {
+      const s = stateRef.current;
+      const sel = selRef.current;
+      const at = s.region ? s.region.start : sel.length ? sel[sel.length - 1] : null;
+      if (kind === "image" || kind === "video") {
+        const map = s.region ? leaveEditing() : (l: number) => l;
+        pickFiles(kind, at === null ? null : map(at));
+        return;
+      }
+      // 分隔線用 ***：簡報裡前面空一行的 --- 是換投影片
+      placeMedia(kind === "table" ? newTable() : "***", at);
+    },
+    insertMarkdown: (md) => {
+      const s = stateRef.current;
+      const sel = selRef.current;
+      placeMedia(md, s.region ? s.region.start : sel.length ? sel[sel.length - 1] : null);
+    },
+    undo: () => undo(false),
+    redo: () => undo(true),
+  };
+  const cmdRef = useRef(commands);
+  cmdRef.current = commands;
+  const statusAlign = region ? blockAlign(doc, region) : selected.length ? blockAlign(doc, { start: selected[0], end: selected[0] + 1 }) : "left";
+  const boxNow = region ? blockBox(doc, region) : selected.length ? blockBox(doc, { start: selected[0], end: selected[0] + 1 }) : { css: "" };
+  const statusBg = region ? ((blockBg(doc, region) as Color | null) ?? null) : null;
+  const selType = !region && selected.length ? (doc.units.find((u) => u.start === selected[0]) ?? null) : null;
+  const statusType = editType ?? (selType ? blockTypeOf(selType) : null);
+  useEffect(() => {
+    const prev = handles.get(me)?.status;
+    const next: EditorStatus = {
+      root: rootRef.current,
+      editing: !!region,
+      selected: selected.length,
+      formattable,
+      marks,
+      type: statusType,
+      bg: statusBg,
+      align: statusAlign,
+      box: boxNow.css,
+      boxName: boxNow.name ?? "",
+    };
+    const same = prev && (Object.keys(next) as (keyof EditorStatus)[]).every((k) => prev[k] === next[k]);
+    const status = same ? prev : next;
+    handles.set(me, {
+      status,
+      cmds: {
+        release: () => cmdRef.current.release(),
+        mark: (m) => cmdRef.current.mark(m),
+        color: (k, c) => cmdRef.current.color(k, c),
+        blockBg: (c) => cmdRef.current.blockBg(c),
+        turnInto: (t) => cmdRef.current.turnInto(t),
+        indent: (o) => cmdRef.current.indent(o),
+        align: (a) => cmdRef.current.align(a),
+        box: (fn) => cmdRef.current.box(fn),
+        insert: (k) => cmdRef.current.insert(k),
+        insertMarkdown: (md) => cmdRef.current.insertMarkdown(md),
+        undo: () => cmdRef.current.undo(),
+        redo: () => cmdRef.current.redo(),
+      },
+    });
+    if (!same && currentEditor === me) notifyBus();
+  });
 
   const renderNodes = (nodes: TreeNode[]): ReactNode[] =>
     nodes.map((n) => {
@@ -1757,6 +2112,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
             onAlign={(a) => alignBlock(u, a)}
             caption={mediaCaption(regionText(doc.lines, u))}
             onCaption={(t) => captionBlock(u, t)}
+            onCodeLang={(l) => langBlock(u, l)}
             captionPos={isMediaBlock(regionText(doc.lines, u)) ? captionPos(doc, u) : "bottom"}
             onCaptionPos={(p) => captionPosBlock(u, p)}
             size={isMediaBlock(regionText(doc.lines, u)) ? blockSize(doc, u) : null}
@@ -1803,7 +2159,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         (n.kind === "indent" &&
           owner?.type === "leaf" &&
           dragRanges.some((r) => owner.unit.start >= r.start && owner.unit.start < r.end)) ||
-        ((n.kind === "bg" || n.kind === "align" || n.kind === "cap" || n.kind === "size") && dragRanges.some((r) => n.open.start >= r.start && n.open.start < r.end));
+        ((n.kind === "bg" || n.kind === "align" || n.kind === "cap" || n.kind === "size" || n.kind === "box") && dragRanges.some((r) => n.open.start >= r.start && n.open.start < r.end));
       if (n.kind === "align") {
         return (
           <div key={`align:${n.open.start}`} className={`block-align align-${n.color}${dragged ? " dragging" : ""}`}>
@@ -1825,10 +2181,19 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
           </div>
         );
       }
-      if (n.kind === "bg") {
+      // 背景色與區塊樣式互相單獨包住時畫成同一個 div：內距、框線、圓角才會包住背景
+      const only = n.children.length === 1 && n.children[0].type === "container" ? n.children[0] : null;
+      if (n.kind === "bg" || n.kind === "box") {
+        const pair = only && (only.kind === "bg" || only.kind === "box") && only.kind !== n.kind ? only : null;
+        const bg = n.kind === "bg" ? n : pair;
+        const box = n.kind === "box" ? n : pair;
         return (
-          <div key={`bg:${n.open.start}`} className={`block-bg bg-${n.color}${dragged ? " dragging" : ""}`}>
-            {renderNodes(n.children)}
+          <div
+            key={`${n.kind}:${n.open.start}`}
+            className={`${bg ? `block-bg bg-${bg.color}` : ""}${box ? " block-box" : ""}${dragged ? " dragging" : ""}`}
+            style={box ? blockStyleCss(box.color ?? "") : undefined}
+          >
+            {renderNodes(pair ? pair.children : n.children)}
           </div>
         );
       }
@@ -1845,13 +2210,14 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   const menuDoc = menu ? doc : null;
 
   return (
+    <SpellCheck.Provider value={spellCheck}>
     <div
       ref={rootRef}
       className={`md-editor${drag ? " is-dragging" : ""}${compact ? " compact" : ""}`}
       // 不做拼字檢查（WebView2 會在英文以外的字、縮寫下畫紅色虛線）
       spellCheck={false}
-      onPointerDownCapture={() => (currentEditor = me)}
-      onFocusCapture={() => (currentEditor = me)}
+      onPointerDownCapture={() => setCurrent(me)}
+      onFocusCapture={() => setCurrent(me)}
     >
       {renderNodes(view.tree)}
       <div className="tail">
@@ -1863,7 +2229,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       {linkAsk && region && (
         <LinkAsk onSubmit={applyLink} onCancel={() => applyLink("")} />
       )}
-      {region && !drag && (
+      {region && !drag && formatBar && (
         <FormatBar
           kind={editKind}
           marks={marks}
@@ -1963,6 +2329,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       })()}
       </>, document.body)}
     </div>
+    </SpellCheck.Provider>
   );
 }
 
@@ -2019,6 +2386,8 @@ interface UnitRowProps {
   /** 圖片、影片的圖說（null 表示不是媒體區塊） */
   caption: string | null;
   onCaption: (text: string) => void;
+  /** 程式碼區塊改語言 */
+  onCodeLang: (lang: string) => void;
   /** 圖說在圖片上方或下方 */
   captionPos: CaptionPos;
   onCaptionPos: (pos: CaptionPos) => void;
@@ -2223,6 +2592,12 @@ function UnitRow({ unit, doc, drop, dragging, selected, align, caption, captionP
         ) : (
           body
         )}
+        {unit.kind === "code" && (() => {
+          const code = parseCodeBlock(regionText(doc.lines, unit));
+          return code ? (
+            <CodeTools lang={code.lang} code={() => parseCodeBlock(regionText(doc.lines, unit))?.code ?? ""} onLang={on.onCodeLang} />
+          ) : null;
+        })()}
         {align && selected && (
           <MediaMenu
             align={align}
@@ -2324,6 +2699,8 @@ const FORMATS: { mark: Mark; label: string; key: string; icon: ReactNode }[] = [
   { mark: "italic", label: "Italic", key: "Ctrl+I", icon: <i>I</i> },
   { mark: "underline", label: "Underline", key: "Ctrl+U", icon: <u className="fb-u">U</u> },
   { mark: "strike", label: "Strikethrough", key: "Ctrl+Shift+X", icon: <s className="fb-s">S</s> },
+  { mark: "sup", label: "Superscript", key: "Ctrl+.", icon: <span className="fb-script">x<sup>2</sup></span> },
+  { mark: "sub", label: "Subscript", key: "Ctrl+,", icon: <span className="fb-script">x<sub>2</sub></span> },
   { mark: "code", label: "Code", key: "Ctrl+E", icon: <CodeGlyph /> },
   { mark: "link", label: "Link", key: "Ctrl+K", icon: <LinkIcon /> },
 ];
@@ -2333,7 +2710,7 @@ function CodeGlyph() {
 }
 
 /** 一排顏色：預設＋九種。kind 決定樣本的畫法（文字、螢光、區塊背景）。 */
-function Swatches(props: { kind: "color" | "highlight" | "bg"; value: Color | null; onPick: (c: Color | null) => void }) {
+export function Swatches(props: { kind: "color" | "highlight" | "bg"; value: Color | null; onPick: (c: Color | null) => void }) {
   return (
     <div className="swatches">
       {[null, ...COLORS].map((c) => (
@@ -2422,7 +2799,7 @@ function FormatBar(props: {
               }}
             >
               <span className="tile small">{t.icon}</span>
-              <span className="label">{t.label}</span>
+              <span className={`label look look-${t.type}`}>{t.label}</span>
               {t.type === props.current && <span className="check">✓</span>}
             </button>
           ))}
@@ -2457,10 +2834,27 @@ export function findRefQuery(text: string, caret: number): { from: number; query
 }
 
 /** 輸入 `[[` 後的頁面建議。 */
+interface RefItem {
+  /** 寫進 [[…]] 的名稱 */
+  name: string;
+  create: boolean;
+  /** 引用：條目標題與作者、年份 */
+  label?: string;
+  desc?: string;
+  /** Dock 的文件 */
+  dock?: boolean;
+  /** Desk 的檔案（分級選單：選了進到它的文件） */
+  folder?: string;
+}
+
 function RefMenu(props: {
-  items: { name: string; create: boolean }[];
+  cite: boolean;
+  items: RefItem[];
+  /** 第二層：正在看的檔案 */
+  folder?: string | null;
+  onBack?: () => void;
   active: number;
-  onPick: (name: string) => void;
+  onPick: (it: RefItem) => void;
   onHover: (i: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -2470,20 +2864,30 @@ function RefMenu(props: {
   return (
     <div className="popover slash-menu ref-menu" onMouseDown={(e) => e.preventDefault()}>
       <div className="popover-scroll" ref={ref}>
-        <div className="popover-title">Link to page</div>
-        {props.items.length === 0 && <div className="popover-empty">Type a page name</div>}
+        {props.folder ? (
+          <button className="ref-back" onClick={props.onBack} title="Back (←)">
+            <span className="chev">‹</span>
+            <span className="text">{props.folder}</span>
+          </button>
+        ) : (
+          <div className="popover-title">{props.cite ? "Cite from Drawer" : "Link to page or document"}</div>
+        )}
+        {props.items.length === 0 && (
+          <div className="popover-empty">{props.cite ? "No items in Drawer" : props.folder ? "No matching documents" : "Type a page name"}</div>
+        )}
         {props.items.map((t, i) => (
           <button
             key={(t.create ? "+" : "") + t.name}
             className={i === props.active ? "active" : ""}
             onMouseEnter={() => props.onHover(i)}
-            onClick={() => props.onPick(t.name)}
+            onClick={() => props.onPick(t)}
           >
-            <span className="tile">{t.create ? "+" : "[["}</span>
+            <span className="tile">{t.create ? "+" : props.cite ? "❞" : t.folder ? "▦" : t.dock ? "▤" : "[["}</span>
             <span className="text">
-              <span className="label">{t.name}</span>
-              <span className="desc">{t.create ? "New page" : "Existing page"}</span>
+              <span className="label">{t.label ?? t.name}</span>
+              <span className="desc">{t.desc ?? (t.create ? (props.cite ? "Not in Drawer — new page" : "New page") : "Existing page")}</span>
             </span>
+            {t.folder && <span className="chev">›</span>}
           </button>
         ))}
       </div>
@@ -2694,9 +3098,9 @@ function localDay(n: number): string {
 }
 
 function SlashMenu(props: {
-  items: typeof BLOCK_TYPES;
+  items: SlashItem[];
   active: number;
-  onPick: (t: BlockType) => void;
+  onPick: (t: SlashItem) => void;
   onHover: (i: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -2706,23 +3110,28 @@ function SlashMenu(props: {
   return (
     <div className="popover slash-menu" onMouseDown={(e) => e.preventDefault()}>
       <div className="popover-scroll" ref={ref}>
-        <div className="popover-title">Basic blocks</div>
+        {props.items[0]?.type !== "template" && <div className="popover-title">Basic blocks</div>}
         {props.items.length === 0 && <div className="popover-empty">No matching blocks</div>}
-        {props.items.map((t, i) => (
+        {props.items.map((t, i) => [
+          t.type === "template" && props.items[i - 1]?.type !== "template" && (
+            <div key="tpl-title" className="popover-title">
+              Templates
+            </div>
+          ),
           <button
-            key={t.type}
+            key={t.type + (t.template ?? "")}
             className={i === props.active ? "active" : ""}
             onMouseEnter={() => props.onHover(i)}
-            onClick={() => props.onPick(t.type)}
+            onClick={() => props.onPick(t)}
           >
             <span className="tile">{t.icon}</span>
             <span className="text">
-              <span className="label">{t.label}</span>
+              <span className={`label look look-${t.type}`}>{t.label}</span>
               <span className="desc">{t.description}</span>
             </span>
             {t.hint && <kbd className="hint">{t.hint}</kbd>}
-          </button>
-        ))}
+          </button>,
+        ])}
       </div>
       <div className="popover-footer">
         <span>
@@ -2790,7 +3199,7 @@ function BlockMenu(props: {
           onClick={() => props.onTurn(t.type)}
         >
           <span className="tile small">{t.icon}</span>
-          <span className="label">{t.label}</span>
+          <span className={`label look look-${t.type}`}>{t.label}</span>
           {t.type === props.current && <span className="check">✓</span>}
         </button>
       ))}
