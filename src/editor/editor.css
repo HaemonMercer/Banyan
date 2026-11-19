@@ -937,6 +937,19 @@ kbd {
 .block-box > .row .gutter {
   left: calc(-58px - var(--box-inset, 0pt));
 }
+/* 區塊樣式的字元樣式（粗細、斜體、顏色、字距）：標題、引言、清單符號自己設了這些，要改成跟著外層 */
+.block-box.bx-w :is(.content h1, .content h2, .content h3, .content h4, .content h5, .content h6, .edit) {
+  font-weight: inherit;
+}
+.block-box.bx-t :is(.content h1, .content h2, .content h3, .content h4, .content h5, .content h6, .edit) {
+  letter-spacing: inherit;
+}
+.block-box.bx-i :is(.content blockquote, .edit) {
+  font-style: inherit;
+}
+.block-box.bx-c .content li::marker {
+  color: inherit;
+}
 .block-bg.block-box > .row .gutter {
   left: calc(-66px - var(--box-inset, 0pt));
 }

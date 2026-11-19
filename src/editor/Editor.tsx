@@ -109,7 +109,7 @@ import {
   type Picked,
 } from "./layout";
 import { parseDoc, type Container, type ParsedDoc, type TreeNode, type Unit } from "./markdown";
-import { blockStyleCss } from "./blockStyle";
+import { blockStyleClasses, blockStyleCss } from "./blockStyle";
 import {
   EMPTY_BLOCK,
   activate,
@@ -2190,7 +2190,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         return (
           <div
             key={`${n.kind}:${n.open.start}`}
-            className={`${bg ? `block-bg bg-${bg.color}` : ""}${box ? " block-box" : ""}${dragged ? " dragging" : ""}`}
+            className={`${bg ? `block-bg bg-${bg.color}` : ""}${box ? ` block-box ${blockStyleClasses(box.color ?? "")}` : ""}${dragged ? " dragging" : ""}`}
             style={box ? blockStyleCss(box.color ?? "") : undefined}
           >
             {renderNodes(pair ? pair.children : n.children)}

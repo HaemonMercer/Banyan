@@ -30,7 +30,20 @@ export interface BlockStyle {
   borderColor?: string;
   /** 圓角（pt） */
   radius?: number;
+  // ─── 字元樣式（整個區塊的文字；標題本來是粗體，所以粗細有「一般」與「粗體」兩種） ───
+  /** 粗細：粗體或一般 */
+  weight?: "bold" | "normal";
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** 文字顏色：`TEXT_COLORS`（色盤名稱，畫面上是 CSS 變數 --tc-*） */
+  color?: string;
+  /** 字距（pt，可以是負的） */
+  tracking?: number;
 }
+
+/** 文字顏色（跟文字顏色選單同一組，沒有「預設」：拿掉就是預設） */
+export const TEXT_COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"] as const;
 
 /** 字型選項（css 裡的引號用單引號：整串放在 style="…" 裡） */
 export const BLOCK_FONTS: { label: string; css: string }[] = [
@@ -96,6 +109,23 @@ export function parseBlockStyle(css: string): BlockStyle {
     } else if (key === "border-radius") {
       const m = /^(\d+(?:\.\d+)?)pt$/.exec(val);
       if (m) out.radius = clamp(Number(m[1]), 0, LIMIT.radius);
+    } else if (key === "font-weight") {
+      if (val === "700") out.weight = "bold";
+      else if (val === "400") out.weight = "normal";
+    } else if (key === "font-style") {
+      if (val === "italic") out.italic = true;
+    } else if (key === "text-decoration") {
+      const parts = val.split(/\s+/);
+      if (parts.every((x) => x === "underline" || x === "line-through")) {
+        if (parts.includes("underline")) out.underline = true;
+        if (parts.includes("line-through")) out.strike = true;
+      }
+    } else if (key === "color") {
+      const m = /^var\(--tc-([a-z]+)\)$/.exec(val);
+      if (m && (TEXT_COLORS as readonly string[]).includes(m[1])) out.color = m[1];
+    } else if (key === "letter-spacing") {
+      const m = /^(-?\d+(?:\.\d+)?)pt$/.exec(val);
+      if (m) out.tracking = clamp(Number(m[1]), -5, 20);
     }
   }
   return clean(out);
@@ -114,6 +144,12 @@ export function clean(s: BlockStyle): BlockStyle {
     out.borderColor = s.borderColor ?? "default";
   }
   if (s.radius) out.radius = s.radius;
+  if (s.weight) out.weight = s.weight;
+  if (s.italic) out.italic = true;
+  if (s.underline) out.underline = true;
+  if (s.strike) out.strike = true;
+  if (s.color) out.color = s.color;
+  if (s.tracking) out.tracking = s.tracking;
   return out;
 }
 
@@ -131,6 +167,11 @@ export function formatBlockStyle(s: BlockStyle): string {
   if (c.line) out.push(`line-height: ${fmt(c.line * 1.2)}`);
   if (c.border) out.push(`border: ${fmt(c.border)}pt solid ${borderVar(c.borderColor ?? "default")}`);
   if (c.radius) out.push(`border-radius: ${fmt(c.radius)}pt`);
+  if (c.weight) out.push(`font-weight: ${c.weight === "bold" ? 700 : 400}`);
+  if (c.italic) out.push("font-style: italic");
+  if (c.underline || c.strike) out.push(`text-decoration: ${[c.underline && "underline", c.strike && "line-through"].filter(Boolean).join(" ")}`);
+  if (c.color) out.push(`color: var(--tc-${c.color})`);
+  if (c.tracking) out.push(`letter-spacing: ${fmt(c.tracking)}pt`);
   return out.join("; ");
 }
 
@@ -152,6 +193,15 @@ export function blockStyleCss(css: string): Record<string, string> {
     out[key] = part.slice(i + 1).trim();
   }
   return out;
+}
+
+/**
+ * 畫面上要加的 class：標題、引言等元素自己設了粗細、字距（editor.css），
+ * 區塊樣式有設這些時要讓它們改成跟著外層（`bx-w`、`bx-t`）。
+ */
+export function blockStyleClasses(css: string): string {
+  const s = parseBlockStyle(css);
+  return [s.weight && "bx-w", s.tracking !== undefined && "bx-t", s.italic && "bx-i", s.color && "bx-c"].filter(Boolean).join(" ");
 }
 
 // ─── 已存的樣式（參考 Pages 的段落樣式選單） ─────────────────────

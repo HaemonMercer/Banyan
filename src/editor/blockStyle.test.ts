@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BLOCK_FONTS, blockStyleCss, cleanStyles, formatBlockStyle, freeStyleName, parseBlockStyle, patchBlockStyle, styleModified } from "./blockStyle";
+import { BLOCK_FONTS, blockStyleClasses, blockStyleCss, cleanStyles, formatBlockStyle, freeStyleName, parseBlockStyle, patchBlockStyle, styleModified } from "./blockStyle";
 import { blockBox, restyleBoxes, setBlockBox, setBlocksBox, setBlockBg } from "./layout";
 import { parseDoc, renderMarkdown } from "./markdown";
 
@@ -19,6 +19,19 @@ describe("區塊樣式 blockStyle", () => {
     expect(parseBlockStyle("color: red; margin: 4pt; font-family: Comic Sans; padding: 0pt; position: fixed")).toEqual({ margin: [4, 4, 4, 4] });
     expect(parseBlockStyle("margin: 4px; font-size: 12em; border: 1pt dashed red")).toEqual({});
     expect(formatBlockStyle({ margin: [0, 0, 0, 0], padding: [0, 0, 0, 0] })).toBe("");
+  });
+
+  it("字元樣式：粗細、斜體、底線與刪除線、文字顏色、字距；讀回來一樣，加上要給標題的 class", () => {
+    const css = formatBlockStyle({ weight: "normal", italic: true, underline: true, strike: true, color: "red", tracking: 1.5 });
+    expect(css).toBe("font-weight: 400; font-style: italic; text-decoration: underline line-through; color: var(--tc-red); letter-spacing: 1.5pt");
+    expect(parseBlockStyle(css)).toEqual({ weight: "normal", italic: true, underline: true, strike: true, color: "red", tracking: 1.5 });
+    expect(blockStyleClasses(css)).toBe("bx-w bx-t bx-i bx-c");
+    expect(blockStyleClasses("padding: 2pt")).toBe("");
+    // 不認得的值丟掉
+    expect(parseBlockStyle("font-weight: 900; color: red; text-decoration: overline; font-style: oblique")).toEqual({});
+    expect(patchBlockStyle(css, { italic: undefined, color: undefined })).toBe(
+      "font-weight: 400; text-decoration: underline line-through; letter-spacing: 1.5pt",
+    );
   });
 
   it("CSS 縮寫：兩個值是上下、左右；超出範圍夾住", () => {

@@ -58,7 +58,7 @@
 | 47 | 開啟／匯入其他格式 | ✅ 🆕 | 工具列 Import（接在最後面）或 Dock 的 Import a File…：.docx（含圖片）、.doc（Word 97–2003，只有文字與表格）、.odt、.rtf、.html、.md、.txt |
 | 48 | 段落前後間距、左右縮排（點數） | ✅ 🆕 | Format → Paragraph → Spacing 的 Margin（四邊一起或分開，pt）；另有 Padding |
 | 49 | 段落框線 | ✅ 🆕 | Format → Paragraph → Border（粗細、顏色、圓角） |
-| 50 | 自訂樣式（新增、更新、改名、刪除） | ✅ 🆕 | Format → Style → Paragraph Style（跟內建樣式同一個選單）：用段落現在的類型與樣子存成樣式，所有文件共用；改過的區塊按 Update 更新所有文件裡用到它的區塊 |
+| 50 | 自訂樣式（新增、更新、改名、刪除） | ✅ 🆕 | Format → Style → Paragraph Style（跟內建樣式同一個選單）：用段落現在的類型與樣子（含整段的粗體、斜體、底線、刪除線、文字顏色、字距）存成樣式，所有文件共用；改過的區塊按 Update 更新所有文件裡用到它的區塊 |
 
 **40.5 ／ 50 ≈ 81%**（這次之前約 24 ／ 46 ≈ 52%）
 

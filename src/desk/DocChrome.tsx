@@ -394,6 +394,8 @@ export function ParagraphLayoutFormat(props: { st: Status; run: Run; checklist?:
   const listType = LISTS.some((l) => l.id === st.type) ? st.type : "paragraph";
   const s: BlockStyle = parseBlockStyle(st.box);
   const set = (patch: Partial<BlockStyle>) => run((c) => c.box((v) => ({ ...v, css: patchBlockStyle(v.css, patch) })));
+  /** 標題本來就是粗體：粗體按鈕對標題是切換成「一般」 */
+  const heading = st.type === "h1" || st.type === "h2" || st.type === "h3";
   const many = !st.editing && st.selected > 1;
   return (
     <>
@@ -454,6 +456,29 @@ export function ParagraphLayoutFormat(props: { st: Status; run: Run; checklist?:
         />
         <div className="dc-nums">
           <PtField label="Size (pt)" value={s.size} placeholder="Default" onSet={(size) => set({ size: size || undefined })} />
+          <PtField label="Character spacing (pt)" value={s.tracking} step={0.5} onSet={(tracking) => set({ tracking: tracking || undefined })} />
+        </div>
+        {/* 整個段落的字元樣式（存在區塊樣式裡，所以也會存進段落樣式）；選取文字的樣式在 Text 分頁 */}
+        <div className="dc-row">
+          <Seg label="Paragraph character style">
+            <SegBtn
+              title="Bold (whole paragraph)"
+              on={s.weight ? s.weight === "bold" : heading}
+              onClick={() => set({ weight: (s.weight ? s.weight === "bold" : heading) ? (heading ? "normal" : undefined) : heading ? undefined : "bold" })}
+            >
+              <b>B</b>
+            </SegBtn>
+            <SegBtn title="Italic (whole paragraph)" on={!!s.italic} onClick={() => set({ italic: !s.italic || undefined })}>
+              <i style={{ fontFamily: "Georgia, serif" }}>I</i>
+            </SegBtn>
+            <SegBtn title="Underline (whole paragraph)" on={!!s.underline} onClick={() => set({ underline: !s.underline || undefined })}>
+              <u>U</u>
+            </SegBtn>
+            <SegBtn title="Strikethrough (whole paragraph)" on={!!s.strike} onClick={() => set({ strike: !s.strike || undefined })}>
+              <s>S</s>
+            </SegBtn>
+          </Seg>
+          <ColorWell kind="color" value={(s.color as Color | undefined) ?? null} title="Paragraph text color" onPick={(c) => set({ color: c ?? undefined })} />
         </div>
       </Section>
       <Section title="Border">
