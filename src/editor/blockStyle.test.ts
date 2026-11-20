@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BLOCK_FONTS, blockStyleClasses, blockStyleCss, charStyleSheet, cleanStyles, removeCharStyle, renameCharStyle, formatBlockStyle, freeStyleName, parseBlockStyle, patchBlockStyle, styleModified } from "./blockStyle";
+import { withoutChar, BLOCK_FONTS, blockStyleClasses, blockStyleCss, charStyleSheet, cleanStyles, removeCharStyle, renameCharStyle, formatBlockStyle, freeStyleName, parseBlockStyle, patchBlockStyle, styleModified } from "./blockStyle";
 import { blockBox, restyleBoxes, setBlockBox, setBlocksBox, setBlockBg } from "./layout";
 import { parseDoc, renderMarkdown } from "./markdown";
 
@@ -151,5 +151,21 @@ describe("字元樣式", () => {
     const src = 'a <span data-cs="Key">b <span class="red">c</span> d</span> e <span data-cs="Keys">f</span>';
     expect(renameCharStyle(src, "Key", "Term")).toBe('a <span data-cs="Term">b <span class="red">c</span> d</span> e <span data-cs="Keys">f</span>');
     expect(removeCharStyle(src, "Key")).toBe('a b <span class="red">c</span> d e <span data-cs="Keys">f</span>');
+  });
+});
+
+describe("自訂顏色", () => {
+  it("文字顏色、框線顏色可以是 #rrggbb", () => {
+    const css = formatBlockStyle({ color: "#AA3366", border: 1, borderColor: "#123456" });
+    expect(css).toBe("border: 1pt solid #123456; color: #aa3366");
+    expect(parseBlockStyle(css)).toEqual({ color: "#aa3366", border: 1, borderColor: "#123456" });
+    expect(parseBlockStyle("color: #zzz; border: 1pt solid #12")).toEqual({});
+  });
+});
+
+describe("套用段落樣式時清掉字元方面的設定", () => {
+  it("字型、字級、粗細等拿掉，間距、框線留著", () => {
+    const s = parseBlockStyle("margin: 6pt 0pt 0pt 0pt; border: 1pt solid var(--tc-red); font-size: 24pt; font-weight: 400; color: #aa3366");
+    expect(withoutChar(s)).toEqual({ margin: [6, 0, 0, 0], border: 1, borderColor: "red" });
   });
 });

@@ -5,16 +5,18 @@
  * 編輯那個區塊時照樣看到 `![[名稱]]`。嵌入的內容裡還有嵌入時繼續展開（最多 `MAX_DEPTH` 層，
  * 已經在外層出現過的頁面不再展開，避免互相嵌入時無窮迴圈）。
  * 名稱可以是任何頁面、日記（`YYYY-MM-DD`）或 Dock 文件（`檔案/標題`；Note、Word、簡報顯示內容，
- * Excel、Draw 只顯示標題連結），或 Drawer 條目的備註（`@引用鍵#r1`）。
+ * Excel、Draw 只顯示標題連結），Excel 的一個表格或圖表（`檔案/標題#^id`，`sheetEmbed.tsx` 畫，跟著試算表即時更新），
+ * 或 Drawer 條目的備註（`@引用鍵#r1`）。
  * 頁面連結在這之後由 `linkPages` 處理（嵌入內容裡的 `[[…]]` 也會變成連結）。
  */
 import DOMPurify from "dompurify";
 import { TASK_LABEL, type TaskState } from "../bujo/tasks";
-import { docKindLabel, docLinkOf } from "../desk/docLinks";
+import { docKindLabel, docLinkOf, objectRef } from "../desk/docLinks";
 import { citeLabel, citeReference, citeRemark } from "../drawer/citeRef";
 import type { Item, Remark } from "../drawer/model";
-import { embedSource } from "../pages/embeds";
+import { embedSource, sheetSource } from "../pages/embeds";
 import { cleanName, pageKey } from "../pages/pageRef";
+import { parseLook, renderSheetObject } from "../sheet/sheetEmbed";
 import { highlightBlocksHtml } from "./codeHighlight";
 import { md } from "./markdown";
 import { PURIFY, resolveMedia } from "./media";
@@ -89,9 +91,66 @@ function remarkElement(name: string, item: Item, remark: Remark): HTMLElement {
   return box;
 }
 
+/**
+ * 嵌入 Excel 的表格或圖表（`![[檔案/標題#^id|選項]]`）：標題列是「活頁簿 › 名稱」，點了打開那份活頁簿。
+ * 表格的格子點了直接編輯、寫回 Excel（`sheet/embedEdit.ts`，由 Editor 的按下處理接手）；
+ * 標題列的 Style 改這個位置的樣子（選項，`TableLook`）。
+ */
+function sheetObjectElement(name: string, doc: string, id: string, opts: string): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "page-embed sheet-embed";
+  box.setAttribute("data-page", name);
+  box.setAttribute("data-doc", doc);
+  box.setAttribute("data-object", id);
+  const head = document.createElement("div");
+  head.className = "pe-head";
+  const a = document.createElement("a");
+  a.className = "page-ref dock-ref";
+  a.setAttribute("data-page", doc);
+  a.setAttribute("data-kind", "sheet");
+  a.textContent = doc;
+  head.append(a);
+  const body = document.createElement("div");
+  body.className = "pe-body";
+  box.append(head, body);
+  const json = sheetSource(doc);
+  const obj = json === undefined ? null : renderSheetObject(json, id, parseLook(opts));
+  if (obj) {
+    a.title = `Open ${doc} in Excel`;
+    const sub = document.createElement("span");
+    sub.className = "pe-sub";
+    sub.textContent = obj.name;
+    head.append(sub);
+    if (obj.kind === "table") {
+      box.classList.add("sheet-table");
+      box.setAttribute("data-banded", obj.table?.banded ? "1" : "0");
+      box.setAttribute("data-theme", obj.table?.theme ?? "blue");
+      const hint = document.createElement("span");
+      hint.className = "xe-hint";
+      hint.textContent = "Linked · edits update Excel";
+      const style = document.createElement("button");
+      style.className = "xe-style";
+      style.type = "button";
+      style.title = "Change how this table looks here (Excel keeps its own style)";
+      style.textContent = "Style";
+      head.append(hint, style);
+    }
+    body.append(obj.el);
+  } else {
+    const n = document.createElement("div");
+    n.className = "pe-note";
+    n.textContent = json === undefined ? "No Excel document with this name" : "This table or chart was deleted";
+    body.append(n);
+    box.classList.add("empty");
+  }
+  return box;
+}
+
 function embedElement(name: string, depth: number, seen: string[]): HTMLElement {
   const rm = citeRemark(name);
   if (rm) return remarkElement(name, rm.item, rm.remark);
+  const obj = objectRef(name);
+  if (obj) return sheetObjectElement(name, obj.doc, obj.id, obj.opts);
   const box = document.createElement("div");
   box.className = "page-embed";
   box.setAttribute("data-page", name);

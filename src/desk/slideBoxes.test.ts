@@ -5,6 +5,8 @@ import {
   arrange,
   cleanBoxes,
   cleanFrame,
+  dashArray,
+  withShape,
   duplicateBoxes,
   MAIN_FRAME,
   moveBoxes,
@@ -85,5 +87,44 @@ describe("投影片上的物件", () => {
     expect(animDuplicate(anim, [0], 3)[1].boxes?.[0].id).toBe("a");
     // 沒有物件也沒有動畫的投影片在結尾不存
     expect(setMeta(anim, 2, (m) => ({ ...m, boxes: [] }))).toHaveLength(1);
+  });
+});
+
+describe("slide object appearance", () => {
+  it("keeps border width, line style, opacity and shadow", () => {
+    const [b] = cleanBoxes([{ id: "s", kind: "shape", x: 0, y: 0, w: 10, h: 10, lw: 6.3, dash: "dot", opacity: 45, shadow: true }]);
+    expect(b).toMatchObject({ lw: 6.5, dash: "dot", opacity: 45, shadow: true });
+    // 預設值、範圍外、不認得的不存
+    const [c] = cleanBoxes([{ id: "t", kind: "text", x: 0, y: 0, w: 10, h: 10, lw: 3, dash: "wavy", opacity: 100, shadow: "yes" }]);
+    expect(c).not.toHaveProperty("lw");
+    expect(c).not.toHaveProperty("dash");
+    expect(c).not.toHaveProperty("opacity");
+    expect(c).not.toHaveProperty("shadow");
+    expect(cleanBoxes([{ kind: "text", lw: 99, opacity: 2 }])[0]).toMatchObject({ lw: 40, opacity: 10 });
+  });
+
+  it("changes a shape's kind", () => {
+    const rect = { id: "a", kind: "shape" as const, shape: "rect" as const, x: 0, y: 0, w: 10, h: 10, fill: "red" as const, line: null };
+    expect(withShape(rect, "star")).toMatchObject({ shape: "star", fill: "red", line: null });
+    const line = withShape(rect, "line");
+    expect(line).toMatchObject({ shape: "line", fill: null, line: "gray" });
+    expect(withShape(line, "ellipse")).toMatchObject({ shape: "ellipse", fill: "blue", line: "gray" });
+  });
+
+  it("draws dashes from the line width", () => {
+    expect(dashArray(undefined, 3)).toBeUndefined();
+    expect(dashArray("dash", 2)).toBe("6 4");
+    expect(dashArray("dot", 2)).toBe("0 4");
+  });
+});
+
+describe("物件的自訂顏色", () => {
+  it("填色、框線可以是色盤名稱或 #rrggbb，不認得的丟掉", () => {
+    const [b] = cleanBoxes([{ id: "s", kind: "shape", x: 0, y: 0, w: 10, h: 10, fill: "#AA3366", line: "blue" }]);
+    expect(b.fill).toBe("#aa3366");
+    expect(b.line).toBe("blue");
+    const [c] = cleanBoxes([{ id: "t", kind: "text", x: 0, y: 0, w: 10, h: 10, fill: "#12", line: "neon" }]);
+    expect(c.fill).toBeUndefined();
+    expect(c.line).toBeUndefined();
   });
 });

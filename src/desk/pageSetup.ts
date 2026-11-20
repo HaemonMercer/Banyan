@@ -8,6 +8,9 @@
 export type FontKind = "sans" | "serif" | "mono";
 export type MarginKind = "normal" | "narrow" | "moderate" | "wide";
 export type PaperKind = "a4" | "letter" | "legal" | "a5";
+export type PaperColorId = "white" | "cream" | "sepia" | "gray" | "mint" | "sky" | "rose" | "lavender";
+/** 頁面顏色：內建的淺色或自訂的 `#rrggbb` */
+export type PaperColor = PaperColorId | `#${string}`;
 
 export interface PageSetup {
   font: FontKind;
@@ -24,6 +27,8 @@ export interface PageSetup {
   footer?: string;
   /** 頁碼（沒有是顯示；false 才藏起來） */
   numbers?: boolean;
+  /** 頁面背景顏色（Word 的 Design → Page Color；沒有是白色） */
+  color?: PaperColor;
 }
 
 export const DEFAULT_PAGE: PageSetup = { font: "sans", size: 11, spacing: 1.15, margin: "normal" };
@@ -40,6 +45,38 @@ export const PAPERS: { id: PaperKind; label: string; hint: string; w: number; h:
 export function paperOf(p: PageSetup): { w: number; h: number; label: string } {
   const k = PAPERS.find((x) => x.id === p.paper) ?? PAPERS[0];
   return p.landscape ? { w: k.h, h: k.w, label: `${k.label} · Landscape` } : { w: k.w, h: k.h, label: `${k.label} · Portrait` };
+}
+
+/**
+ * 頁面顏色：內建的都是淺色，字一律維持深色（紙張不跟著深色主題），匯出 .docx 也是這個顏色。
+ * 也可以自訂（`#rrggbb`）；自訂的深色頁面字會換成淺色（`paperIsDark`）。Word 文件與 Dock 的筆記共用。
+ */
+export const PAPER_COLORS: { id: PaperColorId; label: string; css: string }[] = [
+  { id: "white", label: "White", css: "#ffffff" },
+  { id: "cream", label: "Cream", css: "#fbf7ec" },
+  { id: "sepia", label: "Sepia", css: "#f3e9d6" },
+  { id: "gray", label: "Gray", css: "#eeeeec" },
+  { id: "mint", label: "Mint", css: "#e8f4ec" },
+  { id: "sky", label: "Sky", css: "#e7f0f9" },
+  { id: "rose", label: "Rose", css: "#f9eaec" },
+  { id: "lavender", label: "Lavender", css: "#efebf7" },
+];
+const PAPER_HEX = /^#[0-9a-f]{6}$/i;
+const isPaperColor = (v: unknown): v is PaperColor => PAPER_COLORS.some((c) => c.id === v) || (typeof v === "string" && PAPER_HEX.test(v));
+/** 存檔讀回來的頁面顏色（白色、#ffffff 都是沒有設定） */
+const cleanPaperColor = (v: unknown): PaperColor | undefined => {
+  if (!isPaperColor(v)) return undefined;
+  const c = (v.startsWith("#") ? v.toLowerCase() : v) as PaperColor;
+  return c === "white" || c === "#ffffff" ? undefined : c;
+};
+/** 頁面顏色的 CSS 值（沒有設定是白色） */
+export const paperColorOf = (c: PaperColor | undefined) =>
+  c && PAPER_HEX.test(c) ? c.toLowerCase() : (PAPER_COLORS.find((x) => x.id === c) ?? PAPER_COLORS[0]).css;
+/** 頁面顏色夠暗時字要換成淺色（相對亮度） */
+export function paperIsDark(c: PaperColor | undefined): boolean {
+  const n = parseInt(paperColorOf(c).slice(1), 16);
+  const lum = 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255);
+  return lum < 140;
 }
 
 export const FONTS: { id: FontKind; label: string; css: string; docx: string }[] = [
@@ -72,6 +109,7 @@ export function cleanPage(raw: unknown): PageSetup {
     ...(typeof r.header === "string" && r.header.trim() ? { header: r.header.slice(0, 300) } : {}),
     ...(typeof r.footer === "string" && r.footer.trim() ? { footer: r.footer.slice(0, 300) } : {}),
     ...(r.numbers === false ? { numbers: false } : {}),
+    ...(cleanPaperColor(r.color) ? { color: cleanPaperColor(r.color) } : {}),
   };
 }
 
@@ -84,7 +122,8 @@ export const isDefaultPage = (p: PageSetup) =>
   !p.landscape &&
   !p.header?.trim() &&
   !p.footer?.trim() &&
-  p.numbers !== false;
+  p.numbers !== false &&
+  !cleanPaperColor(p.color);
 
 export const marginOf = (p: PageSetup) => MARGINS.find((m) => m.id === p.margin) ?? MARGINS[0];
 export const fontOf = (p: PageSetup) => FONTS.find((f) => f.id === p.font) ?? FONTS[0];
@@ -108,7 +147,37 @@ export function docxPage(p: PageSetup) {
     header: p.header?.trim() ?? "",
     footer: p.footer?.trim() ?? "",
     numbers: p.numbers !== false,
+    /** 頁面顏色（十六進位，不含 #；白色不寫） */
+    background: cleanPaperColor(p.color) ? paperColorOf(p.color).slice(1) : "",
   };
+}
+
+/**
+ * Dock 筆記（`note`）的外觀：文字大小與頁面顏色，存在 `DockDoc.look`（沒改過就不寫）。
+ * 筆記沒有紙張與版面設定，只有這兩個。字級是 px（編輯器預設 16px）。
+ */
+export interface NoteLook {
+  size?: number;
+  color?: PaperColor;
+}
+export const NOTE_SIZES = [12, 13, 14, 15, 16, 18, 20, 22, 24, 28];
+export const NOTE_SIZE = 16;
+
+export function cleanLook(raw: unknown): NoteLook {
+  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    ...(typeof r.size === "number" && NOTE_SIZES.includes(r.size) && r.size !== NOTE_SIZE ? { size: r.size } : {}),
+    ...(cleanPaperColor(r.color) ? { color: cleanPaperColor(r.color) } : {}),
+  };
+}
+export const isDefaultLook = (l: NoteLook | undefined) => !l || ((l.size ?? NOTE_SIZE) === NOTE_SIZE && !cleanPaperColor(l.color));
+
+/** 文字大小往上或往下一級（A+／A−） */
+export function stepNoteSize(size: number | undefined, dir: 1 | -1): number {
+  const cur = size ?? NOTE_SIZE;
+  const i = NOTE_SIZES.indexOf(cur);
+  const at = i < 0 ? NOTE_SIZES.indexOf(NOTE_SIZE) : i;
+  return NOTE_SIZES[Math.max(0, Math.min(NOTE_SIZES.length - 1, at + dir))];
 }
 
 /**

@@ -120,6 +120,17 @@ describe("刪除線、底線、顏色、螢光（行內 HTML）", () => {
     expect(r.text).toBe("<u>ab</u>c<u>de</u>");
   });
 
+  it("自訂顏色：寫成 style，判斷得出來，換回色盤也可以", () => {
+    const r = setColor("我是文字", 2, 4, "color", "#AA3366");
+    expect(r.text).toBe('我是<span style="color: #aa3366">文字</span>');
+    expect(marksAt(r.text, r.a, r.b).color).toBe("#aa3366");
+    expect(renderMarkdown(r.text)).toBe('<p>我是<span style="color: #aa3366">文字</span></p>\n');
+    expect(setColor(r.text, r.a, r.b, "color", "blue").text).toBe('我是<span class="blue">文字</span>');
+    const h = setColor("亮", 0, 1, "highlight", "#ffee00");
+    expect(h.text).toBe('<mark style="background-color: #ffee00">亮</mark>');
+    expect(marksAt(h.text, h.a, h.b).highlight).toBe("#ffee00");
+  });
+
   it("文字顏色：加上、換色、拿掉", () => {
     const r = setColor("我是文字", 2, 4, "color", "red");
     expect(r.text).toBe('我是<span class="red">文字</span>');

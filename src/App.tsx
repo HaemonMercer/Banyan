@@ -20,6 +20,7 @@ import {
   applyTheme,
   FAVORITES_KEY,
   DESK_LAST_KEY,
+  DRAWER_TAB_KEY,
   forgetFileTargets,
   renameFileTargets,
   forgetTarget,
@@ -41,6 +42,8 @@ import {
 import { matchShortcut, type ShortcutAction } from "./shell/shortcuts";
 import { Sidebar, type MainView } from "./shell/Sidebar";
 import { ShortcutHelp } from "./shell/ShortcutHelp";
+import { ImagePicker } from "./drawer/ImagePicker";
+import { setDrawerLibrary, setImagePicker, type PickedImage, type PickOptions } from "./drawer/drawerImages";
 import { SettingsView } from "./shell/Settings";
 import { useDocs } from "./journal/useJournals";
 import { CalendarView } from "./bujo/CalendarView";
@@ -48,11 +51,14 @@ import { APPEND_EVENT, appendItems, type AppendRequest } from "./bujo/tasks";
 import { allPages, type Source } from "./pages/refIndex";
 import { Backlinks } from "./pages/Backlinks";
 import { OPEN_PAGE_EVENT, setPageNames } from "./pages/pageRef";
-import { setEmbedSources } from "./pages/embeds";
+import { setEmbedSources, setSheetSources } from "./pages/embeds";
+import { SheetPicker, type SheetBook } from "./sheet/SheetPicker";
+import { setSheetPicker } from "./sheet/pickSheet";
+import { setSheetWriter } from "./sheet/embedEdit";
 import { InputModeBadge, PredictBar } from "./editor/PredictBar";
 import { setPredictCorpus, switchInputScheme } from "./editor/predict";
 import { installFieldPrediction } from "./editor/fieldPredict";
-import { collectDocLinks, docLinkOf, docRenames, linkKey, renameDocInLinks, renameFileInLinks, setDocLinks, type DocLink } from "./desk/docLinks";
+import { collectDocLinks, docLinkOf, objectRef, docRenames, linkKey, renameDocInLinks, renameFileInLinks, setDocLinks, type DocLink } from "./desk/docLinks";
 import { loadDockDoc, renameFileState, saveDockDoc } from "./desk/store";
 import { isTauri } from "@tauri-apps/api/core";
 import { defaultHistoryFiles, VersionLog } from "./history/store";
@@ -65,9 +71,10 @@ import { collectTemplates, expandTemplate, findTemplate, JOURNAL_TEMPLATE, setTe
 import { isBlank } from "./journal/journal";
 import { DeskSwitch, DeskView, FileTitle, FileView, nextDeskTab, type DeskTab } from "./desk/DeskView";
 import { defaultDeskStore, defaultDeskTemplateStore, forgetFile } from "./desk/store";
-import { cleanFolders, dockOrder, emptyFile, freeTitle, isDataKind, keepFolder, parseFile, serializeFile, type DeskFile } from "./desk/file";
+import { cleanFolders, dockOrder, emptyFile, freeTitle, isDataKind, keepFolder, parseFile, serializeFile, updateDoc, type DeskFile } from "./desk/file";
+import { parseWorkbook, serializeWorkbook } from "./sheet/model";
 import { newId } from "./desk/board";
-import { DrawerView, type DrawerFocus } from "./drawer/DrawerView";
+import { DrawerSwitch, DrawerView, nextDrawerTab, type DrawerFocus, type DrawerTab } from "./drawer/DrawerView";
 import { defaultDrawerStore, LIBRARY, loadUi as loadDrawerUi } from "./drawer/store";
 import { citeItem, citeRemark, setCiteLibrary, setCiteStyle } from "./drawer/citeRef";
 import { notePage, parseLibrary, serializeLibrary, type Item, type Library } from "./drawer/model";
@@ -80,7 +87,8 @@ type View =
   | { kind: "bujo" }
   | { kind: "page"; name: string }
   | { kind: "desk" }
-  | { kind: "drawer" }
+  /** tab：文獻庫或檔案庫 */
+  | { kind: "drawer"; tab: DrawerTab }
   | { kind: "settings" }
   /** doc：Dock 開著的文件（沒有就用上次在這個檔案開的，再沒有就是第一份） */
   | { kind: "file"; name: string; tab: DeskTab; doc?: string };
@@ -90,7 +98,8 @@ const VIEW_KEY = "banyan.view";
 function loadView(): View {
   try {
     const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
-    if (v?.kind === "bujo" || v?.kind === "desk" || v?.kind === "drawer" || v?.kind === "settings") return { kind: v.kind };
+    if (v?.kind === "bujo" || v?.kind === "desk" || v?.kind === "settings") return { kind: v.kind };
+    if (v?.kind === "drawer") return { kind: "drawer", tab: v.tab === "files" ? "files" : "library" };
     // 舊的資料庫畫面已經併進 Desk
     if (v?.kind === "databases" || v?.kind === "database") return { kind: "desk" };
     if (v?.kind === "day" && typeof v.date === "string" && isDateKey(v.date)) return v;
@@ -212,6 +221,7 @@ function App() {
     setHistory(false);
     // Desk 記住上次停在哪裡（首頁或某個檔案），再按 Desk 時直接回去
     if (view.kind === "desk" || view.kind === "file") saveJson(DESK_LAST_KEY, view);
+    if (view.kind === "drawer") saveJson(DRAWER_TAB_KEY, view.tab);
   }, [view]);
 
   useEffect(() => saveJson(RECENTS_KEY, recents), [recents]);
@@ -248,7 +258,15 @@ function App() {
   const { load: loadDrawer, modify: modifyDrawer } = drawer;
   useEffect(() => loadDrawer(LIBRARY), [loadDrawer]);
   const libraryJson = drawer.contents[LIBRARY];
-  const libraryItems = useMemo(() => parseLibrary(libraryJson ?? "").items, [libraryJson]);
+  const library = useMemo(() => parseLibrary(libraryJson ?? ""), [libraryJson]);
+  const libraryItems = library.items;
+  // 編輯器、Word、簡報的「插入圖片」對話框（`drawer/drawerImages.ts`、`ImagePicker.tsx`）
+  useEffect(() => setDrawerLibrary(library), [library]);
+  const [imagePick, setImagePick] = useState<{ opts: PickOptions; done: (list: PickedImage[]) => void } | null>(null);
+  useEffect(() => {
+    setImagePicker((opts) => new Promise((done) => setImagePick({ opts, done })));
+    return () => setImagePicker(null);
+  }, []);
   const citeKeys = useMemo(() => libraryItems.filter((i) => !i.trashed && i.key).map((i) => notePage(i)), [libraryItems]);
   // 編輯器把 [[@引用鍵]] 顯示成文中引用（格式跟著 Drawer 上次選的 APA／MLA）
   useEffect(() => setCiteLibrary(libraryItems), [libraryItems]);
@@ -286,7 +304,7 @@ function App() {
     const docNames = new Set(docLinks.map((l) => linkKey(l.name)));
     const names = allPages(pages.dates ?? [], sources, isDateKey)
       .map((p) => p.name)
-      .filter((n) => !docNames.has(linkKey(n)));
+      .filter((n) => !docNames.has(linkKey(objectRef(n)?.doc ?? n)));
     const have = new Set(names.map(pageKey));
     return [...names, ...citeKeys.filter((k) => !have.has(pageKey(k)))];
   }, [pages.dates, sources, citeKeys, docLinks]);
@@ -311,6 +329,28 @@ function App() {
     () => setEmbedSources([...docSources, ...sources.map((s): [string, string] => [s.key, s.content])]),
     [docSources, sources],
   );
+  // ![[檔案/標題#^id]] 嵌入 Excel 的表格、圖表：所有 Excel 文件的活頁簿 JSON（插入的對話框也用）
+  const sheetBooks = useMemo(() => {
+    const parsed = new Map<string, DeskFile>();
+    const out: (SheetBook & { name: string })[] = [];
+    const seen = new Set<string>();
+    for (const l of allDocs) {
+      const k = linkKey(l.name);
+      if (seen.has(k) || l.kind !== "sheet") continue;
+      seen.add(k);
+      let f = parsed.get(l.file);
+      if (!f) parsed.set(l.file, (f = parseFile(files.contents[l.file] ?? "")));
+      const doc = f.docs.find((d) => d.id === l.id);
+      if (doc) out.push({ name: l.name, file: l.file, title: l.title, json: doc.content });
+    }
+    return out;
+  }, [allDocs, files.contents]);
+  useEffect(() => setSheetSources(sheetBooks.map((b): [string, string] => [b.name, b.json])), [sheetBooks]);
+  const [sheetPick, setSheetPick] = useState<{ done: (md: string | null) => void } | null>(null);
+  useEffect(() => {
+    setSheetPicker(() => new Promise((done) => setSheetPick({ done })));
+    return () => setSheetPicker(null);
+  }, []);
 
   // 字預測：文字框、輸入框（便利貼、格子、標題、搜尋…）也有預測
   useEffect(() => installFieldPrediction(), []);
@@ -352,6 +392,21 @@ function App() {
     (name: string, fn: (f: DeskFile) => DeskFile) => modifyFile(name, (j) => serializeFile(fn(parseFile(j)))),
     [modifyFile],
   );
+  // 文件裡改嵌入的 Excel 表格的格子：改那份 Excel（`sheet/embedEdit.ts`）
+  const sheetDocsRef = useRef(allDocs);
+  sheetDocsRef.current = allDocs;
+  useEffect(() => {
+    setSheetWriter((doc, change) => {
+      const l = sheetDocsRef.current.find((x) => x.kind === "sheet" && linkKey(x.name) === linkKey(doc));
+      if (!l) return false;
+      changeFile(l.file, (f) => {
+        const x = f.docs.find((d) => d.id === l.id);
+        return x ? updateDoc(f, x.id, { content: serializeWorkbook(change(parseWorkbook(x.content))) }) : f;
+      });
+      return true;
+    });
+    return () => setSheetWriter(null);
+  }, [changeFile]);
   // 已存的樣式（styleLibrary.ts，所有文件共用）：段落樣式的更新、改名、刪除與字元樣式的改名、刪除，
   // 改所有 Desk 檔案裡的 Word、簡報（hint：內容裡沒有這串字的檔案跳過）
   const rewriteDocsRef = useRef<(rewrite: (src: string) => string, hint: string) => void>(() => {});
@@ -453,7 +508,7 @@ function App() {
       const remark = citeRemark(String((e as CustomEvent).detail ?? ""));
       if (remark) {
         setDrawerFocus({ item: remark.item.id, remark: remark.remark.id, stamp: Date.now() });
-        navigate({ kind: "drawer" });
+        navigate({ kind: "drawer", tab: "library" });
         return;
       }
       // [[@引用鍵]]：開啟條目的筆記（第一次打開時寫上參考文獻）
@@ -501,6 +556,11 @@ function App() {
    * 側邊欄的 Desk（Alt+Shift+2）：在 Desk 的檔案裡 → 回到首頁；在首頁 → 不動；
    * 從別的畫面來 → 回到上次停的地方（檔案已經刪掉就回首頁）。
    */
+  /** 側邊欄的 Drawer（Alt+Shift+3）：回到上次看的那一頁（文獻庫或檔案庫） */
+  const openDrawer = () => {
+    if (view.kind === "drawer") return;
+    navigate({ kind: "drawer", tab: loadJson<string>(DRAWER_TAB_KEY, "library", (v) => typeof v === "string") === "files" ? "files" : "library" });
+  };
   const openDesk = () => {
     if (view.kind === "file") return navigate({ kind: "desk" });
     if (view.kind === "desk") return;
@@ -653,7 +713,7 @@ function App() {
       case "view-desk":
         return openDesk();
       case "view-drawer":
-        return navigate({ kind: "drawer" });
+        return openDrawer();
       case "back":
         return back();
       case "forward":
@@ -667,6 +727,7 @@ function App() {
         return;
       case "desk-switch":
         if (view.kind === "file") navigate({ kind: "file", name: view.name, tab: nextDeskTab(view.tab) });
+        else if (view.kind === "drawer") navigate({ kind: "drawer", tab: nextDrawerTab(view.tab) });
         return;
       case "settings":
         return navigate({ kind: "settings" });
@@ -786,7 +847,7 @@ function App() {
         recents={recents}
         settings={view.kind === "settings"}
         onSettings={() => navigate({ kind: "settings" })}
-        onMain={(kind) => (kind === "desk" ? openDesk() : navigate({ kind }))}
+        onMain={(kind) => (kind === "desk" ? openDesk() : kind === "drawer" ? openDrawer() : navigate({ kind }))}
         onToday={() => openDay(now)}
         onOpen={openTarget}
         onDelete={askDelete}
@@ -828,6 +889,7 @@ function App() {
               </button>
             )}
             {view.kind === "file" && <DeskSwitch tab={view.tab} onTab={(tab) => navigate({ kind: "file", name: view.name, tab })} />}
+            {view.kind === "drawer" && <DrawerSwitch tab={view.tab} onTab={(tab) => navigate({ kind: "drawer", tab })} />}
           </div>
           <div className="actions">
             {/* 儲存狀態只剩圓點：綠色是已儲存、灰色閃爍是儲存中（文字在提示與螢幕閱讀器裡） */}
@@ -918,6 +980,8 @@ function App() {
                 onOpenNotes={openNotes}
                 onOpenSource={(s) => (s.kind === "day" ? openDay(s.key) : navigate({ kind: "page", name: s.key }))}
                 focus={drawerFocus}
+                tab={view.tab}
+                onTab={(tab) => navigate({ kind: "drawer", tab })}
               />
             )}
             {view.kind === "file" && (
@@ -950,6 +1014,10 @@ function App() {
         </div>
       </div>
       {help && <ShortcutHelp onClose={() => setHelp(false)} />}
+      {imagePick && (
+        <ImagePicker lib={library} tab={imagePick.opts.tab} multiple={imagePick.opts.multiple} onDone={(list) => (setImagePick(null), imagePick.done(list))} />
+      )}
+      {sheetPick && <SheetPicker books={sheetBooks} onDone={(md) => (setSheetPick(null), sheetPick.done(md))} />}
       <PredictBar />
       <InputModeBadge />
     </div>

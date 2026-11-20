@@ -1,6 +1,6 @@
 import DOMPurify from "dompurify";
 import { PURIFY, resolveMedia } from "./media";
-import { COLORS, type Color, type Marks } from "./inline";
+import { COLORS, inkTag, isCustomInk, styleInk, type Color, type Ink, type Marks } from "./inline";
 import { md, type UnitKind } from "./markdown";
 import { linkPages } from "../pages/pageRef";
 import { isCheckLine, lineTask, type TaskState } from "../bujo/tasks";
@@ -189,7 +189,10 @@ export function contentHtml(content: string, env: Record<string, unknown> = {}):
 type FormatKey = string | null;
 
 const PALETTE = COLORS as readonly string[];
-const colorClass = (el: Element) => [...el.classList].find((c) => PALETTE.includes(c)) ?? null;
+/** 元素的文字顏色或螢光顏色：色盤的 class，或自訂顏色的 style（`color: #…`、`background-color: #…`） */
+const colorClass = (el: Element): Ink | null =>
+  ([...el.classList].find((c) => PALETTE.includes(c)) as Color | undefined) ??
+  (el.tagName === "SPAN" || el.tagName === "MARK" ? styleInk(el.getAttribute("style"), el.tagName === "SPAN" ? "span" : "mark") : null);
 /** 字元樣式（已存的樣式名稱，`<span data-cs="名稱">`；樣子由共用的樣式表決定） */
 const charStyleOf = (el: Element) => (el.tagName === "SPAN" ? el.getAttribute("data-cs") || null : null);
 
@@ -372,11 +375,11 @@ function serializeNode(node: Node, o: SerOptions): string {
       const cs = charStyleOf(el);
       if (cs) return wrap(inner(), `<span data-cs="${cs.replace(/["<>&]/g, "")}">`, "</span>");
       const c = colorClass(el);
-      return c ? wrap(inner(), `<span class="${c}">`, "</span>") : inner();
+      return c ? wrap(inner(), inkTag("span", c), "</span>") : inner();
     }
     case "MARK": {
       const c = colorClass(el) ?? "yellow";
-      return wrap(inner(), `<mark class="${c}">`, "</mark>");
+      return wrap(inner(), inkTag("mark", c), "</mark>");
     }
     case "CODE": {
       const code = (el.textContent ?? "").replace(/\u200B/g, "");
@@ -615,8 +618,8 @@ export function domMarks(root: HTMLElement): Marks | null {
     else if (key === "s") m.strike = true;
     else if (key === "code") m.code = true;
     else if (key.startsWith("a:")) m.link = true;
-    else if (key.startsWith("span:") && !m.color) m.color = key.slice(5) as Color;
-    else if (key.startsWith("mark:") && !m.highlight) m.highlight = key.slice(5) as Color;
+    else if (key.startsWith("span:") && !m.color) m.color = key.slice(5) as Ink;
+    else if (key.startsWith("mark:") && !m.highlight) m.highlight = key.slice(5) as Ink;
     else if (key.startsWith("cs:") && !m.charStyle) m.charStyle = key.slice(3);
   }
   return m;
@@ -626,7 +629,7 @@ export function domMarks(root: HTMLElement): Marks | null {
 
 export type FormatSpec =
   | { tag: "strong" | "em" | "u" | "s" | "sup" | "sub" | "code" }
-  | { tag: "span" | "mark"; color: Color | null }
+  | { tag: "span" | "mark"; color: Ink | null }
   /** 字元樣式（`<span data-cs="名稱">`；name 是 null 表示拿掉） */
   | { tag: "cs"; name: string | null }
   | { tag: "a"; href: string };
@@ -665,7 +668,10 @@ function makeEl(doc: Document, spec: FormatSpec): HTMLElement | null {
   }
   const el = doc.createElement(spec.tag);
   if (spec.tag === "a") el.setAttribute("href", spec.href);
-  if ((spec.tag === "span" || spec.tag === "mark") && spec.color) el.className = spec.color;
+  if ((spec.tag === "span" || spec.tag === "mark") && spec.color) {
+    if (isCustomInk(spec.color)) el.setAttribute("style", `${spec.tag === "span" ? "color" : "background-color"}: ${spec.color.toLowerCase()}`);
+    else el.className = spec.color;
+  }
   return el;
 }
 
@@ -1063,8 +1069,8 @@ export function selectionMarks(root: HTMLElement): Marks | null {
       else if (key === "s") m.strike = true;
       else if (key === "code") m.code = true;
       else if (key.startsWith("a:")) m.link = true;
-      else if (key.startsWith("span:") && !m.color) m.color = key.slice(5) as Color;
-      else if (key.startsWith("mark:") && !m.highlight) m.highlight = key.slice(5) as Color;
+      else if (key.startsWith("span:") && !m.color) m.color = key.slice(5) as Ink;
+      else if (key.startsWith("mark:") && !m.highlight) m.highlight = key.slice(5) as Ink;
       else if (key.startsWith("cs:") && !m.charStyle) m.charStyle = key.slice(3);
     }
     return m;

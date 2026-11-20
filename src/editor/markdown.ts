@@ -76,6 +76,8 @@ export type Tag =
 
 const LAYOUT_OPEN =
   /^<div class="(columns|column|indent|bg-([a-z]+)|align-(left|center|right)|caption-(top)|width-(25|50|75|100))"(?: style="flex: ?(\d+(?:\.\d+)?)")?>[ \t]*$/;
+/** 自訂顏色的區塊背景：<div class="bg" style="background: #rrggbb"> */
+const BG_HEX = /^<div class="bg" style="background: (#[0-9a-f]{6})">[ \t]*$/i;
 const DIV_OPEN = /^<div\b[^>]*>[ \t]*$/i;
 const BOX_OPEN = /^<div class="box"(?: data-style="([^"<>&]*)")? style="([^"<>]*)">[ \t]*$/;
 const DIV_CLOSE =/^<\/div>[ \t]*$/i;
@@ -93,6 +95,8 @@ export function parseTag(line: string): Tag | undefined {
     if (m[5]) return { type: "open", kind: "size", color: m[5] };
     return { type: "open", kind: m[1] as ContainerKind, width: m[6] ? Number(m[6]) : undefined };
   }
+  const bg = BG_HEX.exec(line);
+  if (bg) return { type: "open", kind: "bg", color: bg[1].toLowerCase() };
   // 區塊樣式（`blockStyle.ts`）：<div class="box" style="margin: …; padding: …">（color 欄位放 style 的內容）
   const box = BOX_OPEN.exec(line);
   if (box) return { type: "open", kind: "box", color: box[2], ...(box[1] ? { name: box[1] } : {}) };
@@ -103,7 +107,7 @@ export function parseTag(line: string): Tag | undefined {
 
 /** name：區塊樣式套用的已存樣式名稱（只有 box 用，`data-style`） */
 export function openTag(kind: ContainerKind, width?: number, color?: string, name?: string): string {
-  if (kind === "bg") return `<div class="bg-${color ?? "gray"}">`;
+  if (kind === "bg") return color && color.startsWith("#") ? `<div class="bg" style="background: ${color}">` : `<div class="bg-${color ?? "gray"}">`;
   if (kind === "align") return `<div class="align-${color ?? "center"}">`;
   if (kind === "size") return `<div class="width-${color ?? "100"}">`;
   if (kind === "cap") return `<div class="caption-${color ?? "top"}">`;

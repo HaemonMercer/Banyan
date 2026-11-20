@@ -18,6 +18,25 @@ export type Mark = "bold" | "italic" | "strike" | "underline" | "sup" | "sub" | 
 export const COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"] as const;
 export type Color = (typeof COLORS)[number];
 
+/** 色盤名稱或自訂的 `#rrggbb`（文字顏色、螢光、區塊背景、框線…都可以自己選顏色） */
+export type Ink = Color | `#${string}`;
+const HEX = /^#[0-9a-f]{6}$/i;
+export const isInk = (v: unknown): v is Ink => typeof v === "string" && (HEX.test(v) || (COLORS as readonly string[]).includes(v));
+export const isCustomInk = (v: unknown): v is `#${string}` => typeof v === "string" && HEX.test(v);
+/** 顏色的 CSS 值：色盤名稱換成主題變數（tc 文字、hl 螢光、bg 背景），自訂的就是色碼 */
+export const inkCss = (kind: "tc" | "hl" | "bg", c: Ink) => (isCustomInk(c) ? c : `var(--${kind === "tc" ? "tc" : "bg"}-${c})`); // 螢光的色盤跟區塊背景同一組（--bg-*）
+/** 色盤的名稱（自訂顏色顯示色碼） */
+export const inkLabel = (c: Ink) => (isCustomInk(c) ? c : COLOR_LABELS[c]);
+/** 行內 HTML 的開始標籤：色盤是 class，自訂的寫 style */
+export const inkTag = (name: "span" | "mark", c: Ink) =>
+  isCustomInk(c) ? `<${name} style="${name === "span" ? "color" : "background-color"}: ${c.toLowerCase()}">` : `<${name} class="${c}">`;
+/** 標籤屬性（或元素的 style 屬性文字）裡的自訂顏色 */
+export function styleInk(style: string | null | undefined, name: "span" | "mark"): Ink | null {
+  if (!style) return null;
+  const m = (name === "span" ? /(?:^|;)\s*color:\s*(#[0-9a-f]{6})\s*(?:;|$)/i : /(?:^|;)\s*background(?:-color)?:\s*(#[0-9a-f]{6})\s*(?:;|$)/i).exec(style);
+  return m ? (m[1].toLowerCase() as Ink) : null;
+}
+
 export const COLOR_LABELS: Record<Color, string> = {
   gray: "Gray",
   brown: "Brown",
@@ -42,9 +61,9 @@ export interface Marks {
   code: boolean;
   link: boolean;
   /** 文字顏色 */
-  color: Color | null;
+  color: Ink | null;
   /** 螢光標記顏色 */
-  highlight: Color | null;
+  highlight: Ink | null;
   /** 字元樣式（已存的樣式名稱，`<span data-cs>`；只有所見即所得編輯看得到） */
   charStyle: string | null;
 }
@@ -67,14 +86,16 @@ const B = "\uE001";
 
 const isColor = (c: string | undefined): c is Color => !!c && (COLORS as readonly string[]).includes(c);
 
-type Entry = { mark: Exclude<Mark, "code"> | "color" | "highlight"; tag?: string; value?: Color | null };
+type Entry = { mark: Exclude<Mark, "code"> | "color" | "highlight"; tag?: string; value?: Ink | null };
 
 const HTML_TAG = /^<(\/?)([a-z]+)\b([^>]*)>$/i;
 const CLASS = /\bclass="([^"]*)"/;
 
 /** 行內 HTML 標籤對應的格式。 */
 function htmlEntry(name: string, attrs: string): Entry | null {
-  const cls = CLASS.exec(attrs)?.[1].split(/\s+/).find(isColor) as Color | undefined;
+  const cls: Ink | undefined =
+    (CLASS.exec(attrs)?.[1].split(/\s+/).find(isColor) as Color | undefined) ??
+    (name === "span" || name === "mark" ? (styleInk(/\bstyle="([^"]*)"/.exec(attrs)?.[1], name) ?? undefined) : undefined);
   switch (name) {
     case "s":
     case "del":
@@ -438,7 +459,7 @@ export function toggleMark(text: string, a: number, b: number, mark: Mark, activ
 }
 
 /** 設定文字顏色或螢光標記（color 為 null 表示拿掉）。 */
-export function setColor(text: string, a: number, b: number, kind: "color" | "highlight", color: Color | null): Edited {
-  const name: TagName = kind === "color" ? "span" : "mark";
-  return setTag(text, a, b, name, color ? `<${name} class="${color}">` : null);
+export function setColor(text: string, a: number, b: number, kind: "color" | "highlight", color: Ink | null): Edited {
+  const name = kind === "color" ? "span" : "mark";
+  return setTag(text, a, b, name, color ? inkTag(name, color) : null);
 }

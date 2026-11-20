@@ -31,3 +31,30 @@ export function embedSource(name: string): string | undefined {
   used.set(k, v);
   return v;
 }
+
+// ─── Excel 活頁簿（嵌入表格、圖表 `![[檔案/標題#^id]]` 用） ───
+
+let sheets = new Map<string, string>();
+/** 顯示過的活頁簿：文件名稱鍵 → 當時的 JSON */
+const usedSheets = new Map<string, string | undefined>();
+
+/** App 設定 Excel 文件的內容（鍵是 `檔案/標題`，值是活頁簿的 JSON）；顯示過的改了才通知編輯器重畫。 */
+export function setSheetSources(entries: Iterable<[string, string]>): void {
+  const next = new Map<string, string>();
+  for (const [name, json] of entries) next.set(pageKey(name), json);
+  sheets = next;
+  let changed = false;
+  for (const [k, v] of usedSheets) if (next.get(k) !== v) changed = true;
+  if (changed) {
+    usedSheets.clear();
+    refsChanged();
+  }
+}
+
+/** Excel 文件的活頁簿 JSON（沒有就是 undefined）。 */
+export function sheetSource(name: string): string | undefined {
+  const k = pageKey(name);
+  const v = sheets.get(k);
+  usedSheets.set(k, v);
+  return v;
+}

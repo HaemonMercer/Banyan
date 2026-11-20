@@ -50,6 +50,8 @@ export interface Attachment {
   src: string;
   kind: "file" | "link";
   added: number;
+  /** 檔案附件存在檔案庫裡的那一筆（`FileEntry.id`，`files.ts` 的 `linkAttachments` 補上）；連結附件沒有 */
+  file?: string;
 }
 
 /** 條目上的備註：一段文字（Markdown），可以記頁碼；id（`r1`、`r2`…）在條目裡不重複、刪掉也不再使用。 */
@@ -231,6 +233,7 @@ function cleanAttachment(v: unknown): Attachment | null {
     src,
     kind: o.kind === "link" ? "link" : "file",
     added: typeof o.added === "number" ? o.added : 0,
+    ...(o.kind !== "link" && str(o.file) ? { file: str(o.file) } : {}),
   };
 }
 

@@ -3,8 +3,9 @@ import { mediaUrl } from "../editor/media";
 import { splitSlides } from "./file";
 import { DEFAULT_PAGE, docxPage, type PageSetup } from "./pageSetup";
 import { animAt, type SlideAnim, type Transition } from "./slideAnim";
-import { SLIDE_W, type Frame, type ShapeKind } from "./slideBoxes";
+import { DEFAULT_LW, SLIDE_W, type Frame, type ShapeKind, type SlideBox } from "./slideBoxes";
 import { slideColors, type DeckSetup } from "./deckSetup";
+import { masterOf } from "./slideMasters";
 import { fillOf, strokeOf } from "./drawExport";
 import { mdBlocks, runsText, type MdBlock, type Run } from "./mdblocks";
 
@@ -174,6 +175,8 @@ export async function toDocx(source: string, setup: PageSetup = DEFAULT_PAGE): P
   }));
   const doc = new d.Document({
     creator: "Banyan",
+    // 頁面顏色（Word 的 Design → Page Color；docx 會一起寫 displayBackgroundShape，Word 打開就看得到）
+    ...(pg.background ? { background: { color: pg.background } } : {}),
     styles: { default: { document: { run: { font: pg.font, size: pg.size }, paragraph: { spacing: { line: pg.line } } } } },
     numbering: { config: [{ reference: "ordered", levels }] },
     sections: [
@@ -220,9 +223,17 @@ export async function toPptx(source: string, title: string, anim: SlideAnim[] = 
 
   const slides = splitSlides(source).map(mdBlocks);
   // 物件裡的圖片、文字方塊的內容也要先讀進來
-  const boxImages: MdBlock[] = anim.flatMap((a) => (a.boxes ?? []).filter((b) => b.kind === "image" && b.src).map((b) => ({ type: "image" as const, src: b.src!, alt: b.alt ?? "" })));
+  // 母片的物件也是（每張投影片照它用的母片畫在最下層）
+  const masters = deck.masters ?? [];
+  const allBoxes = [...anim.flatMap((a) => a.boxes ?? []), ...masters.flatMap((m) => m.boxes ?? [])];
+  const boxImages: MdBlock[] = allBoxes.filter((b) => b.kind === "image" && b.src).map((b) => ({ type: "image" as const, src: b.src!, alt: b.alt ?? "" }));
   const boxTexts = anim.map((a) => new Map((a.boxes ?? []).filter((b) => b.kind === "text").map((b) => [b.id, mdBlocks(b.text ?? "")])));
-  const images = await loadImages([...slides.flat(), ...boxImages, ...boxTexts.flatMap((m) => [...m.values()].flat())]);
+  const masterTexts = masters.map((m) => new Map((m.boxes ?? []).filter((b) => b.kind === "text").map((b) => [b.id, mdBlocks(b.text ?? "")])));
+  const images = await loadImages([
+    ...slides.flat(),
+    ...boxImages,
+    ...[...boxTexts, ...masterTexts].flatMap((m) => [...m.values()].flat()),
+  ]);
 
   const runOpts = (r: Run) => ({
     bold: r.bold,
@@ -280,19 +291,66 @@ export async function toPptx(source: string, title: string, anim: SlideAnim[] = 
     line: "line",
   };
 
+  /** 文字方塊、圖片、形狀（照上下層的順序）；texts 是文字方塊的段落 */
+  const addBoxes = (slide: ReturnType<typeof pptx.addSlide>, boxes: SlideBox[], texts: Map<string, MdBlock[]> | undefined) => {
+    for (const b of boxes) {
+      const f = inch(b);
+      // 外觀：框線粗細（設計尺寸的 px 剛好是 pt）、虛線、不透明度、陰影
+      const clear = b.opacity ? 100 - b.opacity : undefined;
+      const lineOf = (c: NonNullable<SlideBox["line"]>) => ({ color: hex(strokeOf(c)), width: b.lw ?? DEFAULT_LW, dashType: b.dash === "dash" ? "dash" : b.dash === "dot" ? "sysDot" : "solid", transparency: clear });
+      const shadow = b.shadow ? { type: "outer", blur: 8, offset: 4, angle: 90, opacity: 0.3, color: "000000" } : undefined;
+      if (b.kind === "shape") {
+        slide.addShape(PPT_SHAPE[b.shape ?? "rect"] as never, {
+          ...f,
+          fill: b.fill === null ? { type: "none" } : { color: hex(strokeOf(b.fill ?? "blue")), transparency: clear },
+          line: b.line ? lineOf(b.line) : { type: "none" },
+          rotate: b.rot,
+          shadow,
+        } as never);
+      } else if (b.kind === "image") {
+        const img = images.get(b.src ?? "");
+        if (!img) continue;
+        if (b.fit === "cover") {
+          slide.addImage({ data: img.dataUrl, ...f, sizing: { type: "cover", w: f.w, h: f.h }, altText: b.alt, rotate: b.rot, transparency: clear } as never);
+        } else {
+          const s = Math.min(f.w / img.w, f.h / img.h);
+          const w = img.w * s;
+          const h = img.h * s;
+          slide.addImage({ data: img.dataUrl, x: f.x + (f.w - w) / 2, y: f.y + (f.h - h) / 2, w, h, altText: b.alt, rotate: b.rot, transparency: clear } as never);
+        }
+      } else {
+        const runs = paraRuns(texts?.get(b.id) ?? []);
+        if (!runs.length) continue;
+        slide.addText(runs as never, {
+          ...f,
+          fontSize: 20,
+          valign: "top",
+          paraSpaceAfter: 4,
+          fill: b.fill ? { color: hex(fillOf(b.fill)), transparency: clear } : undefined,
+          line: b.line ? lineOf(b.line) : undefined,
+          rotate: b.rot,
+          shadow,
+        } as never);
+      }
+    }
+  };
+
   slides.forEach((blocks, si) => {
     const slide = pptx.addSlide();
     const meta = animAt(anim, si);
+    const master = masterOf(masters, meta);
     // 主題與這張的背景、文字顏色；頁碼、頁尾、備忘稿、跳過
     const colors = slideColors(deck, meta);
     slide.background = { color: hex(colors.bg) };
     slide.color = hex(colors.text);
-    if (deck.numbers) slide.slideNumber = { x: W - 1.1, y: H - 0.5, w: 0.8, h: 0.3, fontSize: 12, color: hex(colors.muted), align: "right" } as never;
-    if (deck.footer) slide.addText(deck.footer, { x: M, y: H - 0.5, w: W / 2, h: 0.3, fontSize: 12, color: hex(colors.muted) });
+    if (master) addBoxes(slide, master.boxes ?? [], masterTexts[masters.indexOf(master)]);
+    if (deck.numbers && !master?.noFoot) slide.slideNumber = { x: W - 1.1, y: H - 0.5, w: 0.8, h: 0.3, fontSize: 12, color: hex(colors.muted), align: "right" } as never;
+    if (deck.footer && !master?.noFoot) slide.addText(deck.footer, { x: M, y: H - 0.5, w: W / 2, h: 0.3, fontSize: 12, color: hex(colors.muted) });
     if (meta.notes?.trim()) slide.addNotes(meta.notes);
     if (meta.skip) (slide as unknown as { hidden: boolean }).hidden = true;
-    // 主文字方塊的範圍：沒有搬過就是原本的版面
-    const area = meta.main ? inch(meta.main) : { x: M, y: M, w: W - 2 * M, h: H - 2 * M };
+    // 主文字方塊的範圍：沒有搬過就是母片的位置，沒有母片是原本的版面
+    const frame = meta.main ?? master?.main;
+    const area = frame ? inch(frame) : { x: M, y: M, w: W - 2 * M, h: H - 2 * M };
     const rest = [...blocks];
     const head = rest[0]?.type === "heading" ? (rest.shift() as Extract<MdBlock, { type: "heading" }>) : null;
     const picture = rest.find((b) => b.type === "image") as Extract<MdBlock, { type: "image" }> | undefined;
@@ -335,41 +393,7 @@ export async function toPptx(source: string, title: string, anim: SlideAnim[] = 
       }
     }
 
-    // 文字方塊、圖片、形狀（照上下層的順序）
-    for (const b of meta.boxes ?? []) {
-      const f = inch(b);
-      if (b.kind === "shape") {
-        slide.addShape(PPT_SHAPE[b.shape ?? "rect"] as never, {
-          ...f,
-          fill: b.fill === null ? { type: "none" } : { color: hex(strokeOf(b.fill ?? "blue")) },
-          line: b.line ? { color: hex(strokeOf(b.line)), width: 2 } : { type: "none" },
-          rotate: b.rot,
-        } as never);
-      } else if (b.kind === "image") {
-        const img = images.get(b.src ?? "");
-        if (!img) continue;
-        if (b.fit === "cover") {
-          slide.addImage({ data: img.dataUrl, ...f, sizing: { type: "cover", w: f.w, h: f.h }, altText: b.alt, rotate: b.rot });
-        } else {
-          const s = Math.min(f.w / img.w, f.h / img.h);
-          const w = img.w * s;
-          const h = img.h * s;
-          slide.addImage({ data: img.dataUrl, x: f.x + (f.w - w) / 2, y: f.y + (f.h - h) / 2, w, h, altText: b.alt, rotate: b.rot });
-        }
-      } else {
-        const runs = paraRuns(boxTexts[si]?.get(b.id) ?? []);
-        if (!runs.length) continue;
-        slide.addText(runs as never, {
-          ...f,
-          fontSize: 20,
-          valign: "top",
-          paraSpaceAfter: 4,
-          fill: b.fill ? { color: hex(fillOf(b.fill)) } : undefined,
-          line: b.line ? { color: hex(strokeOf(b.line)), width: 2 } : undefined,
-          rotate: b.rot,
-        });
-      }
-    }
+    addBoxes(slide, meta.boxes ?? [], boxTexts[si]);
   });
   const out = (await pptx.write({ outputType: "uint8array" })) as Uint8Array;
   // pptxgenjs 不會寫轉場：打開 zip 在每張投影片的 XML 補上（逐項顯示沒有匯出）

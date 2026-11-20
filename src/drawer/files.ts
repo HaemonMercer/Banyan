@@ -1,6 +1,8 @@
 /**
- * Drawer 的檔案庫（參考 Windows 檔案總管）：資料夾樹＋檔案，和文獻庫存在同一份 `drawer/library.json`
- * （`Library.folders`、`Library.files`）。檔案內容和附件一樣存在 `media/`，這裡只記名稱與位置。
+ * Drawer 的檔案庫：資料邏輯和文獻庫一樣（參考 Zotero）——資料夾像收藏，是一棵樹，
+ * 檔案像條目，可以放在好幾個資料夾（`folders`，空的就是 Unfiled）、有標籤、刪除先進垃圾桶。
+ * 和文獻庫存在同一份 `drawer/library.json`（`Library.folders`、`Library.files`）。
+ * 檔案內容和附件一樣存在 `media/`，這裡只記名稱與位置。
  *
  * 重複偵測：`media/` 的檔名本來就是內容雜湊（Rust `media_name`），所以「同樣內容」＝同樣的雜湊；
  * 瀏覽器預覽的 data URL 用資料本身算雜湊。檔案庫的檔案與條目附件一起比對（`locate`、`duplicateGroups`）。
@@ -11,18 +13,22 @@ import type { Attachment, Item, Library } from "./model";
 export interface Folder {
   id: string;
   name: string;
-  /** null 是最上層（My Files） */
+  /** null 是最上層 */
   parent: string | null;
   added: number;
 }
 
 export interface FileEntry {
   id: string;
-  /** 顯示名稱（含副檔名），同一個資料夾裡不重複（不分大小寫） */
+  /** 顯示名稱（含副檔名） */
   name: string;
   /** `media/檔名`、data URL（瀏覽器預覽） */
   src: string;
-  folder: string | null;
+  /** 所在的資料夾（像條目的收藏，可以好幾個；空的是 Unfiled） */
+  folders: string[];
+  tags: string[];
+  /** 在垃圾桶裡 */
+  trashed?: boolean;
   /** 位元組數（不知道就是 0） */
   size: number;
   added: number;
@@ -36,11 +42,12 @@ const newId = (prefix: string) => {
 };
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : 0);
+const uniq = (xs: string[]) => [...new Set(xs)];
 const collate = (a: string, b: string) => a.localeCompare(b, "zh-Hant", { numeric: true, sensitivity: "base" });
 
 /* ─── 讀檔 ─── */
 
-/** 讀進來的資料夾與檔案補齊欄位；父資料夾不存在（或形成迴圈）就放回最上層。 */
+/** 讀進來的資料夾與檔案補齊欄位；父資料夾不存在（或形成迴圈）就放回最上層；舊版的 `folder`（一個）變成 `folders`。 */
 export function cleanFiles(foldersRaw: unknown, filesRaw: unknown): { folders: Folder[]; files: FileEntry[] } {
   const folders: Folder[] = Array.isArray(foldersRaw)
     ? foldersRaw
@@ -61,17 +68,20 @@ export function cleanFiles(foldersRaw: unknown, filesRaw: unknown): { folders: F
       seen.add(p);
     }
   }
+  const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   const files: FileEntry[] = Array.isArray(filesRaw)
     ? filesRaw
         .filter((f): f is Record<string, unknown> => !!f && typeof f === "object" && !!str((f as Record<string, unknown>).src))
         .map((f) => {
-          const folder = str(f.folder) || null;
           const added = num(f.added);
+          const inFolders = Array.isArray(f.folders) ? strs(f.folders) : str(f.folder) ? [str(f.folder)] : [];
           return {
             id: str(f.id) || newId("F"),
             name: str(f.name).trim() || str(f.src).split("/").pop() || "File",
             src: str(f.src),
-            folder: folder && ids.has(folder) ? folder : null,
+            folders: uniq(inFolders.filter((x) => ids.has(x))),
+            tags: uniq(strs(f.tags).map((t) => t.trim()).filter(Boolean)),
+            ...(f.trashed === true ? { trashed: true } : {}),
             size: num(f.size),
             added,
             modified: num(f.modified) || added,
@@ -93,7 +103,7 @@ export function cleanName(name: string): string {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim().replace(/[. ]+$/, "");
 }
 
-/** 同一個資料夾裡不重複的名稱：`報告.pdf` → `報告 (2).pdf`（和 Windows 一樣）。 */
+/** 不重複的名稱：`報告.pdf` → `報告 (2).pdf`（和 Windows 一樣，不分大小寫）。 */
 export function uniqueName(name: string, taken: Iterable<string>): string {
   const used = new Set([...taken].map((n) => n.toLowerCase()));
   if (!used.has(name.toLowerCase())) return name;
@@ -105,22 +115,14 @@ export function uniqueName(name: string, taken: Iterable<string>): string {
   }
 }
 
-/** 某個資料夾裡已用的名稱（資料夾與檔案共用，和 Windows 一樣）。 */
-function namesIn(lib: Library, folder: string | null, except?: string): string[] {
-  return [
-    ...lib.folders.filter((f) => f.parent === folder && f.id !== except).map((f) => f.name),
-    ...lib.files.filter((f) => f.folder === folder && f.id !== except).map((f) => f.name),
-  ];
-}
+/** 同一層的資料夾名稱（資料夾之間不重名；檔案像條目，名稱可以重複）。 */
+const siblingNames = (lib: Library, parent: string | null, except?: string) =>
+  lib.folders.filter((f) => f.parent === parent && f.id !== except).map((f) => f.name);
 
-/* ─── 查詢 ─── */
+/* ─── 資料夾樹 ─── */
 
 export function childFolders(lib: Library, parent: string | null): Folder[] {
   return lib.folders.filter((f) => f.parent === parent).sort((a, b) => collate(a.name, b.name));
-}
-
-export function filesIn(lib: Library, folder: string | null): FileEntry[] {
-  return lib.files.filter((f) => f.folder === folder).sort((a, b) => collate(a.name, b.name));
 }
 
 /** 資料夾和它底下所有子資料夾的 id。 */
@@ -150,107 +152,277 @@ export function folderPath(lib: Library, id: string | null): Folder[] {
   return out;
 }
 
-/** 顯示用的位置：`My Files › 研究 › 2026`。 */
+/** 顯示用的位置：`研究 › 2026`；null 是 `My Files`（最上層）。 */
 export function pathLabel(lib: Library, folder: string | null): string {
-  return ["My Files", ...folderPath(lib, folder).map((f) => f.name)].join(" › ");
+  const p = folderPath(lib, folder);
+  return p.length ? p.map((f) => f.name).join(" › ") : "My Files";
 }
 
-/** 資料夾（含子資料夾）裡的檔案數。 */
-export function folderFileCount(lib: Library, id: string): number {
-  const ids = folderDescendants(lib, id);
-  return lib.files.filter((f) => f.folder && ids.has(f.folder)).length;
+/** 檔案在哪些資料夾：`研究 › 2026, 課程`；沒有資料夾是 `Unfiled`。 */
+export function fileLocation(lib: Library, f: FileEntry): string {
+  const known = f.folders.filter((id) => lib.folders.some((x) => x.id === id));
+  return known.length ? known.map((id) => pathLabel(lib, id)).join(", ") : "Unfiled";
 }
 
-/** 在資料夾（含子資料夾；null 是整個檔案庫）裡找名稱含有每個字的檔案與資料夾。 */
-export function searchFiles(lib: Library, folder: string | null, query: string): { folders: Folder[]; files: FileEntry[] } {
+/* ─── 範圍、搜尋、排序（和文獻庫的 `Scope`、`filterItems`、`sortItems` 一樣） ─── */
+
+/** 檔案庫頁左欄選的範圍：全部、沒有資料夾的、某個資料夾（含子資料夾）、垃圾桶。 */
+export type FileScope = { kind: "all" } | { kind: "unfiled" } | { kind: "trash" } | { kind: "folder"; id: string };
+
+export const fileScopeKey = (s: FileScope) => (s.kind === "folder" ? `f:${s.id}` : s.kind);
+
+/** 記住的範圍讀回來（舊版記的是資料夾 id 或 `f:id`，空的是全部）。 */
+export function fileScopeFrom(k: string | undefined, lib: Library): FileScope {
+  if (k === "unfiled" || k === "trash" || k === "all") return { kind: k };
+  const id = k?.startsWith("f:") ? k.slice(2) : k;
+  return id && lib.folders.some((f) => f.id === id) ? { kind: "folder", id } : { kind: "all" };
+}
+
+export function inFileScope(lib: Library, scope: FileScope): (f: FileEntry) => boolean {
+  switch (scope.kind) {
+    case "all":
+      return (f) => !f.trashed;
+    case "unfiled":
+      return (f) => !f.trashed && !f.folders.length;
+    case "trash":
+      return (f) => !!f.trashed;
+    case "folder": {
+      const ids = folderDescendants(lib, scope.id);
+      return (f) => !f.trashed && f.folders.some((x) => ids.has(x));
+    }
+  }
+}
+
+/** 搜尋：每個字都要出現在名稱或標籤裡（不分大小寫）。 */
+export function fileMatches(f: FileEntry, query: string): boolean {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const within = folder ? folderDescendants(lib, folder) : null;
-  const inside = (f: string | null) => (within ? !!f && within.has(f) : true);
-  const ok = (name: string) => words.every((w) => name.toLowerCase().includes(w));
-  return {
-    folders: lib.folders.filter((f) => f.id !== folder && inside(f.parent) && ok(f.name)).sort((a, b) => collate(a.name, b.name)),
-    files: lib.files.filter((f) => inside(f.folder) && ok(f.name)).sort((a, b) => collate(a.name, b.name)),
-  };
+  const hay = `${f.name}\n${f.tags.join(" ")}`.toLowerCase();
+  return words.every((w) => hay.includes(w));
 }
 
-/* ─── 修改 ─── */
+export function filterFiles(lib: Library, scope: FileScope, query: string, tags: string[]): FileEntry[] {
+  const ok = inFileScope(lib, scope);
+  return lib.files.filter((f) => ok(f) && tags.every((t) => f.tags.includes(t)) && fileMatches(f, query));
+}
+
+export type FileSortKey = "name" | "added" | "type" | "size";
+
+export function sortFiles(files: FileEntry[], key: FileSortKey, desc: boolean): FileEntry[] {
+  return [...files].sort((a, b) => {
+    const r =
+      key === "added" ? a.added - b.added : key === "size" ? a.size - b.size : key === "type" ? collate(typeName(a.name, a.src), typeName(b.name, b.src)) : 0;
+    const v = r || collate(a.name, b.name);
+    return desc ? -v : v;
+  });
+}
+
+/** 每個資料夾（含子資料夾）裡有幾個檔案（垃圾桶不算）。 */
+export function folderCounts(lib: Library): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const f of lib.folders) out.set(f.id, filterFiles(lib, { kind: "folder", id: f.id }, "", []).length);
+  return out;
+}
+
+/* ─── 修改：資料夾 ─── */
 
 export function addFolder(lib: Library, parent: string | null, name = "New folder", now = Date.now()): { lib: Library; id: string } {
   const id = newId("f");
-  const n = uniqueName(cleanName(name) || "New folder", namesIn(lib, parent));
+  const n = uniqueName(cleanName(name) || "New folder", siblingNames(lib, parent));
   return { lib: { ...lib, folders: [...lib.folders, { id, name: n, parent, added: now }] }, id };
 }
 
-/** 加入檔案（名稱重複就加 (2)、(3)…），回傳新的 id。 */
+/** 把資料夾搬到另一個資料夾底下（null 是最上層）；不能搬進自己的子資料夾，撞名加 (2)。 */
+export function moveFolder(lib: Library, id: string, parent: string | null): Library {
+  const folder = lib.folders.find((f) => f.id === id);
+  if (!folder || folder.parent === parent) return lib;
+  if (parent && (!lib.folders.some((f) => f.id === parent) || folderDescendants(lib, id).has(parent))) return lib;
+  const name = uniqueName(folder.name, siblingNames(lib, parent, id));
+  return { ...lib, folders: lib.folders.map((f) => (f.id === id ? { ...f, parent, name } : f)) };
+}
+
+/** 刪除資料夾（連同子資料夾）；檔案留在檔案庫，只是不再屬於它們（和刪收藏一樣）。 */
+export function removeFolder(lib: Library, id: string): Library {
+  const gone = folderDescendants(lib, id);
+  return {
+    ...lib,
+    folders: lib.folders.filter((f) => !gone.has(f.id)),
+    files: lib.files.map((f) => (f.folders.some((x) => gone.has(x)) ? { ...f, folders: f.folders.filter((x) => !gone.has(x)) } : f)),
+  };
+}
+
+/* ─── 修改：檔案 ─── */
+
+/** 加入檔案（放進資料夾，null 是 Unfiled），回傳新的 id。 */
 export function addFiles(
   lib: Library,
   folder: string | null,
   entries: { name: string; src: string; size?: number }[],
   now = Date.now(),
 ): { lib: Library; ids: string[] } {
-  const taken = namesIn(lib, folder);
-  const added: FileEntry[] = entries.map((e) => {
-    const name = uniqueName(cleanName(e.name) || "File", taken);
-    taken.push(name);
-    return { id: newId("F"), name, src: e.src, folder, size: e.size ?? 0, added: now, modified: now };
-  });
+  const into = folder && lib.folders.some((f) => f.id === folder) ? [folder] : [];
+  const added: FileEntry[] = entries.map((e) => ({
+    id: newId("F"),
+    name: cleanName(e.name) || "File",
+    src: e.src,
+    folders: into,
+    tags: [],
+    size: e.size ?? 0,
+    added: now,
+    modified: now,
+  }));
   return { lib: { ...lib, files: [...lib.files, ...added] }, ids: added.map((f) => f.id) };
 }
 
-/** 改名（檔案或資料夾）；空的或和同資料夾的其他東西撞名時加 (2)。 */
+/** 改名（檔案或資料夾）；空的不改，資料夾和同一層的撞名時加 (2)。 */
 export function renameEntry(lib: Library, id: string, name: string, now = Date.now()): Library {
   const n = cleanName(name);
   if (!n) return lib;
   const folder = lib.folders.find((f) => f.id === id);
   if (folder) {
-    const nm = uniqueName(n, namesIn(lib, folder.parent, id));
+    const nm = uniqueName(n, siblingNames(lib, folder.parent, id));
     return { ...lib, folders: lib.folders.map((f) => (f.id === id ? { ...f, name: nm } : f)) };
   }
-  const file = lib.files.find((f) => f.id === id);
-  if (!file) return lib;
-  const nm = uniqueName(n, namesIn(lib, file.folder, id));
-  return { ...lib, files: lib.files.map((f) => (f.id === id ? { ...f, name: nm, modified: now } : f)) };
+  return { ...lib, files: lib.files.map((f) => (f.id === id ? { ...f, name: n, modified: now } : f)) };
 }
 
-/** 搬到另一個資料夾（null 是最上層）；資料夾不能搬進自己或自己的子資料夾，名稱重複就加 (2)。 */
-export function moveEntries(lib: Library, ids: Iterable<string>, to: string | null, now = Date.now()): Library {
+const mapFiles = (lib: Library, ids: Iterable<string>, fn: (f: FileEntry) => FileEntry): Library => {
   const set = new Set(ids);
-  if (to && !lib.folders.some((f) => f.id === to)) return lib;
-  let out = lib;
-  for (const id of set) {
-    const folder = out.folders.find((f) => f.id === id);
-    if (folder) {
-      if (folder.parent === to || (to && folderDescendants(out, id).has(to))) continue;
-      const name = uniqueName(folder.name, namesIn(out, to, id));
-      out = { ...out, folders: out.folders.map((f) => (f.id === id ? { ...f, parent: to, name } : f)) };
-      continue;
-    }
-    const file = out.files.find((f) => f.id === id);
-    if (!file || file.folder === to) continue;
-    const name = uniqueName(file.name, namesIn(out, to, id));
-    out = { ...out, files: out.files.map((f) => (f.id === id ? { ...f, folder: to, name, modified: now } : f)) };
-  }
+  return { ...lib, files: lib.files.map((f) => (set.has(f.id) ? fn(f) : f)) };
+};
+
+/** 放進資料夾（原本的資料夾保留，像加進收藏）。 */
+export function addToFolder(lib: Library, ids: Iterable<string>, folder: string, now = Date.now()): Library {
+  if (!lib.folders.some((f) => f.id === folder)) return lib;
+  return mapFiles(lib, ids, (f) => (f.folders.includes(folder) ? f : { ...f, folders: [...f.folders, folder], modified: now }));
+}
+
+export function removeFromFolder(lib: Library, ids: Iterable<string>, folder: string, now = Date.now()): Library {
+  return mapFiles(lib, ids, (f) => (f.folders.includes(folder) ? { ...f, folders: f.folders.filter((x) => x !== folder), modified: now } : f));
+}
+
+/** 從一個資料夾搬到另一個（剪下貼上）：from 是 null 時只加進 to；to 是 null 時只從 from 拿掉。 */
+export function moveFiles(lib: Library, ids: Iterable<string>, from: string | null, to: string | null, now = Date.now()): Library {
+  if (from === to) return lib;
+  const list = [...ids];
+  let out = from ? removeFromFolder(lib, list, from, now) : lib;
+  if (to) out = addToFolder(out, list, to, now);
   return out;
 }
 
-/** 刪除檔案與資料夾（資料夾連同裡面的東西）。`media/` 裡的檔案留著（可能還有別的地方用到）。 */
-export function removeEntries(lib: Library, ids: Iterable<string>): Library {
+export function setFilesTrashed(lib: Library, ids: Iterable<string>, trashed: boolean, now = Date.now()): Library {
+  return mapFiles(lib, ids, (f) => {
+    if (!!f.trashed === trashed) return f;
+    const { trashed: _t, ...rest } = f;
+    return trashed ? { ...rest, trashed: true, modified: now } : { ...rest, modified: now };
+  });
+}
+
+/**
+ * 永久刪除紀錄，連同條目上連到它們的附件（附件就存在檔案庫，不然下次 `linkAttachments` 又會補回來）。
+ * `media/` 裡的檔案留著（可能還有別的地方用到）。
+ */
+export function deleteFiles(lib: Library, ids: Iterable<string>, now = Date.now()): Library {
   const set = new Set(ids);
-  const gone = new Set<string>();
-  for (const f of lib.folders) if (set.has(f.id)) for (const d of folderDescendants(lib, f.id)) gone.add(d);
+  if (!set.size) return lib;
   return {
     ...lib,
-    folders: lib.folders.filter((f) => !gone.has(f.id)),
-    files: lib.files.filter((f) => !set.has(f.id) && !(f.folder && gone.has(f.folder))),
+    files: lib.files.filter((f) => !set.has(f.id)),
+    items: lib.items.map((i) =>
+      i.attachments.some((a) => a.file && set.has(a.file)) ? { ...i, attachments: i.attachments.filter((a) => !(a.file && set.has(a.file))), modified: now } : i,
+    ),
   };
 }
 
-/** 要刪除的東西裡共有幾個檔案（確認對話框用）。 */
-export function countRemoved(lib: Library, ids: Iterable<string>): { folders: number; files: number } {
-  const set = new Set(ids);
-  const gone = new Set<string>();
-  for (const f of lib.folders) if (set.has(f.id)) for (const d of folderDescendants(lib, f.id)) gone.add(d);
-  return { folders: gone.size, files: lib.files.filter((f) => set.has(f.id) || (f.folder && gone.has(f.folder))).length };
+export function emptyFileTrash(lib: Library): Library {
+  return deleteFiles(
+    lib,
+    lib.files.filter((f) => f.trashed).map((f) => f.id),
+  );
+}
+
+/* ─── 附件與檔案庫 ─── */
+
+/** 連到這個檔案的條目附件（垃圾桶裡的條目也算）。 */
+export function attachedTo(lib: Library, fileId: string): { item: Item; att: Attachment }[] {
+  const out: { item: Item; att: Attachment }[] = [];
+  for (const item of lib.items) for (const att of item.attachments) if (att.file === fileId) out.push({ item, att });
+  return out;
+}
+
+/** 有沒有還沒連到檔案庫的檔案附件（舊資料、剛加的附件）。 */
+export function hasUnlinked(lib: Library): boolean {
+  const ids = new Set(lib.files.map((f) => f.id));
+  return lib.items.some((i) => i.attachments.some((a) => a.kind === "file" && !(a.file && ids.has(a.file))));
+}
+
+/**
+ * 每個檔案附件都存在檔案庫：還沒連的附件找同樣內容的檔案（`fingerprint`；在垃圾桶裡就拿出來），
+ * 找不到就在 Unfiled 新增一筆（名稱與加入時間跟附件一樣）。沒有要改的就回傳原本的 lib。
+ */
+export function linkAttachments(lib: Library, now = Date.now()): Library {
+  if (!hasUnlinked(lib)) return lib;
+  const files = [...lib.files];
+  const byId = new Map(files.map((f) => [f.id, f]));
+  const byPrint = new Map<string, FileEntry>();
+  // 同樣內容有好幾筆時：優先不在垃圾桶的、再來是最早的
+  for (const f of [...files].sort((a, b) => Number(!!a.trashed) - Number(!!b.trashed) || a.added - b.added)) {
+    const k = fingerprint(f.src);
+    if (!byPrint.has(k)) byPrint.set(k, f);
+  }
+  const restore = new Set<string>();
+  const items = lib.items.map((item) => {
+    let changed = false;
+    const attachments = item.attachments.map((a) => {
+      if (a.kind !== "file" || (a.file && byId.has(a.file))) return a;
+      changed = true;
+      const k = fingerprint(a.src);
+      let f = byPrint.get(k);
+      if (!f) {
+        f = { id: newId("F"), name: cleanName(a.name) || "File", src: a.src, folders: [], tags: [], size: 0, added: a.added || now, modified: now };
+        files.push(f);
+        byId.set(f.id, f);
+        byPrint.set(k, f);
+      } else if (f.trashed) restore.add(f.id);
+      return { ...a, file: f.id };
+    });
+    return changed ? { ...item, attachments } : item;
+  });
+  const out = { ...lib, items, files };
+  return restore.size ? setFilesTrashed(out, restore, false, now) : out;
+}
+
+/** 把檔案庫的檔案附加到條目（同一個條目已經有同樣內容的附件就不再加）；在垃圾桶裡就拿出來。 */
+export function attachFile(lib: Library, itemId: string, fileId: string, now = Date.now()): Library {
+  const f = lib.files.find((x) => x.id === fileId);
+  const item = lib.items.find((i) => i.id === itemId);
+  if (!f || !item) return lib;
+  const k = fingerprint(f.src);
+  if (item.attachments.some((a) => a.file === f.id || (a.kind === "file" && fingerprint(a.src) === k))) return f.trashed ? setFilesTrashed(lib, [f.id], false, now) : lib;
+  const att: Attachment = { id: newId("a"), name: f.name, src: f.src, kind: "file", added: now, file: f.id };
+  const out = { ...lib, items: lib.items.map((i) => (i.id === itemId ? { ...i, attachments: [...i.attachments, att], modified: now } : i)) };
+  return f.trashed ? setFilesTrashed(out, [f.id], false, now) : out;
+}
+
+/* ─── 標籤（和條目的標籤分開算） ─── */
+
+export function setFileTags(lib: Library, id: string, tags: string[], now = Date.now()): Library {
+  return mapFiles(lib, [id], (f) => ({ ...f, tags: uniq(tags.map((t) => t.trim()).filter(Boolean)), modified: now }));
+}
+
+/** 檔案庫所有標籤與用到的檔案數（垃圾桶不算），依名稱排。 */
+export function fileTags(lib: Library): { tag: string; count: number }[] {
+  const m = new Map<string, number>();
+  for (const f of lib.files) if (!f.trashed) for (const t of f.tags) m.set(t, (m.get(t) ?? 0) + 1);
+  return [...m].map(([tag, count]) => ({ tag, count })).sort((a, b) => a.tag.localeCompare(b.tag, "zh-Hant"));
+}
+
+/** 改標籤名稱（改成已有的就是合併）；空字串是刪掉標籤。 */
+export function renameFileTag(lib: Library, from: string, to: string, now = Date.now()): Library {
+  const t = to.trim();
+  return {
+    ...lib,
+    files: lib.files.map((f) => (f.tags.includes(from) ? { ...f, tags: uniq(f.tags.flatMap((x) => (x === from ? (t ? [t] : []) : [x]))), modified: now } : f)),
+  };
 }
 
 /* ─── 重複內容 ─── */
@@ -286,16 +458,21 @@ export type Place =
 export const placeName = (p: Place) => (p.kind === "file" ? p.file.name : p.att.name);
 export const placeKey = (p: Place) => (p.kind === "file" ? `F:${p.file.id}` : `A:${p.item.id}:${p.att.id}`);
 
-/** 顯示用的位置：`My Files › 研究` 或 `Attached to “標題”`。 */
+/** 顯示用的位置：`研究 › 2026`、`Unfiled` 或 `Attached to “標題”`。 */
 export function placeLabel(lib: Library, p: Place): string {
-  if (p.kind === "file") return pathLabel(lib, p.file.folder);
+  if (p.kind === "file") return `${fileLocation(lib, p.file)}${p.file.trashed ? " (in the Trash)" : ""}`;
   return `Attached to “${p.item.title || "Untitled"}”${p.item.trashed ? " (in the Trash)" : ""}`;
 }
 
-/** 文獻庫裡所有放了檔案的地方（連結附件不算，同一個網址可以出現在很多條目）。 */
-export function allPlaces(lib: Library): Place[] {
+/**
+ * 文獻庫裡所有放了檔案的地方（連結附件不算，同一個網址可以出現在很多條目）。
+ * `copies`：只算各自存放的副本——連到檔案庫的附件就是那一筆檔案，不算另一份（重複偵測用）。
+ */
+export function allPlaces(lib: Library, copies = false): Place[] {
   const out: Place[] = lib.files.map((file) => ({ kind: "file", file }));
-  for (const item of lib.items) for (const att of item.attachments) if (att.kind === "file") out.push({ kind: "attachment", item, att });
+  const ids = copies ? new Set(lib.files.map((f) => f.id)) : null;
+  for (const item of lib.items)
+    for (const att of item.attachments) if (att.kind === "file" && !(ids && att.file && ids.has(att.file))) out.push({ kind: "attachment", item, att });
   return out;
 }
 
@@ -312,9 +489,10 @@ export function checkDuplicates<T extends { name: string; src: string }>(
 ): { entry: T; existing: Place[]; sameBatch: boolean }[] {
   const seen = new Map<string, T>();
   const out: { entry: T; existing: Place[]; sameBatch: boolean }[] = [];
+  const places = allPlaces(lib, true);
   for (const e of entries) {
     const fp = fingerprint(e.src);
-    const existing = locate(lib, e.src);
+    const existing = places.filter((p) => fingerprint(p.kind === "file" ? p.file.src : p.att.src) === fp);
     if (existing.length || seen.has(fp)) out.push({ entry: e, existing, sameBatch: !existing.length });
     else seen.set(fp, e);
   }
@@ -324,7 +502,9 @@ export function checkDuplicates<T extends { name: string; src: string }>(
 /** 整個文獻庫裡內容相同的群組（兩個以上），每組依加入時間排（最早的在前）。 */
 export function duplicateGroups(lib: Library): Place[][] {
   const m = new Map<string, Place[]>();
-  for (const p of allPlaces(lib)) {
+  // 垃圾桶裡的檔案不算（移到垃圾桶就是處理掉了）；連到檔案庫的附件是同一筆
+  for (const p of allPlaces(lib, true)) {
+    if (p.kind === "file" && p.file.trashed) continue;
     const fp = fingerprint(p.kind === "file" ? p.file.src : p.att.src);
     const g = m.get(fp);
     if (g) g.push(p);
@@ -337,15 +517,15 @@ export function duplicateGroups(lib: Library): Place[][] {
     .sort((a, b) => collate(placeName(a[0]), placeName(b[0])));
 }
 
-/** 一組重複裡要拿掉的檔案庫檔案：留下最早的一個（附件不動；組裡已經有附件就留最早的檔案）。 */
+/** 一組重複裡要拿掉的檔案庫檔案：留下最早的一個（附件不動、垃圾桶裡的不算；組裡已經有附件就留最早的檔案）。 */
 export function extraCopies(group: Place[]): FileEntry[] {
-  const files = group.filter((p): p is Extract<Place, { kind: "file" }> => p.kind === "file").map((p) => p.file);
+  const files = group.filter((p): p is Extract<Place, { kind: "file" }> => p.kind === "file" && !p.file.trashed).map((p) => p.file);
   return files.slice(1);
 }
 
-/** 拿掉某個附件（重複工具用）。 */
+/** 拿掉一份（重複工具用）：檔案移到垃圾桶，附件從條目拿掉。 */
 export function removePlace(lib: Library, p: Place, now = Date.now()): Library {
-  if (p.kind === "file") return removeEntries(lib, [p.file.id]);
+  if (p.kind === "file") return setFilesTrashed(lib, [p.file.id], true, now);
   return {
     ...lib,
     items: lib.items.map((i) => (i.id === p.item.id ? { ...i, attachments: i.attachments.filter((a) => a.id !== p.att.id), modified: now } : i)),

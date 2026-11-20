@@ -1,7 +1,7 @@
 import { cleanStyles, type SavedStyle } from "../editor/blockStyle";
 import { cleanDeck, isDefaultDeck, type DeckSetup } from "./deckSetup";
 import { cleanAnim, trimAnim, type SlideAnim } from "./slideAnim";
-import { cleanPage, isDefaultPage, type PageSetup } from "./pageSetup";
+import { cleanLook, cleanPage, isDefaultLook, isDefaultPage, type NoteLook, type PageSetup } from "./pageSetup";
 import { fromDatabase, newWorkbook, parseWorkbook, serializeWorkbook } from "../sheet/model";
 import { boardData, emptyBoard, newId, parseBoard, type Board, type Card } from "./board";
 import { appendDiagram, cardsToShapes, diagramData, diagramFrom, parseDiagram, serializeDiagram, starterDiagram } from "./draw";
@@ -46,6 +46,8 @@ export interface DockDoc {
   anim?: SlideAnim[];
   /** Word 的版面設定（`pageSetup.ts`；沒改過就不寫） */
   page?: PageSetup;
+  /** 筆記的文字大小與頁面顏色（`pageSetup.ts` 的 `NoteLook`；沒改過就不寫） */
+  look?: NoteLook;
   /** 簡報整份的設定：主題、頁碼、頁尾（`deckSetup.ts`；沒改過就不寫） */
   deck?: DeckSetup;
   /** 舊版每份文件一份的已存區塊樣式（現在所有文件共用 `styleLibrary.ts`；打開時併過去並拿掉這裡的） */
@@ -105,6 +107,8 @@ export function parseFile(json: string): DeskFile {
       const doc: DockDoc = { id: o.id as string, title, kind, content };
       if (anim.length) doc.anim = anim;
       if (page && !isDefaultPage(page)) doc.page = page;
+      const look = kind === "note" && o.look ? cleanLook(o.look) : null;
+      if (look && !isDefaultLook(look)) doc.look = look;
       const deck = kind === "slides" ? cleanDeck(o.deck) : {};
       if (!isDefaultDeck(deck)) doc.deck = deck;
       if (typeof o.folder === "string" && o.folder) doc.folder = o.folder;
@@ -167,6 +171,7 @@ function docData(d: DockDoc) {
                   kind: d.kind,
                   content: d.content,
                   ...(d.kind === "word" && d.page && !isDefaultPage(d.page) ? { page: d.page } : {}),
+                  ...(d.kind === "note" && !isDefaultLook(d.look) ? { look: cleanLook(d.look) } : {}),
                   ...(d.kind === "slides" && d.anim && trimAnim(d.anim).length ? { anim: trimAnim(d.anim) } : {}),
                   ...(d.kind === "slides" && !isDefaultDeck(d.deck) ? { deck: cleanDeck(d.deck) } : {}),
                   ...((d.kind === "word" || d.kind === "slides") && d.styles?.length ? { styles: d.styles.map((x) => ({ name: x.name, css: x.css })) } : {}),

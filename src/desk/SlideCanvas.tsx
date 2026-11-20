@@ -3,17 +3,21 @@ import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type
 import { DeckContext, slideStyle } from "./deckSetup";
 import { AlignOverlay } from "../align/AlignMarks";
 import { snapMove, snapResizeGrid, type Guide, type Measure } from "../align/align";
-import { editorBus, Editor, Swatches } from "../editor/Editor";
+import { editorBus, Editor } from "../editor/Editor";
 import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, BackIcon, FrontIcon, TrashIcon } from "../editor/icons";
-import type { Color } from "../editor/inline";
+import { inkCss, type Ink } from "../editor/inline";
 import { renderMarkdown } from "../editor/markdown";
-import { PURIFY, mediaUrl, resolveMedia, saveMedia } from "../editor/media";
-import { Field, Section, Seg, SegBtn } from "./DocChrome";
+import { PURIFY, mediaUrl, resolveMedia } from "../editor/media";
+import { pickImages, type ImageTab } from "../drawer/drawerImages";
+import { ColorWell, Field, Section, Seg, SegBtn } from "./DocChrome";
 import { sameSlide } from "./file";
 import {
   alignFrames,
   arrange,
+  dashArray,
+  DEFAULT_LW,
   duplicateBoxes,
+  LINE_DASHES,
   MAIN,
   MAIN_FRAME,
   moveBoxes,
@@ -22,14 +26,18 @@ import {
   removeBoxes,
   sameFrame,
   shapePath,
+  SHAPES,
   SLIDE_H,
   SLIDE_W,
   updateBoxes,
+  withShape,
   type AlignTo,
   type Frame,
+  type ShapeKind,
   type SlideBox,
 } from "./slideBoxes";
 import type { SlideAnim } from "./slideAnim";
+import { baseFrame, masterOf, PLACEHOLDER_MD, type SlideMaster } from "./slideMasters";
 
 /**
  * 投影片上的物件（參考 PowerPoint）：主文字方塊（這張投影片的 Markdown）＋文字方塊、圖片、形狀。
@@ -42,6 +50,9 @@ import type { SlideAnim } from "./slideAnim";
  * - `BoxFormat`：檢閱器裡物件的樣式與排列。
  *
  * 座標都是投影片的設計尺寸 960×540；畫面上整張投影片用 transform 縮放。
+ *
+ * 母片（`slideMasters.ts`）：投影片用的母片的物件畫在最下層（`MasterLayer`，不能選），主文字方塊沒搬過就在母片的位置。
+ * 編輯母片時（`layout`）借用同一個畫布：母片的物件就是這裡的物件，主文字方塊只顯示範例文字、可以搬移改大小。
  */
 
 const html = (md: string) => DOMPurify.sanitize(resolveMedia(renderMarkdown(md)), PURIFY) as string;
@@ -52,7 +63,8 @@ export const isTitleSlide = (source: string) => {
   return /^#\s/.test(t) && t.split("\n").filter((l) => l.trim()).length <= 3;
 };
 
-export const mainFrame = (meta: SlideAnim | undefined): Frame => meta?.main ?? MAIN_FRAME;
+/** 主文字方塊的位置：投影片自己的，沒有就是母片的（母片沒有是預設版面） */
+export const mainFrame = (meta: SlideAnim | undefined, master?: SlideMaster | null): Frame => meta?.main ?? baseFrame(master);
 
 /** 複製的物件（貼上時換新的代號） */
 let boxClip: SlideBox[] | null = null;
@@ -60,32 +72,45 @@ let boxClip: SlideBox[] | null = null;
 const BOX_CLIP_TEXT = "[Banyan slide objects]";
 
 const frameStyle = (f: Frame & { rot?: number }) => ({ left: f.x, top: f.y, width: f.w, height: f.h, transform: f.rot ? `rotate(${f.rot}deg)` : undefined });
-const fillVar = (c: Color | null | undefined) => (c ? `var(--tc-${c})` : "none");
+const fillVar = (c: Ink | null | undefined) => (c ? inkCss("tc", c) : "none");
 
 /** 圖片、形狀的畫面（編輯與顯示共用） */
 function BoxBody(props: { b: SlideBox }) {
   const { b } = props;
   if (b.kind === "image")
     return <img className="sl-img" src={mediaUrl(b.src ?? "")} alt={b.alt ?? ""} draggable={false} style={{ objectFit: b.fit ?? "contain" }} />;
-  if (b.kind === "shape")
+  if (b.kind === "shape") {
+    const lw = b.line ? (b.lw ?? DEFAULT_LW) : 0;
     return (
       <svg className="sl-shape" width={b.w} height={b.h} viewBox={`0 0 ${b.w} ${b.h}`} aria-hidden>
-        <path d={shapePath(b.shape ?? "rect", b.w, b.h)} style={{ fill: fillVar(b.fill === undefined ? "blue" : b.fill), stroke: fillVar(b.line), strokeWidth: b.line ? 3 : 0 }} />
+        <path
+          d={shapePath(b.shape ?? "rect", b.w, b.h)}
+          style={{ fill: fillVar(b.fill === undefined ? "blue" : b.fill), stroke: fillVar(b.line), strokeWidth: lw, strokeDasharray: dashArray(b.dash, lw), strokeLinecap: b.dash === "dot" ? "round" : undefined }}
+        />
       </svg>
     );
+  }
   return null;
 }
 
-/** 文字方塊的底色、框線（文字方塊預設沒有） */
-const textBoxStyle = (b: SlideBox) => ({
-  background: b.fill ? `var(--bg-${b.fill})` : undefined,
-  boxShadow: b.line ? `inset 0 0 0 3px var(--tc-${b.line})` : undefined,
+const CSS_DASH = { dash: "dashed", dot: "dotted" } as const;
+
+/** 物件的外觀：不透明度、陰影；文字方塊與圖片的框線（形狀的框線畫在 SVG 裡）、文字方塊的底色 */
+export const boxLook = (b: SlideBox): React.CSSProperties => ({
+  opacity: b.opacity ? b.opacity / 100 : undefined,
+  filter: b.shadow ? "drop-shadow(0 6px 10px rgba(0, 0, 0, 0.28))" : undefined,
+  ...(b.kind === "shape"
+    ? {}
+    : {
+        background: b.kind === "text" && b.fill ? inkCss("bg", b.fill) : undefined,
+        border: b.line ? `${b.lw ?? DEFAULT_LW}px ${b.dash ? CSS_DASH[b.dash] : "solid"} ${inkCss("tc", b.line)}` : undefined,
+      }),
 });
 
-/** 頁尾文字與頁碼（簡報設定開著才有） */
-function SlideFoot(props: { num?: number }) {
+/** 頁尾文字與頁碼（簡報設定開著才有；母片可以關掉） */
+function SlideFoot(props: { num?: number; hide?: boolean }) {
   const deck = useContext(DeckContext);
-  if (!deck.footer && !(deck.numbers && props.num)) return null;
+  if (props.hide || (!deck.footer && !(deck.numbers && props.num))) return null;
   return (
     <div className="sl-foot" aria-hidden>
       <span>{deck.footer}</span>
@@ -94,56 +119,80 @@ function SlideFoot(props: { num?: number }) {
   );
 }
 
-/** 一張投影片的畫面（縮圖、放映）：主文字方塊＋物件；contentRef 是主文字方塊的內容（逐項顯示用） */
-export function SlideView(props: { source: string; meta?: SlideAnim; width: number; num?: number; contentRef?: React.Ref<HTMLDivElement> }) {
-  const markup = useMemo(() => html(props.source), [props.source]);
+/** 母片的物件（投影片內容的下面，不能選；不加 data-box，逐項顯示才不會算到） */
+export function MasterLayer(props: { master: SlideMaster | null | undefined }) {
+  const boxes = props.master?.boxes;
+  if (!boxes?.length) return null;
+  return (
+    <div className="sl-master" aria-hidden>
+      {boxes.map((b) =>
+        b.kind === "text" ? (
+          <div key={b.id} className="sl-box sl-textbox" style={{ ...frameStyle(b), ...boxLook(b) }}>
+            <div className="content slide-content" dangerouslySetInnerHTML={{ __html: html(b.text ?? "") }} />
+          </div>
+        ) : (
+          <div key={b.id} className={`sl-box sl-${b.kind}`} style={{ ...frameStyle(b), ...boxLook(b) }}>
+            <BoxBody b={b} />
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
+/**
+ * 一張投影片的畫面（縮圖、放映）：母片的物件＋主文字方塊＋物件；contentRef 是主文字方塊的內容（逐項顯示用）。
+ * layout：畫的是這個母片本身（母片清單的縮圖；meta 是 `masterAsMeta`，主文字方塊顯示範例文字）。
+ */
+export function SlideView(props: { source: string; meta?: SlideAnim; width: number; num?: number; contentRef?: React.Ref<HTMLDivElement>; layout?: SlideMaster }) {
+  const source = props.layout ? PLACEHOLDER_MD : props.source;
+  const markup = useMemo(() => html(source), [source]);
   const boxes = props.meta?.boxes ?? [];
   const deck = useContext(DeckContext);
+  const master = props.layout ? null : (masterOf(deck.masters, props.meta) ?? null);
   return (
     <div className="slide-frame" style={{ width: props.width, height: (props.width * SLIDE_H) / SLIDE_W }}>
-      <div className="slide" style={{ zoom: props.width / SLIDE_W, ...slideStyle(deck, props.meta) }}>
-        <div className={`sl-box sl-main${isTitleSlide(props.source) ? " title-slide" : ""}`} style={frameStyle(mainFrame(props.meta))}>
+      <div className="slide" style={{ zoom: props.width / SLIDE_W, ...slideStyle(deck, props.meta, master) }}>
+        <MasterLayer master={master} />
+        <div className={`sl-box sl-main${props.layout ? " sl-placeholder" : ""}${isTitleSlide(source) ? " title-slide" : ""}`} style={frameStyle(mainFrame(props.meta, master))}>
           <div className="content slide-content" ref={props.contentRef} dangerouslySetInnerHTML={{ __html: markup }} />
         </div>
         {boxes.map((b) =>
           b.kind === "text" ? (
-            <div key={b.id} className="sl-box sl-textbox" data-box={b.id} style={{ ...frameStyle(b), ...textBoxStyle(b) }}>
+            <div key={b.id} className="sl-box sl-textbox" data-box={b.id} style={{ ...frameStyle(b), ...boxLook(b) }}>
               <div className="content slide-content" dangerouslySetInnerHTML={{ __html: html(b.text ?? "") }} />
             </div>
           ) : (
-            <div key={b.id} className={`sl-box sl-${b.kind}`} data-box={b.id} style={frameStyle(b)}>
+            <div key={b.id} className={`sl-box sl-${b.kind}`} data-box={b.id} style={{ ...frameStyle(b), ...boxLook(b) }}>
               <BoxBody b={b} />
             </div>
           ),
         )}
-        <SlideFoot num={props.num} />
+        <SlideFoot num={props.num} hide={!!(props.layout ?? master)?.noFoot} />
       </div>
     </div>
   );
 }
 
-/** 選一張圖片存進 media/，回傳圖片物件（放在投影片中間，照原圖比例） */
-export function pickImageBox(boxes: SlideBox[], onBox: (b: SlideBox) => void) {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "image/*";
-  input.onchange = async () => {
-    const f = input.files?.[0];
-    if (!f) return;
-    try {
-      const src = await saveMedia(f);
-      const natural = await new Promise<{ w: number; h: number } | null>((res) => {
-        const img = new Image();
-        img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
-        img.onerror = () => res(null);
-        img.src = mediaUrl(src);
-      });
-      onBox(newImageBox(boxes, src, natural, f.name.replace(/\.[^.]+$/, "")));
-    } catch (err) {
-      console.error("Couldn't add the image", err);
-    }
-  };
-  input.click();
+/** 圖片原本的大小（讀不到是 null） */
+function naturalSize(src: string): Promise<{ w: number; h: number } | null> {
+  return new Promise((res) => {
+    const img = new Image();
+    img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => res(null);
+    img.src = mediaUrl(src);
+  });
+}
+
+/**
+ * 插入圖片的對話框（Upload、Drawer、By URL）選好的圖片變成圖片物件（放在投影片中間，照原圖比例；
+ * 好幾張時一張一張錯開）
+ */
+export async function pickImageBoxes(tab: ImageTab, boxes: SlideBox[], onBoxes: (bs: SlideBox[]) => void) {
+  const list = await pickImages({ tab });
+  const out: SlideBox[] = [];
+  for (const img of list) out.push(newImageBox([...boxes, ...out], img.src, await naturalSize(img.src), img.alt));
+  onBoxes(out);
 }
 
 type Live = { ids: string[]; dx: number; dy: number } | { id: string; frame: Frame } | null;
@@ -164,12 +213,17 @@ export function SlideCanvas(props: {
   onDeleteBody: (objs: string[]) => void;
   /** 第幾張（頁碼） */
   num?: number;
+  /** 編輯這個母片（meta 是 `masterAsMeta`）：主文字方塊只顯示範例文字，不能刪 */
+  layout?: SlideMaster;
 }) {
-  const { meta, sel, onSel, onMeta } = props;
+  const { meta, sel, onSel, onMeta, layout } = props;
   const deck = useContext(DeckContext);
   const scale = props.width / SLIDE_W;
   const boxes = meta.boxes ?? [];
-  const main = mainFrame(meta);
+  const master = layout ? null : (masterOf(deck.masters, meta) ?? null);
+  /** 主文字方塊沒搬過的位置（跟它一樣就不存 main） */
+  const base = baseFrame(master);
+  const main = mainFrame(meta, master);
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -189,16 +243,18 @@ export function SlideCanvas(props: {
 
   /** 物件現在的位置（拖曳中的照拖曳的算） */
   const frameOf = (id: string): Frame & { rot?: number } => {
-    const base = id === MAIN ? main : (boxes.find((b) => b.id === id) ?? MAIN_FRAME);
+    const base = id === MAIN ? main : (boxes.find((b) => b.id === id) ?? main);
     const rot = (base as SlideBox).rot;
     if (live && "ids" in live && live.ids.includes(id)) return { x: base.x + live.dx, y: base.y + live.dy, w: base.w, h: base.h, rot };
     if (live && "id" in live && live.id === id) return { ...live.frame, rot };
     return { x: base.x, y: base.y, w: base.w, h: base.h, rot };
   };
   // 主文字方塊刪掉了（又沒有內容）就不畫
-  const hasBody = !meta.noBody || !!props.source.trim();
+  const hasBody = !!layout || !meta.noBody || !!props.source.trim();
   const allIds = [...(hasBody ? [MAIN] : []), ...boxes.map((b) => b.id)];
   const slideRect = { x: 0, y: 0, w: SLIDE_W, h: SLIDE_H };
+  /** 母片的物件也當成對齊目標 */
+  const masterFrames: Frame[] = (master?.boxes ?? []).map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h }));
 
   /** 結束文字編輯（點到別的物件、空白處時；原本的事件被擋下來，編輯器自己不會知道） */
   const blurEditing = () => {
@@ -211,7 +267,7 @@ export function SlideCanvas(props: {
     const out: SlideAnim = { ...m, boxes: (m.boxes ?? []).map((b) => (frames.has(b.id) ? { ...b, ...frames.get(b.id)! } : b)) };
     const mf = frames.get(MAIN);
     if (mf) {
-      if (sameFrame(mf, MAIN_FRAME)) delete out.main;
+      if (sameFrame(mf, base)) delete out.main;
       else out.main = { ...mf };
     }
     return out;
@@ -228,7 +284,7 @@ export function SlideCanvas(props: {
       w: Math.max(...frames.map((f) => f.x + f.w)) - Math.min(...frames.map((f) => f.x)),
       h: Math.max(...frames.map((f) => f.y + f.h)) - Math.min(...frames.map((f) => f.y)),
     };
-    const others = [slideRect, ...allIds.filter((id) => !ids.includes(id)).map(frameOf)];
+    const others = [slideRect, ...masterFrames, ...allIds.filter((id) => !ids.includes(id)).map(frameOf)];
     let moved = false;
     let last = { dx: 0, dy: 0 };
     const move = (ev: PointerEvent) => {
@@ -264,7 +320,7 @@ export function SlideCanvas(props: {
     const y0 = e.clientY;
     const base = frameOf(id);
     const keep = boxes.find((b) => b.id === id)?.kind === "image" && h.length === 2;
-    const others = [slideRect, ...allIds.filter((x) => x !== id).map(frameOf)];
+    const others = [slideRect, ...masterFrames, ...allIds.filter((x) => x !== id).map(frameOf)];
     const min = 20;
     let cur = base;
     const move = (ev: PointerEvent) => {
@@ -385,11 +441,11 @@ export function SlideCanvas(props: {
   };
 
   // 選了物件（沒在編輯文字、沒選編輯器裡的區塊）時的按鍵
-  const live2 = useRef({ sel, boxes, onMeta, onSel, onDeleteBody: props.onDeleteBody });
-  live2.current = { sel, boxes, onMeta, onSel, onDeleteBody: props.onDeleteBody };
+  const live2 = useRef({ sel, boxes, onMeta, onSel, onDeleteBody: props.onDeleteBody, base, layout: !!layout });
+  live2.current = { sel, boxes, onMeta, onSel, onDeleteBody: props.onDeleteBody, base, layout: !!layout };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      const { sel, onMeta, onSel, onDeleteBody } = live2.current;
+      const { sel, onMeta, onSel, onDeleteBody, base, layout } = live2.current;
       if (!sel.length || e.defaultPrevented) return;
       const a = document.activeElement as HTMLElement | null;
       if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.closest(".deck-strip"))) return;
@@ -400,7 +456,7 @@ export function SlideCanvas(props: {
       const step = e.shiftKey ? 10 : 1;
       const arrows: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (sel.includes(MAIN)) onDeleteBody(objs);
+        if (sel.includes(MAIN) && !layout) onDeleteBody(objs);
         else if (objs.length) onMeta((m) => ({ ...m, boxes: removeBoxes(m.boxes ?? [], objs) }));
         else return;
         onSel([]);
@@ -409,9 +465,9 @@ export function SlideCanvas(props: {
         onMeta((m) => {
           const out: SlideAnim = { ...m, boxes: moveBoxes(m.boxes ?? [], objs, dx, dy) };
           if (sel.includes(MAIN)) {
-            const f = mainFrame(m);
+            const f = m.main ?? base;
             const nf = { ...f, x: f.x + dx, y: f.y + dy };
-            if (sameFrame(nf, MAIN_FRAME)) delete out.main;
+            if (sameFrame(nf, base)) delete out.main;
             else out.main = nf;
           }
           return out;
@@ -518,17 +574,22 @@ export function SlideCanvas(props: {
   return (
     <>
       <div className="slide-frame deck-canvas" style={{ width: props.width, height: props.width * (SLIDE_H / SLIDE_W) }} onPointerDown={bgDown}>
-        <div ref={root} className="slide slide-edit" style={{ transform: `scale(${scale})`, ...slideStyle(deck, meta) }}>
+        <div ref={root} className={`slide slide-edit${layout ? " slide-layout" : ""}`} style={{ transform: `scale(${scale})`, ...slideStyle(deck, meta, master) }}>
+          <MasterLayer master={master} />
           {hasBody && (
           <TextShell
             id={MAIN}
             frame={frameOf(MAIN)}
-            cls={`sl-main${isTitleSlide(props.source) ? " title-slide" : ""}`}
+            cls={layout ? "sl-main sl-placeholder" : `sl-main${isTitleSlide(props.source) ? " title-slide" : ""}`}
             on={shownSel.includes(MAIN)}
             edge={edge}
             onDown={textDown}
           >
-            <TextEditor value={props.source} onChange={props.onText} placeholder="Click to add a title — start with “# ” for a title slide" main />
+            {layout ? (
+              <div className="content slide-content" dangerouslySetInnerHTML={{ __html: html(PLACEHOLDER_MD) }} />
+            ) : (
+              <TextEditor value={props.source} onChange={props.onText} placeholder="Click to add a title — start with “# ” for a title slide" main />
+            )}
           </TextShell>
           )}
           {boxes.map((b) =>
@@ -538,7 +599,7 @@ export function SlideCanvas(props: {
                 id={b.id}
                 frame={frameOf(b.id)}
                 cls="sl-textbox"
-                style={textBoxStyle(b)}
+                style={boxLook(b)}
                 on={shownSel.includes(b.id)}
                 edge={edge}
                 onDown={textDown}
@@ -555,7 +616,7 @@ export function SlideCanvas(props: {
                 key={b.id}
                 className={`sl-box sl-${b.kind}${shownSel.includes(b.id) ? " on" : ""}`}
                 data-box={b.id}
-                style={frameStyle(frameOf(b.id))}
+                style={{ ...frameStyle(frameOf(b.id)), ...boxLook(b) }}
                 onPointerDown={(e) => objDown(e, b.id)}
               >
                 <BoxBody b={{ ...b, ...frameOf(b.id) }} />
@@ -575,7 +636,7 @@ export function SlideCanvas(props: {
             })}
             {marquee && <div className="sl-marquee" style={frameStyle(marquee)} />}
           </div>
-          <SlideFoot num={props.num} />
+          <SlideFoot num={props.num} hide={!!(layout ?? master)?.noFoot} />
           <AlignOverlay guides={marks.guides} measures={marks.measures} zoom={scale} />
         </div>
       </div>
@@ -692,20 +753,25 @@ export function BoxFormat(props: {
   onMeta: (fn: (m: SlideAnim) => SlideAnim) => void;
   onSel: (ids: string[]) => void;
   onDeleteBody: (objs: string[]) => void;
+  /** 主文字方塊沒搬過的位置（母片的） */
+  base?: Frame;
+  /** 編輯母片：主文字方塊是範例，不能刪 */
+  layout?: boolean;
 }) {
   const { meta, onMeta } = props;
+  const base = props.base ?? MAIN_FRAME;
   const boxes = meta.boxes ?? [];
   const ids = props.sel.filter((id) => id === MAIN || boxes.some((b) => b.id === id));
   if (!ids.length) return null;
   const objs = boxes.filter((b) => ids.includes(b.id));
   const one = ids.length === 1 ? (ids[0] === MAIN ? null : objs[0]) : null;
-  const frames = ids.map((id) => ({ id, ...(id === MAIN ? mainFrame(meta) : boxes.find((b) => b.id === id)!) }));
+  const frames = ids.map((id) => ({ id, ...(id === MAIN ? (meta.main ?? base) : boxes.find((b) => b.id === id)!) }));
   const setFrames = (fs: Map<string, Frame>) =>
     onMeta((m) => {
       const out: SlideAnim = { ...m, boxes: (m.boxes ?? []).map((b) => (fs.has(b.id) ? { ...b, ...fs.get(b.id)! } : b)) };
       const mf = fs.get(MAIN);
       if (mf) {
-        if (sameFrame(mf, MAIN_FRAME)) delete out.main;
+        if (sameFrame(mf, base)) delete out.main;
         else out.main = mf;
       }
       return out;
@@ -715,39 +781,108 @@ export function BoxFormat(props: {
   const kinds = new Set(objs.map((b) => b.kind));
   const title =
     ids.length > 1 ? `${ids.length} objects` : ids[0] === MAIN ? "Body Text" : one?.kind === "image" ? "Image" : one?.kind === "shape" ? "Shape" : "Text Box";
+  const first = objs[0];
+  const onlyShapes = objs.length > 0 && kinds.size === 1 && kinds.has("shape");
+  const lineOn = objs.some((b) => b.line);
   if (props.part === "style")
     return (
       <>
       <Section title={title}>
-        {(kinds.has("shape") || kinds.has("text")) && !kinds.has("image") && (
-          <>
-            <Field label="Fill">
-              <ColorPick kind={kinds.has("shape") ? "color" : "bg"} value={objs[0]?.fill === undefined ? (kinds.has("shape") ? "blue" : null) : (objs[0].fill ?? null)} onPick={(c) => patch({ fill: c })} />
-            </Field>
-            <Field label="Border">
-              <ColorPick kind="color" value={objs[0]?.line ?? null} onPick={(c) => patch({ line: c })} />
-            </Field>
-          </>
+        {onlyShapes && (
+          <div className="sl-shape-grid" role="group" aria-label="Shape">
+            {SHAPES.map((sh) => (
+              <button
+                key={sh.id}
+                className={objs.every((b) => (b.shape ?? "rect") === sh.id) ? "on" : ""}
+                title={sh.label}
+                aria-label={sh.label}
+                onClick={() => onMeta((m) => ({ ...m, boxes: updateBoxes(m.boxes ?? [], objs.map((b) => b.id), (b) => withShape(b, sh.id)) }))}
+              >
+                <ShapeGlyph shape={sh.id} />
+              </button>
+            ))}
+          </div>
+        )}
+        {(kinds.has("shape") || kinds.has("text")) && !kinds.has("image") && !(onlyShapes && objs.every((b) => b.shape === "line")) && (
+          <Field label="Fill">
+            <ColorPick title="Fill color" kind={kinds.has("shape") ? "color" : "bg"} value={first?.fill === undefined ? (kinds.has("shape") ? "blue" : null) : (first.fill ?? null)} onPick={(c) => patch({ fill: c })} />
+          </Field>
         )}
         {kinds.size === 1 && kinds.has("image") && (
           <Field label="Scale">
             <Seg label="Image fit">
-              <SegBtn title="Fit the whole image in the box" wide on={(objs[0].fit ?? "contain") === "contain"} onClick={() => patch({ fit: "contain" })}>
+              <SegBtn title="Fit the whole image in the box" wide on={(first.fit ?? "contain") === "contain"} onClick={() => patch({ fit: "contain" })}>
                 Fit
               </SegBtn>
-              <SegBtn title="Fill the box, cropping the image" wide on={objs[0].fit === "cover"} onClick={() => patch({ fit: "cover" })}>
+              <SegBtn title="Fill the box, cropping the image" wide on={first.fit === "cover"} onClick={() => patch({ fit: "cover" })}>
                 Fill
               </SegBtn>
             </Seg>
           </Field>
         )}
-        {ids.includes(MAIN) && ids.length === 1 && <p className="dc-note">The slide’s body text. Change its text in the Text and Paragraph tabs.</p>}
+        {ids.includes(MAIN) && ids.length === 1 && (
+          <p className="dc-note">
+            {props.layout
+              ? "Where the body text goes on slides that use this master. Move or resize it here."
+              : "The slide’s body text. Change its text in the Text and Layout tabs."}
+          </p>
+        )}
       </Section>
+      {objs.length > 0 && (
+        <Section title={onlyShapes && objs.every((b) => b.shape === "line") ? "Line" : "Border"}>
+          <Field label="Color">
+            <ColorPick title="Border color" kind="color" value={first.line ?? null} onPick={(c) => patch(c ? { line: c } : { line: null })} />
+          </Field>
+          {lineOn && (
+            <>
+              <Field label="Style">
+                <Seg label="Line style">
+                  {LINE_DASHES.map((d) => (
+                    <SegBtn key={d.label} title={d.label} on={(first.dash ?? null) === d.id} onClick={() => patch({ dash: d.id ?? undefined })}>
+                      <DashGlyph dash={d.id} />
+                    </SegBtn>
+                  ))}
+                </Seg>
+              </Field>
+              <Field label="Width">
+                <div className="sl-lw">
+                  <NumField label="pt" value={first.lw ?? DEFAULT_LW} onSet={(v) => patch({ lw: Math.min(40, Math.max(1, v)) === DEFAULT_LW ? undefined : Math.min(40, Math.max(1, v)) })} />
+                </div>
+              </Field>
+            </>
+          )}
+        </Section>
+      )}
+      {objs.length > 0 && (
+        <Section title="Effects">
+          <label className="dc-check" style={{ marginTop: 0 }}>
+            <input type="checkbox" checked={!!first.shadow} onChange={(e) => patch({ shadow: e.target.checked ? true : undefined })} /> Shadow
+          </label>
+          <Field label="Opacity">
+            <div className="sl-opacity">
+              <input
+                type="range"
+                min={10}
+                max={100}
+                step={5}
+                value={first.opacity ?? 100}
+                aria-label="Opacity"
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  patch({ opacity: v >= 100 ? undefined : v });
+                }}
+              />
+              <span>{first.opacity ?? 100}%</span>
+            </div>
+          </Field>
+        </Section>
+      )}
+      {!(props.layout && ids.length === 1 && ids[0] === MAIN) && (
       <Section>
         <button
           className="dp-btn danger"
           onClick={() => {
-            if (ids.includes(MAIN)) props.onDeleteBody(objs.map((b) => b.id));
+            if (ids.includes(MAIN) && !props.layout) props.onDeleteBody(objs.map((b) => b.id));
             else onMeta((m) => ({ ...m, boxes: removeBoxes(m.boxes ?? [], objs.map((b) => b.id)) }));
             props.onSel([]);
           }}
@@ -755,6 +890,7 @@ export function BoxFormat(props: {
           <TrashIcon /> Delete {ids.length === 1 ? "Object" : `${ids.length} Objects`}
         </button>
       </Section>
+      )}
       </>
     );
   return (
@@ -769,7 +905,7 @@ export function BoxFormat(props: {
           </div>
         )}
         {ids.includes(MAIN) && ids.length === 1 && (
-          <button className="dp-btn" disabled={!meta.main} onClick={() => setFrames(new Map([[MAIN, MAIN_FRAME]]))}>
+          <button className="dp-btn" disabled={!meta.main} onClick={() => setFrames(new Map([[MAIN, base]]))} title={props.layout ? "Back to the default position" : "Back to where the slide master puts it"}>
             Reset Position
           </button>
         )}
@@ -823,10 +959,27 @@ export function BoxFormat(props: {
   );
 }
 
-function ColorPick(props: { kind: "color" | "bg"; value: Color | null; onPick: (c: Color | null) => void }) {
+/** 物件的顏色：跟 Word 的檢閱器一樣的顏色按鈕，點了打開顏色選單 */
+function ColorPick(props: { kind: "color" | "bg"; value: Ink | null; title: string; onPick: (c: Ink | null) => void }) {
+  return <ColorWell kind={props.kind} value={props.value} title={props.title} glyph={props.title === "Fill color" ? "fill" : "line"} onPick={props.onPick} />;
+}
+
+/** 形狀的小圖（工具列的 Shape 選單、檢閱器的形狀） */
+export function ShapeGlyph(props: { shape: ShapeKind }) {
   return (
-    <div className="dc-swatch-inline">
-      <Swatches kind={props.kind} value={props.value} onPick={props.onPick} />
-    </div>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+      <g transform="translate(2 3)">
+        <path d={shapePath(props.shape, 12, 10)} fill="none" stroke="currentColor" strokeWidth="1.3" />
+      </g>
+    </svg>
+  );
+}
+
+/** 框線樣式的小圖 */
+function DashGlyph(props: { dash: "dash" | "dot" | null }) {
+  return (
+    <svg width="22" height="12" viewBox="0 0 22 12" aria-hidden>
+      <path d="M2 6H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray={props.dash === "dash" ? "5 3" : props.dash === "dot" ? "0 4" : undefined} />
+    </svg>
   );
 }

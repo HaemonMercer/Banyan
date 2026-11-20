@@ -36,6 +36,7 @@ import {
   wordBefore,
   type Prediction,
 } from "./predict";
+import { markdownEnglish } from "./punct";
 import { hidePredictions, movePrediction, predictions, showPredictions, type PredictState } from "./PredictBar";
 
 export interface PredictTarget {
@@ -88,6 +89,13 @@ export function predictorFor(t: EventTarget | null): Predictor | null {
   if (!t) return null;
   return registry.get(t) ?? fieldResolver?.(t) ?? null;
 }
+
+/**
+ * 游標前是 `/` 命令（行首或空白後的 `/` 加英文字母），而且編輯器的 `/` 選單（`Editor.tsx` 的 `SlashMenu`）開著：
+ * 命令名稱是英文，打字母要是英文、也不要英文預測（Enter 要留給選單選命令）。
+ */
+export const slashCommand = (before: string) => /(?:^|\s)\/[A-Za-z0-9]*$/.test(before);
+const slashOpen = (before: string) => slashCommand(before) && !!document.querySelector(".slash-menu");
 
 const SWALLOW_MS = 600;
 /** 輸入法結束組字後這段時間內的按鍵不拿來選字 */
@@ -215,7 +223,14 @@ export function createPredictor(t: PredictTarget): Predictor {
     }
     if (/^[a-y]$/.test(k)) {
       // 行內程式碼裡、選取了一段文字：照常打英文
-      if (!imeCode && t.textBefore() === null) return false;
+      const before = imeCode ? "" : t.textBefore();
+      if (before === null) return false;
+      // `/` 命令選單開著、只會打英文的 Markdown 語法裡（網址、行內程式碼、HTML 標籤…）：
+      // 暫時打英文，選了命令、關掉選單或打完這個字（空白、標點、Enter、Esc）回到中文
+      if (!imeCode && (slashOpen(before) || markdownEnglish(before))) {
+        setImeTemp(true);
+        return false;
+      }
       // 碼已經打滿（速成 2 碼、倉頡 5 碼）還繼續打：先選反白的字，這個字母開始下一個字（連打）
       if (imeCode.length >= maxCode(mode))
         return take(() => {
@@ -276,7 +291,7 @@ export function createPredictor(t: PredictTarget): Predictor {
   const predictWord = (): boolean => {
     if (!predictPrefs().english) return false;
     const before = t.textBefore();
-    if (before === null) return false;
+    if (before === null || slashOpen(before)) return false;
     const w = wordBefore(before);
     const prev = w ? null : wordAfter(before);
     const d = w || prev ? predictData() : null;

@@ -26,7 +26,7 @@ export interface BlockStyle {
   line?: number;
   /** 框線粗細（pt） */
   border?: number;
-  /** 框線顏色：`BORDER_COLORS` 的 id */
+  /** 框線顏色：`BORDER_COLORS` 的 id 或自訂的 `#rrggbb` */
   borderColor?: string;
   /** 圓角（pt） */
   radius?: number;
@@ -36,7 +36,7 @@ export interface BlockStyle {
   italic?: boolean;
   underline?: boolean;
   strike?: boolean;
-  /** 文字顏色：`TEXT_COLORS`（色盤名稱，畫面上是 CSS 變數 --tc-*） */
+  /** 文字顏色：`TEXT_COLORS`（色盤名稱，畫面上是 CSS 變數 --tc-*）或自訂的 `#rrggbb` */
   color?: string;
   /** 字距（pt，可以是負的） */
   tracking?: number;
@@ -64,7 +64,10 @@ export const BLOCK_FONTS: { label: string; css: string }[] = [
 /** 框線顏色（畫面上換成 CSS 變數，深色模式也看得清楚） */
 export const BORDER_COLORS = ["default", "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"] as const;
 
-const borderVar = (c: string) => (c === "default" ? "var(--ed-faint)" : `var(--tc-${c})`);
+const HEX = /^#[0-9a-f]{6}$/i;
+const borderVar = (c: string) => (c === "default" ? "var(--ed-faint)" : HEX.test(c) ? c.toLowerCase() : `var(--tc-${c})`);
+/** 文字顏色的 CSS 值（色盤是主題變數，自訂的是色碼） */
+export const textColorCss = (c: string) => (HEX.test(c) ? c.toLowerCase() : `var(--tc-${c})`);
 
 const LIMIT = { space: 200, size: 200, border: 12, radius: 48 };
 
@@ -103,10 +106,10 @@ export function parseBlockStyle(css: string): BlockStyle {
       const n = Number(val);
       if (val && Number.isFinite(n)) out.line = clamp(+(n / 1.2).toFixed(2), 0.5, 5);
     } else if (key === "border") {
-      const m = /^(\d+(?:\.\d+)?)pt solid var\(--(?:tc-([a-z]+)|ed-faint)\)$/.exec(val);
+      const m = /^(\d+(?:\.\d+)?)pt solid (?:var\(--(?:tc-([a-z]+)|ed-faint)\)|(#[0-9a-f]{6}))$/i.exec(val);
       if (m && (!m[2] || (BORDER_COLORS as readonly string[]).includes(m[2]))) {
         out.border = clamp(Number(m[1]), 0, LIMIT.border);
-        out.borderColor = m[2] ?? "default";
+        out.borderColor = m[3]?.toLowerCase() ?? m[2] ?? "default";
       }
     } else if (key === "border-radius") {
       const m = /^(\d+(?:\.\d+)?)pt$/.exec(val);
@@ -125,6 +128,7 @@ export function parseBlockStyle(css: string): BlockStyle {
     } else if (key === "color") {
       const m = /^var\(--tc-([a-z]+)\)$/.exec(val);
       if (m && (TEXT_COLORS as readonly string[]).includes(m[1])) out.color = m[1];
+      else if (HEX.test(val)) out.color = val.toLowerCase();
     } else if (key === "letter-spacing") {
       const m = /^(-?\d+(?:\.\d+)?)pt$/.exec(val);
       if (m) out.tracking = clamp(Number(m[1]), -5, 20);
@@ -176,7 +180,7 @@ export function formatBlockStyle(s: BlockStyle): string {
   if (c.weight) out.push(`font-weight: ${c.weight === "bold" ? 700 : 400}`);
   if (c.italic) out.push("font-style: italic");
   if (c.underline || c.strike) out.push(`text-decoration: ${[c.underline && "underline", c.strike && "line-through"].filter(Boolean).join(" ")}`);
-  if (c.color) out.push(`color: var(--tc-${c.color})`);
+  if (c.color) out.push(`color: ${textColorCss(c.color)}`);
   if (c.tracking) out.push(`letter-spacing: ${fmt(c.tracking)}pt`);
   if (c.firstLine) out.push(`text-indent: ${fmt(c.firstLine)}pt`);
   return out.join("; ");
@@ -204,11 +208,11 @@ export function blockStyleCss(css: string): Record<string, string> {
 
 /**
  * 畫面上要加的 class：標題、引言等元素自己設了粗細、字距（editor.css），
- * 區塊樣式有設這些時要讓它們改成跟著外層（`bx-w`、`bx-t`）。
+ * 區塊樣式有設這些時要讓它們改成跟著外層（`bx-w`、`bx-t`；字級 `bx-s`：標題的字級是 em，不改的話 24 pt 的標題會變成 24 pt 的好幾倍）。
  */
 export function blockStyleClasses(css: string): string {
   const s = parseBlockStyle(css);
-  return [s.weight && "bx-w", s.tracking !== undefined && "bx-t", s.italic && "bx-i", s.color && "bx-c"].filter(Boolean).join(" ");
+  return [s.weight && "bx-w", s.tracking !== undefined && "bx-t", s.italic && "bx-i", s.color && "bx-c", s.size && "bx-s"].filter(Boolean).join(" ");
 }
 
 // ─── 已存的樣式（參考 Pages 的段落樣式選單） ─────────────────────
@@ -267,6 +271,13 @@ export function styleModified(styles: SavedStyle[], name: string, css: string): 
 export function charOnly(s: BlockStyle): BlockStyle {
   const { font, size, weight, italic, underline, strike, color, tracking } = s;
   return clean({ font, size, weight, italic, underline, strike, color, tracking });
+}
+
+/** 拿掉字元方面的屬性，只留版面（間距、縮排、框線…）：套用段落樣式時用，像 Pages 一樣清掉整段自己改的字型、字級、粗細等 */
+export function withoutChar(s: BlockStyle): BlockStyle {
+  const rest = { ...s };
+  for (const k of ["font", "size", "weight", "italic", "underline", "strike", "color", "tracking"] as const) delete rest[k];
+  return clean(rest);
 }
 
 /** 字元樣式的樣式表：`span[data-cs="名稱"] { … }` */

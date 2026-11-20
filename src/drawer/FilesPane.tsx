@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  ArrowUpIcon,
   ChevronRightIcon,
+  ClipIcon,
+  CloseIcon,
   CopyIcon,
   CutIcon,
   DocIcon,
-  DrawerIcon,
   FolderIcon,
   GalleryIcon,
   ImageIcon,
@@ -24,41 +22,49 @@ import {
 import { mediaFilePath, mediaUrl } from "../editor/media";
 import { dateKey, dayTitle } from "../journal/journal";
 import {
-  addFolder,
+  addToFolder,
+  attachedTo,
   childFolders,
-  countRemoved,
+  deleteFiles,
+  emptyFileTrash,
   fileKind,
-  filesIn,
-  folderFileCount,
+  fileLocation,
+  fileTags,
+  filterFiles,
   folderPath,
   formatSize,
   locate,
-  moveEntries,
-  pathLabel,
+  moveFiles,
   placeKey,
   placeLabel,
   placeName,
-  removeEntries,
+  removeFromFolder,
   renameEntry,
-  searchFiles,
+  setFilesTrashed,
+  setFileTags,
+  sortFiles,
   typeName,
   type FileEntry,
+  type FileScope,
+  type FileSortKey,
   type Folder,
   type Place,
 } from "./files";
 import type { Library } from "./model";
-import { Menu, MenuRow, RenameInput, reveal } from "./ui";
+import { Menu, MenuRow, RenameInput, reveal, TagsEditor } from "./ui";
 
 /**
- * Drawer 的檔案庫（參考 Windows 檔案總管）：上方是上一頁／下一頁／上一層、路徑與搜尋，
- * 中間是目前資料夾的內容（大圖示或詳細資料），右欄是選取的檔案。
- * 資料夾樹在 DrawerView 的左欄；拖曳（搬到別的資料夾）用 DrawerView 的 `startDrag`（指標事件）。
+ * Drawer 的檔案庫頁中間與右欄：資料邏輯和文獻庫一樣——左欄（DrawerView）選範圍
+ * （All Files、Unfiled Files、Trash、某個資料夾含子資料夾）與標籤，這裡列出範圍裡的檔案
+ * （大圖示或詳細資料，標題列可以排序），右欄是選取的檔案（資料夾、標籤）。
+ * 拖曳（放進資料夾）用 DrawerView 的 `startDrag`（指標事件）。
  */
 
 export type EntryDrag = { kind: "entries"; ids: string[]; label: string };
 
 type ViewMode = "icons" | "details";
 const VIEW_KEY = "banyan.drawerFilesView";
+const SORT_KEY = "banyan.drawerFilesSort";
 function loadView(): ViewMode {
   try {
     return localStorage.getItem(VIEW_KEY) === "details" ? "details" : "icons";
@@ -66,6 +72,22 @@ function loadView(): ViewMode {
     return "icons";
   }
 }
+function loadSort(): { key: FileSortKey; desc: boolean } {
+  try {
+    const v = JSON.parse(localStorage.getItem(SORT_KEY) ?? "null");
+    if (v && ["name", "added", "type", "size"].includes(v.key)) return { key: v.key, desc: !!v.desc };
+  } catch {
+    /* 用預設 */
+  }
+  return { key: "name", desc: false };
+}
+const save = (k: string, v: string) => {
+  try {
+    localStorage.setItem(k, v);
+  } catch {
+    /* 記不住也沒關係 */
+  }
+};
 
 const dateLabel = (ms: number, now: string) => (ms ? dayTitle(dateKey(new Date(ms)), now) : "");
 
@@ -80,88 +102,64 @@ export function FileGlyph(props: { name: string; src?: string; large?: boolean }
   );
 }
 
+/** 資料夾樹攤平（選單「Add to folder」用） */
+export function flatFolders(lib: Library, parent: string | null = null, depth = 0): { f: Folder; depth: number }[] {
+  return childFolders(lib, parent).flatMap((f) => [{ f, depth }, ...flatFolders(lib, f.id, depth + 1)]);
+}
+
+const SCOPE_LABEL = { all: "All Files", unfiled: "Unfiled Files", trash: "Trash" } as const;
+
 export function FilesPane(props: {
   lib: Library;
-  /** 目前的資料夾（null 是 My Files） */
-  folder: string | null;
-  onFolder: (f: string | null) => void;
+  /** 左欄選的範圍 */
+  scope: FileScope;
+  onScope: (s: FileScope) => void;
+  /** 左欄選的標籤（每個都要有） */
+  tags: string[];
   sel: string[];
   onSel: (ids: string[]) => void;
   onModify: (fn: (lib: Library) => Library) => void;
-  /** 加入檔案（DrawerView 先檢查重複） */
+  /** 加入檔案（DrawerView 先檢查重複；null 是 Unfiled） */
   onAdd: (folder: string | null, files: File[]) => void;
+  /** 新資料夾（在左欄的樹裡改名） */
+  onNewFolder: (parent: string | null) => void;
   onView: (f: FileEntry) => void;
   onFindDuplicates: () => void;
   onShowPlace: (p: Place) => void;
   onCreateItem: (f: FileEntry) => void;
+  /** 把檔案附加到選的條目 */
+  onAttachTo: (fileId: string) => void;
   startDrag: (e: React.PointerEvent, d: EntryDrag) => void;
   dropTarget: string | null;
   onNotice: (s: string) => void;
   now: string;
 }) {
-  const { lib, folder, sel, onSel, onModify, onFolder } = props;
+  const { lib, scope, sel, onSel, onModify } = props;
   const [view, setView] = useState<ViewMode>(loadView);
+  const [sort, setSort] = useState(loadSort);
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; on: "entries" | "blank" } | null>(null);
-  const [clip, setClip] = useState<string[]>([]);
+  /** 剪下的檔案與剪下時所在的資料夾（貼上＝從那裡搬到這裡） */
+  const [clip, setClip] = useState<{ ids: string[]; from: string | null } | null>(null);
   const anchor = useRef<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const addRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(VIEW_KEY, view);
-    } catch {
-      /* 記不住也沒關係 */
-    }
-  }, [view]);
+  useEffect(() => save(VIEW_KEY, view), [view]);
+  useEffect(() => save(SORT_KEY, JSON.stringify(sort)), [sort]);
+  const scopeId = scope.kind === "folder" ? scope.id : scope.kind;
+  useEffect(() => setQuery(""), [scopeId]);
 
-  // 上一頁／下一頁（像檔案總管）：資料夾改變時記下來源
-  const hist = useRef<{ back: (string | null)[]; fwd: (string | null)[]; last: string | null; jump: boolean }>({ back: [], fwd: [], last: folder, jump: false });
-  useEffect(() => {
-    const h = hist.current;
-    if (h.last === folder) return;
-    if (!h.jump) {
-      h.back.push(h.last);
-      h.fwd = [];
-    }
-    h.jump = false;
-    h.last = folder;
-    setQuery("");
-  }, [folder]);
-  const goBack = () => {
-    const h = hist.current;
-    const to = h.back.pop();
-    if (to === undefined) return;
-    h.fwd.push(folder);
-    h.jump = true;
-    onFolder(to);
-  };
-  const goFwd = () => {
-    const h = hist.current;
-    const to = h.fwd.pop();
-    if (to === undefined) return;
-    h.back.push(folder);
-    h.jump = true;
-    onFolder(to);
-  };
-  const parentOf = (id: string | null) => (id ? (lib.folders.find((f) => f.id === id)?.parent ?? null) : null);
-  const goUp = () => {
-    if (!folder) return;
-    onFolder(parentOf(folder));
-    onSel([folder]);
-  };
-
+  const inTrash = scope.kind === "trash";
+  const folder = scope.kind === "folder" ? scope.id : null;
   const searching = query.trim().length > 0;
-  const { folders, files } = useMemo(
-    () => (searching ? searchFiles(lib, folder, query) : { folders: childFolders(lib, folder), files: filesIn(lib, folder) }),
-    [lib, folder, query, searching],
-  );
-  const order = useMemo(() => [...folders.map((f) => f.id), ...files.map((f) => f.id)], [folders, files]);
-  const folderById = useMemo(() => new Map(lib.folders.map((f) => [f.id, f])), [lib.folders]);
+  const shown = useMemo(() => sortFiles(filterFiles(lib, scope, query, props.tags), sort.key, sort.desc), [lib, scope, query, props.tags, sort]);
+  const order = useMemo(() => shown.map((f) => f.id), [shown]);
   const fileById = useMemo(() => new Map(lib.files.map((f) => [f.id, f])), [lib.files]);
+  const tagNames = useMemo(() => fileTags(lib).map((t) => t.tag), [lib]);
   const path = folderPath(lib, folder);
+  const trashCount = lib.files.filter((f) => f.trashed).length;
 
   // 選取的東西不在畫面上了就拿掉
   useEffect(() => {
@@ -170,9 +168,7 @@ export function FilesPane(props: {
   }, [order, sel, onSel]);
 
   const selFiles = sel.map((id) => fileById.get(id)).filter((f): f is FileEntry => !!f);
-  const selFolders = sel.map((id) => folderById.get(id)).filter((f): f is Folder => !!f);
   const one = sel.length === 1 ? (fileById.get(sel[0]) ?? null) : null;
-  const oneFolder = sel.length === 1 ? (folderById.get(sel[0]) ?? null) : null;
 
   const pick = (e: React.PointerEvent | React.MouseEvent, id: string) => {
     if (e.shiftKey && anchor.current) {
@@ -194,57 +190,67 @@ export function FilesPane(props: {
   };
 
   const open = (id: string) => {
-    if (folderById.has(id)) {
-      onFolder(id);
-      onSel([]);
-      return;
-    }
     const f = fileById.get(id);
     if (f) props.onView(f);
   };
 
-  const newFolder = () => {
-    let made = "";
-    onModify((l) => {
-      const r = addFolder(l, folder);
-      made = r.id;
-      return r.lib;
-    });
-    if (made) {
-      setQuery("");
-      onSel([made]);
-      setRenaming(made);
-    }
-  };
-
-  const remove = (ids: string[]) => {
-    if (!ids.length) return;
-    const n = countRemoved(lib, ids);
-    const what =
-      n.folders && n.files
-        ? `${n.folders === 1 ? "1 folder" : `${n.folders} folders`} and ${n.files === 1 ? "1 file" : `${n.files} files`}`
-        : n.folders
-          ? n.folders === 1
-            ? "this folder"
-            : `${n.folders} folders`
-          : n.files === 1
-            ? `“${fileById.get(ids[0])?.name ?? "this file"}”`
-            : `${n.files} files`;
-    if (!window.confirm(`Delete ${what} from your Drawer? This can't be undone.`)) return;
-    onModify((l) => removeEntries(l, ids));
+  const selectNext = (ids: string[]) => {
     const idx = order.indexOf(ids[ids.length - 1]);
     const next = order.slice(idx + 1).find((x) => !ids.includes(x)) ?? [...order.slice(0, idx)].reverse().find((x) => !ids.includes(x));
     onSel(next ? [next] : []);
   };
 
-  const paste = () => {
-    const ids = clip.filter((id) => fileById.has(id) || folderById.has(id));
+  /** 刪除：先移到垃圾桶；在垃圾桶裡是永久刪除（和文獻庫一樣） */
+  const trash = (ids: string[]) => {
     if (!ids.length) return;
-    onModify((l) => moveEntries(l, ids, folder));
-    setClip([]);
-    onSel(ids);
-    props.onNotice(`Moved ${ids.length === 1 ? "1 item" : `${ids.length} items`} to ${pathLabel(lib, folder)}`);
+    if (inTrash) {
+      const what = ids.length === 1 ? `“${fileById.get(ids[0])?.name ?? "this file"}”` : `${ids.length} files`;
+      const att = ids.reduce((n, id) => n + attachedTo(lib, id).length, 0);
+      const also = att ? ` ${att === 1 ? "It's attached to an item — that attachment" : `They're attached to items — those ${att} attachments`} will be removed too.` : "";
+      if (!window.confirm(`Delete ${what} permanently?${also} This can't be undone.`)) return;
+      onModify((l) => deleteFiles(l, ids));
+    } else {
+      onModify((l) => setFilesTrashed(l, ids, true));
+      props.onNotice(ids.length === 1 ? "Moved 1 file to the Trash" : `Moved ${ids.length} files to the Trash`);
+    }
+    selectNext(ids);
   };
+
+  const restore = (ids: string[]) => {
+    if (!ids.length) return;
+    onModify((l) => setFilesTrashed(l, ids, false));
+    props.onNotice(ids.length === 1 ? "Restored 1 file" : `Restored ${ids.length} files`);
+    selectNext(ids);
+  };
+
+  const emptyTrash = () => {
+    const att = lib.files.filter((f) => f.trashed).reduce((n, f) => n + attachedTo(lib, f.id).length, 0);
+    const also = att ? ` Item attachments that use them (${att}) will be removed too.` : "";
+    if (trashCount && window.confirm(`Delete all ${trashCount === 1 ? "1 file" : `${trashCount} files`} in the Trash permanently?${also} This can't be undone.`)) onModify(emptyFileTrash);
+  };
+
+  const cut = (ids: string[]) => {
+    if (!ids.length || inTrash) return;
+    setClip({ ids, from: folder });
+    props.onNotice(`Cut ${ids.length === 1 ? "1 file" : `${ids.length} files`} — open a folder and press Ctrl+V to move`);
+  };
+
+  const paste = () => {
+    if (!clip || !folder) return;
+    const ids = clip.ids.filter((id) => fileById.has(id));
+    if (!ids.length) return;
+    onModify((l) => moveFiles(l, ids, clip.from, folder));
+    setClip(null);
+    onSel(ids);
+    props.onNotice(`Moved ${ids.length === 1 ? "1 file" : `${ids.length} files`} to ${path.map((f) => f.name).join(" › ")}`);
+  };
+
+  const addTo = (f: Folder) => {
+    onModify((l) => addToFolder(l, sel, f.id));
+    props.onNotice(`Added to “${f.name}”`);
+  };
+
+  const sortBy = (k: FileSortKey) => setSort((s) => (s.key === k ? { key: k, desc: !s.desc } : { key: k, desc: k === "added" || k === "size" }));
 
   const onKey = (e: React.KeyboardEvent) => {
     if ((e.target as HTMLElement).closest("input, textarea, select")) return;
@@ -276,13 +282,10 @@ export function FilesPane(props: {
     } else if (e.key === "Enter" && sel.length === 1) {
       e.preventDefault();
       open(sel[0]);
-    } else if (e.key === "Backspace") {
+    } else if (e.key === "Delete" || (e.key === "Backspace" && ctrl)) {
       e.preventDefault();
-      goUp();
-    } else if (e.key === "Delete") {
-      e.preventDefault();
-      remove(sel);
-    } else if (e.key === "F2" && sel.length === 1) {
+      trash(sel);
+    } else if (e.key === "F2" && sel.length === 1 && !inTrash) {
       e.preventDefault();
       setRenaming(sel[0]);
     } else if (ctrl && e.code === "KeyA") {
@@ -290,14 +293,13 @@ export function FilesPane(props: {
       onSel(order);
     } else if (ctrl && e.code === "KeyX" && sel.length) {
       e.preventDefault();
-      setClip(sel);
-      props.onNotice(`Cut ${sel.length === 1 ? "1 item" : `${sel.length} items`} — open a folder and press Ctrl+V to move`);
-    } else if (ctrl && e.code === "KeyV" && clip.length) {
+      cut(sel);
+    } else if (ctrl && e.code === "KeyV" && clip) {
       e.preventDefault();
       paste();
-    } else if (ctrl && e.shiftKey && e.code === "KeyN") {
+    } else if (ctrl && e.shiftKey && e.code === "KeyN" && !inTrash) {
       e.preventDefault();
-      newFolder();
+      props.onNewFolder(folder);
     }
   };
 
@@ -309,7 +311,7 @@ export function FilesPane(props: {
       pick(e, id);
       if (e.shiftKey || e.ctrlKey || e.metaKey) return;
       const ids = sel.includes(id) ? [id, ...sel.filter((x) => x !== id)] : [id];
-      props.startDrag(e, { kind: "entries", ids, label: ids.length === 1 ? label : `${ids.length} items` });
+      props.startDrag(e, { kind: "entries", ids, label: ids.length === 1 ? label : `${ids.length} files` });
     },
     onDoubleClick: (e: React.MouseEvent) => {
       if ((e.target as HTMLElement).closest("input")) return;
@@ -339,37 +341,38 @@ export function FilesPane(props: {
       </span>
     );
 
-  const cut = (id: string) => clip.includes(id);
-  const dropCls = (id: string) => (props.dropTarget === `f:${id}` ? " drop" : "");
-  const empty = !folders.length && !files.length;
+  const isCut = (id: string) => !!clip?.ids.includes(id);
+  const empty = !shown.length;
+  const head = (k: FileSortKey, label: string, cls = "") => (
+    <button className={`${cls}${sort.key === k ? " sorted" : ""}`} onClick={() => sortBy(k)}>
+      {label}
+      {sort.key === k && <span className="dr-sort">{sort.desc ? "▾" : "▴"}</span>}
+    </button>
+  );
 
   return (
     <>
       <section className="dr-main dr-files">
         <div className="dr-toolbar">
-          <div className="dr-nav">
-            <button className="icon-btn" title="Back" disabled={!hist.current.back.length} onClick={goBack}>
-              <ArrowLeftIcon />
-            </button>
-            <button className="icon-btn" title="Forward" disabled={!hist.current.fwd.length} onClick={goFwd}>
-              <ArrowRightIcon />
-            </button>
-            <button className="icon-btn" title="Up (Backspace)" disabled={!folder} onClick={goUp}>
-              <ArrowUpIcon />
-            </button>
-          </div>
           <div className="dr-crumbs">
-            <button className={`dr-crumb${props.dropTarget === "f:" ? " drop" : ""}`} data-drop="f:" onClick={() => onFolder(null)}>
-              <DrawerIcon /> My Files
-            </button>
-            {path.map((f) => (
-              <span key={f.id} className="dr-crumb-wrap">
-                <ChevronRightIcon />
-                <button className={`dr-crumb${dropCls(f.id)}`} data-drop={`f:${f.id}`} onClick={() => onFolder(f.id)}>
-                  {f.name}
-                </button>
+            {scope.kind === "folder" ? (
+              path.map((f, i) => (
+                <span key={f.id} className="dr-crumb-wrap">
+                  {i > 0 && <ChevronRightIcon />}
+                  <button
+                    className={`dr-crumb${props.dropTarget === `f:${f.id}` ? " drop" : ""}`}
+                    data-drop={`f:${f.id}`}
+                    onClick={() => props.onScope({ kind: "folder", id: f.id })}
+                  >
+                    {i === 0 && <FolderIcon />} {f.name}
+                  </button>
+                </span>
+              ))
+            ) : (
+              <span className="dr-crumb here">
+                {inTrash ? <TrashIcon /> : <FolderIcon />} {SCOPE_LABEL[scope.kind]}
               </span>
-            ))}
+            )}
           </div>
           <label className="dr-search dr-files-search">
             <SearchIcon />
@@ -377,21 +380,31 @@ export function FilesPane(props: {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-              placeholder={`Search ${path.length ? path[path.length - 1].name : "My Files"}`}
+              placeholder={`Search ${scope.kind === "folder" ? (path[path.length - 1]?.name ?? "folder") : SCOPE_LABEL[scope.kind]}`}
               spellCheck={false}
             />
           </label>
         </div>
         <div className="dr-toolbar dr-files-actions">
-          <button className="dr-btn primary" onClick={() => addRef.current?.click()}>
-            <PlusIcon /> Add files
-          </button>
-          <button className="dr-btn" onClick={newFolder} title="New folder (Ctrl+Shift+N)">
-            <FolderIcon /> New folder
-          </button>
-          <button className="dr-btn" onClick={props.onFindDuplicates} title="Find files with the same content">
-            <CopyIcon /> Find duplicates
-          </button>
+          {inTrash ? (
+            trashCount > 0 && (
+              <button className="dr-btn danger" onClick={emptyTrash}>
+                <TrashIcon /> Empty Trash
+              </button>
+            )
+          ) : (
+            <>
+              <button className="dr-btn primary" onClick={() => addRef.current?.click()}>
+                <PlusIcon /> Add files
+              </button>
+              <button className="dr-btn" onClick={() => props.onNewFolder(folder)} title={folder ? "New folder inside this one (Ctrl+Shift+N)" : "New folder (Ctrl+Shift+N)"}>
+                <FolderIcon /> New folder
+              </button>
+              <button className="dr-btn" onClick={props.onFindDuplicates} title="Find files with the same content">
+                <CopyIcon /> Find duplicates
+              </button>
+            </>
+          )}
           <div className="dr-seg" role="group" aria-label="View">
             <button className={view === "icons" ? "on" : ""} title="Large icons" onClick={() => setView("icons")}>
               <GalleryIcon />
@@ -413,10 +426,10 @@ export function FilesPane(props: {
         </div>
 
         <div
-          className={`dr-files-body ${view}${props.dropTarget === `f:${folder ?? ""}` ? " drop" : ""}`}
+          className={`dr-files-body ${view}${folder && props.dropTarget === `f:${folder}` ? " drop" : ""}`}
           ref={bodyRef}
           tabIndex={0}
-          data-drop={`f:${folder ?? ""}`}
+          data-drop={folder ? `f:${folder}` : inTrash ? "f-trash" : undefined}
           onKeyDown={onKey}
           onPointerDown={(e) => {
             if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("dr-tiles")) onSel([]);
@@ -429,24 +442,16 @@ export function FilesPane(props: {
         >
           {view === "details" && !empty && (
             <div className="dr-frow dr-head">
-              <span>Name</span>
-              <span>{searching ? "Folder" : "Date added"}</span>
-              <span>Type</span>
-              <span className="dr-fsize">Size</span>
+              {head("name", "Name")}
+              {searching || scope.kind === "all" ? <span>Folder</span> : head("added", "Date added")}
+              {head("type", "Type")}
+              {head("size", "Size", "dr-fsize")}
             </div>
           )}
           {view === "icons" ? (
             <div className="dr-tiles">
-              {folders.map((f) => (
-                <div key={f.id} className={`dr-tile${sel.includes(f.id) ? " on" : ""}${cut(f.id) ? " cut" : ""}${dropCls(f.id)}`} data-drop={`f:${f.id}`} {...entryProps(f.id, f.name)}>
-                  <span className="dr-tile-art folder">
-                    <FolderIcon />
-                  </span>
-                  {nameOrRename(f.id, f.name)}
-                </div>
-              ))}
-              {files.map((f) => (
-                <div key={f.id} className={`dr-tile${sel.includes(f.id) ? " on" : ""}${cut(f.id) ? " cut" : ""}`} {...entryProps(f.id, f.name)}>
+              {shown.map((f) => (
+                <div key={f.id} className={`dr-tile${sel.includes(f.id) ? " on" : ""}${isCut(f.id) ? " cut" : ""}`} {...entryProps(f.id, f.name)}>
                   <span className="dr-tile-art">
                     {fileKind(f.name, f.src) === "image" ? <img src={mediaUrl(f.src)} alt="" loading="lazy" draggable={false} /> : <FileGlyph name={f.name} src={f.src} large />}
                   </span>
@@ -455,47 +460,40 @@ export function FilesPane(props: {
               ))}
             </div>
           ) : (
-            <>
-              {folders.map((f) => (
-                <div key={f.id} className={`dr-frow${sel.includes(f.id) ? " on" : ""}${cut(f.id) ? " cut" : ""}${dropCls(f.id)}`} data-drop={`f:${f.id}`} {...entryProps(f.id, f.name)}>
-                  <span className="dr-fname">
-                    <FolderIcon className="dr-folder-glyph" />
-                    {nameOrRename(f.id, f.name)}
-                  </span>
-                  <span>{searching ? pathLabel(lib, f.parent) : dateLabel(f.added, props.now)}</span>
-                  <span>File folder</span>
-                  <span className="dr-fsize" />
-                </div>
-              ))}
-              {files.map((f) => (
-                <div key={f.id} className={`dr-frow${sel.includes(f.id) ? " on" : ""}${cut(f.id) ? " cut" : ""}`} {...entryProps(f.id, f.name)}>
-                  <span className="dr-fname">
-                    <FileGlyph name={f.name} src={f.src} />
-                    {nameOrRename(f.id, f.name)}
-                  </span>
-                  <span>{searching ? pathLabel(lib, f.folder) : dateLabel(f.added, props.now)}</span>
-                  <span>{typeName(f.name, f.src)}</span>
-                  <span className="dr-fsize">{formatSize(f.size)}</span>
-                </div>
-              ))}
-            </>
+            shown.map((f) => (
+              <div key={f.id} className={`dr-frow${sel.includes(f.id) ? " on" : ""}${isCut(f.id) ? " cut" : ""}`} {...entryProps(f.id, f.name)}>
+                <span className="dr-fname">
+                  <FileGlyph name={f.name} src={f.src} />
+                  {nameOrRename(f.id, f.name)}
+                </span>
+                <span>{searching || scope.kind === "all" ? fileLocation(lib, f) : dateLabel(f.added, props.now)}</span>
+                <span>{typeName(f.name, f.src)}</span>
+                <span className="dr-fsize">{formatSize(f.size)}</span>
+              </div>
+            ))
           )}
           {empty && (
             <div className="dr-empty">
-              {searching ? (
+              {searching || props.tags.length ? (
                 <>No files match</>
+              ) : inTrash ? (
+                <>The Trash is empty</>
+              ) : scope.kind === "unfiled" ? (
+                <>Every file is in a folder</>
               ) : (
                 <>
                   <strong>{folder ? "This folder is empty" : "Keep your files here"}</strong>
-                  Drop files onto this window, or click <b>Add files</b>. Make folders to sort them — the same file is only kept once.
+                  {folder
+                    ? "Drop files here, or drag files from All Files onto the folder in the left column — a file can be in several folders."
+                    : "Drop files onto this window, or click Add files. Sort them into folders and tags — the same file is only kept once."}
                 </>
               )}
             </div>
           )}
         </div>
         <div className="dr-status">
-          {sel.length > 1 ? `${sel.length} items selected` : `${order.length} ${order.length === 1 ? "item" : "items"}`}
-          {clip.length > 0 && <span className="dr-status-cut">{clip.length} cut · Ctrl+V to move here</span>}
+          {sel.length > 1 ? `${sel.length} of ${shown.length} selected` : `${shown.length} ${shown.length === 1 ? "file" : "files"}`}
+          {clip && <span className="dr-status-cut">{clip.ids.length} cut · {folder ? "Ctrl+V to move here" : "open a folder to paste"}</span>}
         </div>
       </section>
 
@@ -506,78 +504,101 @@ export function FilesPane(props: {
             file={one}
             lib={lib}
             now={props.now}
+            tagNames={tagNames}
             onOpen={() => props.onView(one)}
             onRename={() => setRenaming(one.id)}
-            onDelete={() => remove([one.id])}
+            onTrash={() => trash([one.id])}
+            onRestore={() => restore([one.id])}
             onShowPlace={props.onShowPlace}
             onCreateItem={() => props.onCreateItem(one)}
+            onAttachTo={() => props.onAttachTo(one.id)}
+            onTags={(tags) => onModify((l) => setFileTags(l, one.id, tags))}
+            onRemoveFrom={(id) => onModify((l) => removeFromFolder(l, [one.id], id))}
+            onScope={props.onScope}
           />
-        ) : oneFolder ? (
-          <div className="dr-fdetail">
-            <span className="dr-fdetail-art folder">
-              <FolderIcon />
-            </span>
-            <strong className="dr-fdetail-name">{oneFolder.name}</strong>
-            <dl className="dr-fmeta">
-              <dt>Location</dt>
-              <dd>{pathLabel(lib, oneFolder.parent)}</dd>
-              <dt>Contains</dt>
-              <dd>
-                {childFolders(lib, oneFolder.id).length} folders · {folderFileCount(lib, oneFolder.id)} files
-              </dd>
-              <dt>Created</dt>
-              <dd>{dateLabel(oneFolder.added, props.now)}</dd>
-            </dl>
-            <div className="dr-actions">
-              <button className="dr-btn" onClick={() => open(oneFolder.id)}>
-                <OpenIcon /> Open
-              </button>
-              <button className="dr-btn" onClick={() => setRenaming(oneFolder.id)}>
-                Rename
-              </button>
-            </div>
-          </div>
         ) : sel.length > 1 ? (
           <div className="dr-multi">
-            <strong>{sel.length} items selected</strong>
-            <span className="dr-muted">
-              {selFolders.length ? `${selFolders.length} folders · ` : ""}
-              {selFiles.length} files{selFiles.some((f) => f.size) ? ` · ${formatSize(selFiles.reduce((a, f) => a + f.size, 0))}` : ""}
-            </span>
+            <strong>{sel.length} files selected</strong>
+            <span className="dr-muted">{selFiles.some((f) => f.size) ? formatSize(selFiles.reduce((a, f) => a + f.size, 0)) : ""}</span>
             <div className="dr-actions">
-              <button className="dr-btn" onClick={() => setClip(sel)}>
-                <CutIcon /> Cut
-              </button>
-              <button className="dr-btn danger" onClick={() => remove(sel)}>
-                <TrashIcon /> Delete
-              </button>
+              {inTrash ? (
+                <>
+                  <button className="dr-btn" onClick={() => restore(sel)}>
+                    <OpenIcon /> Restore
+                  </button>
+                  <button className="dr-btn danger" onClick={() => trash(sel)}>
+                    <TrashIcon /> Delete permanently
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="dr-btn" onClick={() => cut(sel)}>
+                    <CutIcon /> Cut
+                  </button>
+                  <button className="dr-btn danger" onClick={() => trash(sel)}>
+                    <TrashIcon /> Move to Trash
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ) : (
-          <div className="dr-detail-empty">
-            {lib.files.length ? `${lib.files.length} files in your Drawer · select one to see its details` : ""}
-          </div>
+          <div className="dr-detail-empty">{shown.length ? `${shown.length} ${shown.length === 1 ? "file" : "files"} · select one to see its details` : ""}</div>
         )}
       </aside>
 
       {menu && (
         <Menu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           {menu.on === "entries" ? (
-            <>
-              {sel.length > 1 && <div className="popover-count">{sel.length} items selected</div>}
-              {sel.length === 1 && <MenuRow icon={<OpenIcon />} label="Open" hint="Enter" onClick={() => (setMenu(null), open(sel[0]))} />}
-              {one && mediaFilePath(one.src) && <MenuRow icon={<FolderIcon />} label="Show in folder" onClick={() => (setMenu(null), void reveal(one.src))} />}
-              {one && <MenuRow icon={<DocIcon />} label="Convert to Drawer item" onClick={() => (setMenu(null), props.onCreateItem(one))} />}
-              <div className="popover-sep" />
-              <MenuRow icon={<CutIcon />} label="Cut" hint="Ctrl+X" onClick={() => (setMenu(null), setClip(sel))} />
-              {sel.length === 1 && <MenuRow icon={<DocIcon />} label="Rename" hint="F2" onClick={() => (setMenu(null), setRenaming(sel[0]))} />}
-              <MenuRow icon={<TrashIcon />} label="Delete…" hint="Del" danger onClick={() => (setMenu(null), remove(sel))} />
-            </>
+            inTrash ? (
+              <>
+                {sel.length > 1 && <div className="popover-count">{sel.length} files selected</div>}
+                <MenuRow icon={<OpenIcon />} label="Restore to Files" onClick={() => (setMenu(null), restore(sel))} />
+                <MenuRow icon={<TrashIcon />} label="Delete permanently…" danger onClick={() => (setMenu(null), trash(sel))} />
+              </>
+            ) : (
+              <>
+                {sel.length > 1 && <div className="popover-count">{sel.length} files selected</div>}
+                {sel.length === 1 && <MenuRow icon={<OpenIcon />} label="Open" hint="Enter" onClick={() => (setMenu(null), open(sel[0]))} />}
+                {one && mediaFilePath(one.src) && <MenuRow icon={<FolderIcon />} label="Show in folder" onClick={() => (setMenu(null), void reveal(one.src))} />}
+                {one && <MenuRow icon={<ClipIcon />} label="Attach to item…" onClick={() => (setMenu(null), props.onAttachTo(one.id))} />}
+                {one && <MenuRow icon={<DocIcon />} label="Create item from file" onClick={() => (setMenu(null), props.onCreateItem(one))} />}
+                {lib.folders.length > 0 && (
+                  <>
+                    <div className="popover-sep" />
+                    <div className="popover-title">Add to folder</div>
+                    <div className="dr-menu-scroll">
+                      {flatFolders(lib).map(({ f, depth }) => (
+                        <MenuRow key={f.id} icon={<FolderIcon />} label={`${" ".repeat(depth)}${f.name}`} onClick={() => (setMenu(null), addTo(f))} />
+                      ))}
+                    </div>
+                  </>
+                )}
+                <div className="popover-sep" />
+                {folder && (
+                  <MenuRow
+                    icon={<CloseIcon />}
+                    label="Remove from folder"
+                    onClick={() => {
+                      setMenu(null);
+                      onModify((l) => removeFromFolder(l, sel, folder));
+                    }}
+                  />
+                )}
+                <MenuRow icon={<CutIcon />} label="Cut" hint="Ctrl+X" onClick={() => (setMenu(null), cut(sel))} />
+                {sel.length === 1 && <MenuRow icon={<DocIcon />} label="Rename" hint="F2" onClick={() => (setMenu(null), setRenaming(sel[0]))} />}
+                <MenuRow icon={<TrashIcon />} label="Move to Trash" hint="Del" danger onClick={() => (setMenu(null), trash(sel))} />
+              </>
+            )
+          ) : inTrash ? (
+            <MenuRow icon={<TrashIcon />} label="Empty Trash…" danger onClick={() => (setMenu(null), emptyTrash())} />
           ) : (
             <>
-              <MenuRow icon={<FolderIcon />} label="New folder" hint="Ctrl+Shift+N" onClick={() => (setMenu(null), newFolder())} />
+              <MenuRow icon={<FolderIcon />} label="New folder" hint="Ctrl+Shift+N" onClick={() => (setMenu(null), props.onNewFolder(folder))} />
               <MenuRow icon={<PlusIcon />} label="Add files…" onClick={() => (setMenu(null), addRef.current?.click())} />
-              {clip.length > 0 && <MenuRow icon={<PasteIcon />} label={`Paste ${clip.length === 1 ? "1 item" : `${clip.length} items`} here`} hint="Ctrl+V" onClick={() => (setMenu(null), paste())} />}
+              {clip && folder && (
+                <MenuRow icon={<PasteIcon />} label={`Paste ${clip.ids.length === 1 ? "1 file" : `${clip.ids.length} files`} here`} hint="Ctrl+V" onClick={() => (setMenu(null), paste())} />
+              )}
               <div className="popover-sep" />
               <MenuRow icon={<CopyIcon />} label="Find duplicates…" onClick={() => (setMenu(null), props.onFindDuplicates())} />
             </>
@@ -592,15 +613,24 @@ function FileDetail(props: {
   file: FileEntry;
   lib: Library;
   now: string;
+  tagNames: string[];
   onOpen: () => void;
   onRename: () => void;
-  onDelete: () => void;
+  onTrash: () => void;
+  onRestore: () => void;
   onShowPlace: (p: Place) => void;
   onCreateItem: () => void;
+  onAttachTo: () => void;
+  onTags: (tags: string[]) => void;
+  onRemoveFrom: (folder: string) => void;
+  onScope: (s: FileScope) => void;
 }) {
   const { file, lib } = props;
-  const others = locate(lib, file.src).filter((p) => !(p.kind === "file" && p.file.id === file.id));
+  // 連到這一筆的附件列在 Attached to；Same file also in 只列另外存放的副本
+  const others = locate(lib, file.src).filter((p) => (p.kind === "file" ? p.file.id !== file.id : p.att.file !== file.id));
+  const attached = attachedTo(lib, file.id);
   const kind = fileKind(file.name, file.src);
+  const folders = file.folders.filter((id) => lib.folders.some((f) => f.id === id));
   return (
     <div className="dr-fdetail">
       <button className="dr-fdetail-art" onClick={props.onOpen} title="Open">
@@ -616,11 +646,42 @@ function FileDetail(props: {
             <dd>{formatSize(file.size)}</dd>
           </>
         )}
-        <dt>Location</dt>
-        <dd>{pathLabel(lib, file.folder)}</dd>
+        <dt>Folders</dt>
+        <dd className="dr-ffolders">
+          {folders.length ? (
+            folders.map((id) => (
+              <span key={id} className="dr-ffolder">
+                <button className="dr-link" onClick={() => props.onScope({ kind: "folder", id })}>
+                  {folderPath(lib, id)
+                    .map((f) => f.name)
+                    .join(" › ")}
+                </button>
+                {!file.trashed && (
+                  <button className="icon-btn" title="Remove from this folder" onClick={() => props.onRemoveFrom(id)}>
+                    <CloseIcon />
+                  </button>
+                )}
+              </span>
+            ))
+          ) : (
+            <span className="dr-muted">Unfiled{file.trashed ? "" : " — drag it onto a folder"}</span>
+          )}
+        </dd>
         <dt>Added</dt>
         <dd>{dateLabel(file.added, props.now)}</dd>
+        {file.trashed && (
+          <>
+            <dt>Status</dt>
+            <dd>In the Trash</dd>
+          </>
+        )}
       </dl>
+      {!file.trashed && (
+        <div className="dr-ftags">
+          <span className="dr-ftags-label">Tags</span>
+          <TagsEditor tags={file.tags} all={props.tagNames} onChange={props.onTags} />
+        </div>
+      )}
       <div className="dr-actions">
         <button className="dr-btn" onClick={props.onOpen}>
           <OpenIcon /> Open
@@ -630,13 +691,46 @@ function FileDetail(props: {
             <FolderIcon /> Show in folder
           </button>
         )}
-        <button className="dr-btn" onClick={props.onCreateItem} title="Move this file into a new Drawer item (as its attachment) so you can cite it">
-          <DocIcon /> Convert to item
-        </button>
-        <button className="dr-btn danger" onClick={props.onDelete}>
-          <TrashIcon /> Delete
-        </button>
+        {file.trashed ? (
+          <>
+            <button className="dr-btn" onClick={props.onRestore}>
+              <OpenIcon /> Restore
+            </button>
+            <button className="dr-btn danger" onClick={props.onTrash}>
+              <TrashIcon /> Delete permanently
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="dr-btn" onClick={props.onAttachTo} title="Attach this file to an item in My Library">
+              <ClipIcon /> Attach to item…
+            </button>
+            <button className="dr-btn" onClick={props.onCreateItem} title="Make a new item with this file attached so you can cite it (the file stays here)">
+              <DocIcon /> Create item
+            </button>
+            <button className="dr-btn danger" onClick={props.onTrash}>
+              <TrashIcon /> Move to Trash
+            </button>
+          </>
+        )}
       </div>
+      {attached.length > 0 && (
+        <div className="dr-attached">
+          <strong>Attached to</strong>
+          {attached.map(({ item, att }) => (
+            <div key={`${item.id}:${att.id}`} className="dr-place">
+              <DocIcon />
+              <span className="dr-place-text">
+                <span className="dr-place-name">{item.title || "Untitled"}</span>
+                <span className="dr-place-where">{item.trashed ? "In the Trash" : "My Library"}</span>
+              </span>
+              <button className="dr-link" onClick={() => props.onShowPlace({ kind: "attachment", item, att })}>
+                Show
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {others.length > 0 && (
         <div className="dr-dup-note">
           <strong>Same file also in</strong>

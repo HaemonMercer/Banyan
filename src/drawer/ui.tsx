@@ -124,3 +124,124 @@ export function AttachmentViewer(props: { att: { name: string; src: string }; on
     </div>
   );
 }
+
+/* ─── 標籤 ─── */
+
+/** 標籤編輯（條目與檔案共用）：Enter 或逗號加入、Backspace 拿掉最後一個 */
+export function TagsEditor(props: { tags: string[]; all: string[]; onChange: (t: string[]) => void }) {
+  const [v, setV] = useState("");
+  const add = () => {
+    const t = v.trim();
+    if (t && !props.tags.includes(t)) props.onChange([...props.tags, t]);
+    setV("");
+  };
+  return (
+    <div className="dr-tag-edit">
+      {props.tags.map((t) => (
+        <span className="dr-tag on" key={t}>
+          {t}
+          <button title="Remove tag" onClick={() => props.onChange(props.tags.filter((x) => x !== t))}>
+            <CloseIcon />
+          </button>
+        </span>
+      ))}
+      <input
+        value={v}
+        list="dr-tag-options"
+        placeholder={props.tags.length ? "Add…" : "Add a tag…"}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={add}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            add();
+          } else if (e.key === "Backspace" && !v && props.tags.length) props.onChange(props.tags.slice(0, -1));
+        }}
+      />
+      <datalist id="dr-tag-options">
+        {props.all
+          .filter((t) => !props.tags.includes(t))
+          .map((t) => (
+            <option key={t} value={t} />
+          ))}
+      </datalist>
+    </div>
+  );
+}
+
+/* ─── 選一筆的對話框（條目附加檔案庫的檔案、檔案附加到條目） ─── */
+
+export interface PickOption {
+  id: string;
+  label: string;
+  sub?: string;
+  icon?: ReactNode;
+}
+
+/** 搜尋＋清單，點一下就選（對話框不關，可以連續選好幾筆）；Enter 選第一筆、Esc 關掉 */
+export function PickDialog(props: {
+  title: string;
+  icon: ReactNode;
+  placeholder: string;
+  options: PickOption[];
+  /** 已經選過的（打勾、不能再選） */
+  done?: Set<string>;
+  empty: string;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = props.options.filter((o) => words.every((w) => `${o.label}\n${o.sub ?? ""}`.toLowerCase().includes(w))).slice(0, 200);
+  const pick = (o: PickOption) => {
+    if (!props.done?.has(o.id)) props.onPick(o.id);
+  };
+  return (
+    <div className="dr-dialog-back" onPointerDown={(e) => e.target === e.currentTarget && props.onClose()}>
+      <div className="dr-dialog" role="dialog" aria-label={props.title}>
+        <div className="dr-dialog-head">
+          {props.icon}
+          <strong>{props.title}</strong>
+          <button className="icon-btn" onClick={props.onClose} title="Close (Esc)">
+            <CloseIcon />
+          </button>
+        </div>
+        <div className="dr-pick-search">
+          <input
+            autoFocus
+            value={q}
+            placeholder={props.placeholder}
+            spellCheck={false}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") props.onClose();
+              else if (e.key === "Enter" && !e.nativeEvent.isComposing && shown[0]) pick(shown[0]);
+            }}
+          />
+        </div>
+        <div className="dr-dialog-list">
+          {shown.map((o) => {
+            const done = !!props.done?.has(o.id);
+            return (
+              <button key={o.id} className={`dr-pick-row${done ? " done" : ""}`} disabled={done} onClick={() => pick(o)}>
+                {o.icon}
+                <span className="dr-place-text">
+                  <span className="dr-place-name">{o.label}</span>
+                  {o.sub && <span className="dr-place-where">{o.sub}</span>}
+                </span>
+                {done && <span className="dr-pick-done">Attached</span>}
+              </button>
+            );
+          })}
+          {!shown.length && <div className="dr-empty">{props.options.length ? "Nothing matches" : props.empty}</div>}
+        </div>
+        <div className="dr-dialog-foot">
+          <button className="dr-btn primary" onClick={props.onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

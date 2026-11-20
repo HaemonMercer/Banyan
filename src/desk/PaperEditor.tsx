@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Editor } from "../editor/Editor";
-import { DEFAULT_PAGE, marginOf, pageStyle, paperOf, type PageSetup } from "./pageSetup";
+import { DEFAULT_PAGE, marginOf, pageStyle, paperColorOf, paperIsDark, paperOf, type PageSetup } from "./pageSetup";
 
 /**
  * Word 的所見即所得編輯：直接在 A4 紙上寫，邊寫邊分頁（參考 Word 的整頁模式）。
@@ -138,7 +138,7 @@ export function PaperEditor(props: {
   return (
     <div className="paper-host">
       <div className="paper-zoom" style={{ width: paper.w * zoom, height: (pages * STEP - GAP) * zoom }}>
-        <div className="paper-sheets" style={{ width: paper.w, height: pages * STEP - GAP, transform: zoom === 1 ? undefined : `scale(${zoom})` }}>
+        <div className={`paper-sheets${paperIsDark(setup.color) ? " paper-dark" : ""}`} style={{ width: paper.w, height: pages * STEP - GAP, transform: zoom === 1 ? undefined : `scale(${zoom})`, ["--paper-bg" as string]: paperColorOf(setup.color) }}>
           {Array.from({ length: pages }, (_, i) => (
             <div key={i} className="paper-page" style={{ top: i * STEP, width: paper.w, height: paper.h }} aria-hidden>
               {setup.header?.trim() && (

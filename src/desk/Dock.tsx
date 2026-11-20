@@ -1,5 +1,5 @@
 import { restyleBoxes } from "../editor/layout";
-import type { StyleLib } from "./DocChrome";
+import { PaperColors, type StyleLib } from "./DocChrome";
 import { adoptStyles, changeStyles, useSavedStyles } from "./styleLibrary";
 import { printPaper, printSheet, printSlides } from "./print";
 import { activeTableId } from "../sheet/SheetView";
@@ -38,7 +38,7 @@ import { DrawView } from "./DrawView";
 import { parseDiagram } from "./draw";
 import { loadImages, toDrawio, toHtml, toPng, toSvg } from "./drawExport";
 import { WordView } from "./WordView";
-import { isDefaultPage } from "./pageSetup";
+import { isDefaultLook, isDefaultPage, NOTE_SIZE, NOTE_SIZES, paperColorOf, paperIsDark, stepNoteSize, type NoteLook } from "./pageSetup";
 import { clickPick, keepPick, noPick, stepPick, type Picked } from "./selection";
 import { Presenter, SlideDeck } from "./SlideDeck";
 import { trimAnim, type Deck } from "./slideAnim";
@@ -1100,6 +1100,7 @@ function DocPane(props: {
             <PlayIcon /> Present
           </button>
         )}
+        {doc.kind === "note" && <LookMenu look={doc.look} onLook={(look) => onChange({ look: isDefaultLook(look) ? undefined : look })} />}
         {EXPORTS[doc.kind] ? (
           <ExportMenu items={EXPORTS[doc.kind]!} open={exportMenu} busy={busy} onToggle={() => setExportMenu((v) => !v)} onClose={() => setExportMenu(false)} onPick={exportDoc} />
         ) : (
@@ -1122,7 +1123,11 @@ function DocPane(props: {
           {note}
         </div>
       )}
-      <div className="dp-body" ref={body}>
+      <div
+        className={`dp-body${doc.kind === "note" && doc.look?.color ? ` dp-tinted${paperIsDark(doc.look.color) ? " paper-dark" : ""}` : ""}`}
+        ref={body}
+        style={doc.kind === "note" && doc.look?.color ? { ["--paper-bg" as string]: paperColorOf(doc.look.color) } : undefined}
+      >
         {doc.kind === "sheet" ? (
           <SheetView json={doc.content} onModify={props.onModifySheet} onSendNotes={props.onSendNotes} />
         ) : doc.kind === "draw" ? (
@@ -1149,7 +1154,7 @@ function DocPane(props: {
             styles={styleLib}
           />
         ) : (
-          <div className="dp-write">
+          <div className="dp-write" style={doc.look?.size ? { ["--note-size" as string]: `${doc.look.size}px` } : undefined}>
             <Editor value={doc.content} onChange={onContent} placeholder="Start writing…" />
           </div>
         )}
@@ -1223,6 +1228,57 @@ function ExportMenu(props: {
               <span className="hint">{it.hint}</span>
             </button>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 筆記的外觀（標題列的 Aa）：文字大小與頁面顏色，整份筆記一個設定 */
+function LookMenu(props: { look: NoteLook | undefined; onLook: (l: NoteLook) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("keydown", key);
+    };
+  }, [open]);
+  const look = props.look ?? {};
+  const size = look.size ?? NOTE_SIZE;
+  const set = (patch: Partial<NoteLook>) => {
+    const next = { ...look, ...patch };
+    props.onLook({ ...(next.size && next.size !== NOTE_SIZE ? { size: next.size } : {}), ...(next.color && next.color !== "white" && next.color !== "#ffffff" ? { color: next.color } : {}) });
+  };
+  return (
+    <div className="dp-export" ref={ref}>
+      <button className={`dp-btn${open ? " on" : ""}`} onClick={() => setOpen((v) => !v)} title="Text size and page color" aria-label="Text size and page color">
+        <span className="dp-look-icon">Aa</span>
+      </button>
+      {open && (
+        <div className="popover dp-export-menu dp-look">
+          <div className="dp-look-label">Text size</div>
+          <div className="dp-look-size">
+            <button title="Smaller text" aria-label="Smaller text" disabled={size <= NOTE_SIZES[0]} onClick={() => set({ size: stepNoteSize(look.size, -1) })}>
+              <span style={{ fontSize: 12 }}>A</span>
+            </button>
+            <span className="dp-look-value">{size} px</span>
+            <button title="Larger text" aria-label="Larger text" disabled={size >= NOTE_SIZES[NOTE_SIZES.length - 1]} onClick={() => set({ size: stepNoteSize(look.size, 1) })}>
+              <span style={{ fontSize: 17 }}>A</span>
+            </button>
+          </div>
+          <div className="dp-look-label">Page color</div>
+          <PaperColors value={look.color} onPick={(c) => set({ color: c })} />
+          {!isDefaultLook(look) && (
+            <button className="dp-look-reset" onClick={() => props.onLook({})}>
+              Reset to default
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import { editorBus, Swatches, type EditorCommands, type EditorStatus } from "../editor/Editor";
-import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, IndentIcon, LinkIcon, OutdentIcon } from "../editor/icons";
+import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { editorBus, type EditorCommands, type EditorStatus } from "../editor/Editor";
+import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ClipIcon, DrawerIcon, ImportIcon, IndentIcon, LinkIcon, OutdentIcon } from "../editor/icons";
+import type { ImageTab } from "../drawer/drawerImages";
 import type { BlockType } from "../editor/ops";
-import type { Color } from "../editor/inline";
+import { inkCss, type Ink } from "../editor/inline";
+import { ColorMenu, CustomColor } from "../editor/ColorPicker";
 import {
   BLOCK_FONTS,
   BORDER_COLORS,
   charOnly,
+  withoutChar,
   removeCharStyle,
   renameCharStyle,
   blockStyleCss,
@@ -22,6 +26,7 @@ import {
 } from "../editor/blockStyle";
 import type { BoxValue } from "../editor/layout";
 import { changeCharStyles, useCharStyles } from "./styleLibrary";
+import { PAPER_COLORS, type PaperColor } from "./pageSetup";
 
 /**
  * Word 與簡報的外框（參考 Apple 的 Pages、Keynote）：
@@ -106,6 +111,23 @@ export function MenuItem(props: { label: ReactNode; hint?: string; icon?: ReactN
       {props.hint && <span className="hint">{props.hint}</span>}
       {props.current && <span className="check">✓</span>}
     </button>
+  );
+}
+
+/**
+ * Media 選單的圖片項目（參考 Google 文件的 Insert → Image）：Upload from computer、Drawer、
+ * Attachments、By URL，都打開插入圖片的對話框（`drawer/ImagePicker.tsx`）的那一頁。
+ */
+export function ImageMenuItems(props: { close: () => void; onImage: (tab: ImageTab) => void }) {
+  const go = (tab: ImageTab) => () => (props.close(), props.onImage(tab));
+  return (
+    <>
+      <div className="popover-title">Image</div>
+      <MenuItem icon={<ImportIcon />} label="Upload from computer" onClick={go("upload")} />
+      <MenuItem icon={<DrawerIcon />} label="Drawer" onClick={go("recent")} />
+      <MenuItem icon={<ClipIcon />} label="Item attachments" onClick={go("attachments")} />
+      <MenuItem icon={<LinkIcon />} label="By URL" onClick={go("url")} />
+    </>
   );
 }
 
@@ -205,31 +227,146 @@ export function Popup<T extends string | number>(props: {
   );
 }
 
+/** 頁面顏色（Word 的版面設定、Dock 筆記共用）：一排淺色色塊 */
+export function PaperColors(props: { value: PaperColor | undefined; onPick: (c: PaperColor) => void }) {
+  const cur = props.value ?? "white";
+  return (
+    <div className="dc-paper-pick">
+    <div className="dc-paper-colors" role="radiogroup" aria-label="Page color">
+      {PAPER_COLORS.map((c) => (
+        <button
+          key={c.id}
+          role="radio"
+          aria-checked={cur === c.id}
+          className={`dc-paper-color${cur === c.id ? " on" : ""}`}
+          style={{ background: c.css }}
+          title={c.label}
+          aria-label={c.label}
+          onClick={() => props.onPick(c.id)}
+        />
+      ))}
+    </div>
+      <CustomColor value={cur.startsWith("#") ? cur : null} onPick={(c) => props.onPick(c)} />
+    </div>
+  );
+}
+
 /** 顏色按鈕：一個色塊，點了列出顏色 */
-function ColorWell(props: { kind: "color" | "highlight" | "bg"; value: Color | null; disabled?: boolean; title: string; onPick: (c: Color | null) => void }) {
+export function ColorWell(props: {
+  kind: "color" | "highlight" | "bg";
+  value: Ink | null;
+  disabled?: boolean;
+  title: string;
+  /** 按鈕上的圖示（預設照 kind：文字 A、螢光筆、油漆桶；投影片物件用 fill／line） */
+  glyph?: "fill" | "line";
+  onPick: (c: Ink | null) => void;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useOutside(ref, open, () => setOpen(false));
-  const cls = props.value ? `${props.kind === "color" ? "tc" : props.kind === "highlight" ? "hl" : "bg"}-${props.value}` : "";
+  const menu = useRef<HTMLDivElement>(null);
+  /** 選單畫在 body 上（檢閱器會捲動、裁掉超出的部分，打開 Custom 的色彩方塊時選單會被切掉） */
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!ref.current?.contains(t) && !menu.current?.contains(t)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("keydown", key);
+    };
+  }, [open]);
+  // 位置：跟按鈕右邊對齊，下面放不下就放上面，都放不下就貼著視窗底；選單長高（打開 Custom）或捲動時重算
+  useLayoutEffect(() => {
+    if (!open) return setPos(null);
+    const el = menu.current;
+    const anchor = ref.current;
+    if (!el || !anchor) return;
+    const place = () => {
+      const a = anchor.getBoundingClientRect();
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const left = Math.max(8, Math.min(a.right - w, vw - w - 8));
+      const top = a.bottom + 4 + h <= vh - 8 ? a.bottom + 4 : a.top - 4 - h >= 8 ? a.top - 4 - h : Math.max(8, vh - h - 8);
+      setPos((p) => (p && p.left === left && p.top === top ? p : { left, top }));
+    };
+    place();
+    const ro = new ResizeObserver(place);
+    ro.observe(el);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+  const pre = props.kind === "color" ? "tc" : props.kind === "highlight" ? "hl" : "bg";
+  const v = props.value;
+  /** 按鈕上的顏色條（Word、Google 文件：字母下面一條目前的顏色）；沒有顏色時文字是預設色、螢光與背景是斜線 */
+  const bar = v ? inkCss(pre, v) : props.kind === "color" && !props.glyph ? "var(--ed-text)" : null;
   return (
     <div className="dc-well-wrap" ref={ref}>
-      <button className="dc-well" title={props.title} aria-label={props.title} disabled={props.disabled} onClick={() => setOpen((v) => !v)}>
-        <span className={`dc-well-swatch ${props.kind} ${cls}`}>{props.kind === "bg" ? "" : "A"}</span>
+      <button className={`dc-well${open ? " open" : ""}`} title={props.title} aria-label={props.title} aria-expanded={open} disabled={props.disabled} onClick={() => setOpen((v) => !v)}>
+        <span className={`dc-well-glyph ${props.kind}`}>
+          {props.glyph === "fill" || (!props.glyph && props.kind === "bg") ? <BucketGlyph /> : props.glyph === "line" ? <LineGlyph /> : props.kind === "highlight" ? <MarkerGlyph /> : "A"}
+          <i className={`dc-well-bar${bar ? "" : " none"}`} style={bar ? { background: bar } : undefined} />
+        </span>
         <span className="dc-caret">⌄</span>
       </button>
-      {open && (
-        <div className="popover dc-menu dc-swatch-menu right">
-          <Swatches
+      {open &&
+        createPortal(
+        <div
+          ref={menu}
+          className="popover dc-menu dc-swatch-menu dc-swatch-float editor-ui"
+          onMouseDown={(e) => e.preventDefault()}
+          style={{ position: "fixed", left: pos?.left ?? -9999, top: pos?.top ?? 0, right: "auto", bottom: "auto", visibility: pos ? undefined : "hidden" }}
+        >
+          <ColorMenu
             kind={props.kind}
             value={props.value}
+            noneLabel={props.glyph === "fill" ? "No fill" : props.glyph === "line" ? "No border" : undefined}
             onPick={(c) => {
               setOpen(false);
               props.onPick(c);
             }}
           />
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </div>
+  );
+}
+
+function MarkerGlyph() {
+  return (
+    <svg width="14" height="12" viewBox="0 0 16 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9.5 1.5l4 4-6 6H3.5v-4z" />
+      <path d="M2 13h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LineGlyph() {
+  return (
+    <svg width="14" height="12" viewBox="0 0 16 14" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="2.5" y="2" width="11" height="9" rx="1.5" />
+    </svg>
+  );
+}
+
+function BucketGlyph() {
+  return (
+    <svg width="14" height="12" viewBox="0 0 16 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 1.5l5.5 5.5-4.5 4.5L2.5 6z" />
+      <path d="M13.5 9.5c0 1-.6 1.8-1.2 1.8s-1.2-.8-1.2-1.8.6-1.8 1.2-2.6c.6.8 1.2 1.6 1.2 2.6z" fill="currentColor" stroke="none" />
+    </svg>
   );
 }
 
@@ -354,7 +491,16 @@ export interface StyleLib {
  * Text 分頁（Word 叫 Style）：段落樣式、字元樣式、字型、清除格式。
  * 粗斜體、底線、刪除線與文字顏色：有選取文字就作用在選取的字，沒有就作用在整段。
  */
-export function TextFormat(props: { st: Status; run: Run; styles: ParaStyle[]; lib?: StyleLib; code?: boolean; hint?: string }) {
+export function TextFormat(props: {
+  st: Status;
+  run: Run;
+  styles: ParaStyle[];
+  lib?: StyleLib;
+  code?: boolean;
+  hint?: string;
+  /** 內文沒有設定字級時的大小（pt，Word 的版面設定）；顯示在字級欄裡 */
+  baseSize?: number;
+}) {
   const { st, run } = props;
   if (!canFormat(st)) return <NeedText hint={props.hint} />;
   const sel = st.editing && st.textSel;
@@ -382,7 +528,6 @@ export function TextFormat(props: { st: Status; run: Run; styles: ParaStyle[]; l
         </Section>
       )}
       <ParagraphStyles st={st} run={run} styles={props.styles} lib={props.lib} />
-      <CharStyles st={st} run={run} text={rich} />
       <Section title="Font">
         <Popup
           label="Font"
@@ -391,7 +536,12 @@ export function TextFormat(props: { st: Status; run: Run; styles: ParaStyle[]; l
           onPick={(font) => set({ font: font || undefined })}
         />
         <div className="dc-nums">
-          <PtField label="Size (pt)" value={s.size} placeholder="Default" onSet={(size) => set({ size: size || undefined })} />
+          <SizeField
+            label="Size (pt)"
+            value={s.size}
+            placeholder={props.baseSize && !heading ? String(props.baseSize) : "Default"}
+            onSet={(size) => set({ size: size || undefined })}
+          />
           <PtField label="Spacing (pt)" value={s.tracking} step={0.5} onSet={(tracking) => set({ tracking: tracking || undefined })} />
         </div>
         <div className="dc-row dc-font-row">
@@ -404,7 +554,7 @@ export function TextFormat(props: { st: Status; run: Run; styles: ParaStyle[]; l
           </Seg>
           <ColorWell
             kind="color"
-            value={sel ? (m?.color ?? null) : ((s.color as Color | undefined) ?? null)}
+            value={sel ? (m?.color ?? null) : ((s.color as Ink | undefined) ?? null)}
             title={sel ? "Text color" : "Text color — whole paragraph"}
             onPick={(c) => (sel ? run((x) => x.color("color", c)) : set({ color: c ?? undefined }))}
           />
@@ -428,6 +578,8 @@ export function TextFormat(props: { st: Status; run: Run; styles: ParaStyle[]; l
           <ColorWell kind="highlight" value={m?.highlight ?? null} disabled={!sel || !rich} title="Highlight (select some text)" onPick={(c) => run((x) => x.color("highlight", c))} />
         </div>
         <p className="dc-note">{sel ? "Changes apply to the selected text." : "Nothing selected: changes apply to the whole paragraph."}</p>
+        {/* 字元樣式放在 Font 最下面（參考 Pages 的 Font 區塊） */}
+        <CharStyles st={st} run={run} text={rich} />
       </Section>
       <Section>
         <button
@@ -524,7 +676,10 @@ function ParagraphStyles(props: { st: Status; run: Run; styles: ParaStyle[]; lib
             }
             const t = id.slice(2) as BlockType;
             run((c) => {
+              // 套用內建的段落樣式：清掉已存的樣式，以及整段自己改的字型、字級、粗細等（版面的設定留著）
               if (st.boxName) c.box(() => ({ css: "" }));
+              else if (st.box && formatBlockStyle(withoutChar(parseBlockStyle(st.box))) !== formatBlockStyle(parseBlockStyle(st.box)))
+                c.box((v) => ({ ...v, css: formatBlockStyle(withoutChar(parseBlockStyle(v.css))) }));
               c.turnInto(t);
             });
           }}
@@ -605,7 +760,8 @@ function CharStyles(props: { st: Status; run: Run; text: boolean }) {
     );
   };
   return (
-    <Section title="Character Style">
+    <div className="dc-cs">
+      <div className="dc-sublabel">Character Style</div>
       <div className="dc-style-line">
         <Popup
           label="Character style"
@@ -670,11 +826,11 @@ function CharStyles(props: { st: Status; run: Run; text: boolean }) {
                 <s>S</s>
               </SegBtn>
             </Seg>
-            <ColorWell kind="color" value={(s.color as Color | undefined) ?? null} title="Character style color" onPick={(c) => edit({ color: c ?? undefined })} />
+            <ColorWell kind="color" value={(s.color as Ink | undefined) ?? null} title="Character style color" onPick={(c) => edit({ color: c ?? undefined })} />
           </div>
         </div>
       )}
-    </Section>
+    </div>
   );
 }
 
@@ -778,6 +934,7 @@ export function LayoutFormat(props: { st: Status; run: Run; checklist?: boolean;
             );
           })}
         </div>
+        <CustomColor value={s.border ? s.borderColor : null} onPick={(c) => set({ border: s.border || 1, borderColor: c })} />
         <div className="dc-nums">
           <PtField label="Border (pt)" value={s.border} step={0.5} onSet={(border) => set({ border: border || undefined })} />
           <PtField label="Corners (pt)" value={s.radius} onSet={(radius) => set({ radius: radius || undefined })} />
@@ -847,6 +1004,38 @@ function PtField(props: { label: string; value: number | undefined; placeholder?
       />
       <span>{props.label}</span>
     </label>
+  );
+}
+
+/** 常用字級（Style → Font 的下拉清單） */
+export const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72];
+
+/** 字級：可以直接打數字（↑↓ 加減 1），也可以從 ▾ 的清單挑；Default 是拿掉 */
+function SizeField(props: { label: string; value: number | undefined; placeholder: string; onSet: (v: number | undefined) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useOutside(ref, open, () => setOpen(false));
+  const pick = (v: number | undefined) => {
+    setOpen(false);
+    props.onSet(v);
+  };
+  return (
+    <div className="dc-size" ref={ref}>
+      <div className="dc-size-box">
+        <PtField label={props.label} value={props.value} placeholder={props.placeholder} onSet={props.onSet} />
+        <button className="dc-size-open" title="Font sizes" aria-label="Font sizes" aria-expanded={open} onMouseDown={(e) => e.preventDefault()} onClick={() => setOpen((v) => !v)}>
+          <span className="dc-caret">⌄</span>
+        </button>
+      </div>
+      {open && (
+        <div className="popover dc-menu dc-size-menu" role="menu">
+          <MenuItem label="Default" hint={props.placeholder === "Default" ? undefined : `${props.placeholder} pt`} current={props.value === undefined} onClick={() => pick(undefined)} />
+          {FONT_SIZES.map((n) => (
+            <MenuItem key={n} label={`${n} pt`} current={props.value === n} onClick={() => pick(n)} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

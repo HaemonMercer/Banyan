@@ -63,8 +63,42 @@ function unclosed(before: string, open: string, close: string): boolean {
   return o >= 0 && before.indexOf(close, o) < 0;
 }
 
-/** 會被轉換的鍵 */
-export const PUNCT_KEYS = new Set([...Object.keys(SIMPLE), "(", ")", '"', "'"]);
+/**
+ * 游標在正在打的 Markdown 語法裡面：標點是語法的一部分，不換。
+ * - 前一個字是 `\`（跳脫，使用者要的就是半形）；
+ * - 行內程式碼裡（這一行的反引號是奇數個）；
+ * - 連結、圖片的網址與標題裡（`[文字](` 後面還沒關上）；
+ * - HTML 標籤或自動連結裡（`<span style="`、`<https:`，`<` 後面還沒有 `>`）。
+ */
+export function inMarkdownSyntax(before: string): boolean {
+  if (before.endsWith("\\")) return true;
+  const line = before.slice(before.lastIndexOf("\n") + 1);
+  if ((line.match(/`/g)?.length ?? 0) % 2 === 1) return true;
+  const link = line.lastIndexOf("](");
+  if (link >= 0 && line.indexOf(")", link + 2) < 0) return true;
+  const tag = line.search(/<[A-Za-z/!][^<>]*$/);
+  return tag >= 0;
+}
+
+/**
+ * 游標在只會打英文的 Markdown 語法裡：Banyan 的倉頡／速成在這裡打字母一律是英文（`predictor.ts`）。
+ * - 行內程式碼、程式碼區塊的 ```` ``` ```` 語言（這一行的反引號是奇數個）；
+ * - 連結、圖片的網址（`[文字](` 後面還沒關上）；
+ * - HTML 標籤、自動連結（`<` 後面還沒有 `>`）；
+ * - 任務標記 `{x}`、核取方塊 `[x]`（行首或清單標記後面剛打了 `{`／`[`）。
+ * 連結文字、`[[頁面]]` 的名稱可能是中文，照常。
+ */
+export function markdownEnglish(before: string): boolean {
+  const line = before.slice(before.lastIndexOf("\n") + 1);
+  if ((line.match(/`/g)?.length ?? 0) % 2 === 1) return true;
+  const link = line.lastIndexOf("](");
+  if (link >= 0 && line.indexOf(")", link + 2) < 0) return true;
+  if (/<$|<[A-Za-z/!][^<>]*$/.test(line)) return true;
+  return /^\s*(?:(?:[-*+]|\d+[.)])\s+)?\{$/.test(line) || /^\s*(?:[-*+]|\d+[.)])\s+\[$/.test(line);
+}
+
+/** 會被轉換的鍵（`[` 只用來把 `！[` 改回圖片語法 `![`） */
+export const PUNCT_KEYS = new Set([...Object.keys(SIMPLE), "(", ")", '"', "'", "["]);
 
 /**
  * 在 before（游標前面的文字）後面打 key：要換成什麼。
@@ -72,6 +106,9 @@ export const PUNCT_KEYS = new Set([...Object.keys(SIMPLE), "(", ")", '"', "'"]);
  */
 export function cjkPunct(before: string, key: string): { text: string; remove: number } | null {
   const prev = before.slice(-1);
+  if (inMarkdownSyntax(before)) return null;
+  // 圖片 `![`：`!` 已經換成 `！`，緊接著打 `[` 就換回來
+  if (key === "[") return prev === "！" ? { text: "![", remove: 1 } : null;
   // 數字後面的 . , : 是小數、千分位、時間（`3.14`、`1,000`、`14:00`）
   if (/[0-9]/.test(prev) && (key === "." || key === "," || key === ":")) return null;
   const cjk = inChinese(before) && (isCjk(prev) || !inTechWord(before));

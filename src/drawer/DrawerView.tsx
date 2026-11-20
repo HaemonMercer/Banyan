@@ -85,10 +85,34 @@ import {
 } from "./model";
 import { loadUi, saveUi } from "./store";
 import { setCiteStyle } from "./citeRef";
-import { AttachmentViewer, Menu, MenuRow, openLink, RenameInput, reveal } from "./ui";
+import { AttachmentViewer, Menu, MenuRow, openLink, PickDialog, RenameInput, reveal, TagsEditor } from "./ui";
+import { FileGlyph } from "./FilesPane";
 import { FilesPane, type EntryDrag } from "./FilesPane";
 import { DuplicateFinder, DuplicatePrompt, type DuplicateCheck } from "./Duplicates";
-import { addFiles, addFolder, checkDuplicates, childFolders, countRemoved, folderFileCount, moveEntries, pathLabel, removeEntries, renameEntry, type FileEntry, type Place } from "./files";
+import {
+  addFiles,
+  addFolder,
+  addToFolder,
+  attachFile,
+  checkDuplicates,
+  childFolders,
+  fileScopeFrom,
+  fileScopeKey,
+  fileLocation,
+  fileTags,
+  folderCounts,
+  hasUnlinked,
+  linkAttachments,
+  moveFolder,
+  pathLabel,
+  removeFolder,
+  renameEntry,
+  renameFileTag,
+  setFilesTrashed,
+  type FileEntry,
+  type FileScope,
+  type Place,
+} from "./files";
 import "./drawer.css";
 
 /** 要在 Drawer 裡打開的備註（`item` 是條目 id）。 */
@@ -98,19 +122,39 @@ export interface DrawerFocus {
   stamp: number;
 }
 
-/** 左欄選的地方：文獻庫的範圍，或檔案庫的某個資料夾（null 是 My Files）。 */
-type View = Scope | { kind: "files"; folder: string | null };
-const scopeKey = (s: View) => (s.kind === "collection" ? `c:${s.id}` : s.kind === "files" ? `f:${s.folder ?? ""}` : s.kind);
-function scopeFrom(k: string | undefined, lib: Library): View {
+/** Drawer 的兩頁（像 Desk 檔案的 Whiteboard／Dock／Tasks）：文獻庫與檔案庫。由 App 的畫面決定（`{ kind: "drawer", tab }`）。 */
+export type DrawerTab = "library" | "files";
+export const nextDrawerTab = (t: DrawerTab): DrawerTab => (t === "library" ? "files" : "library");
+
+/** Library／Files 切換：跟 `DeskSwitch` 一樣只有圖示，放在 App 頂端列的標題後面（Alt+D 輪流換） */
+export function DrawerSwitch(props: { tab: DrawerTab; onTab: (t: DrawerTab) => void }) {
+  const item = (t: DrawerTab, label: string, icon: ReactNode) => (
+    <button
+      className={props.tab === t ? "on" : ""}
+      role="tab"
+      aria-selected={props.tab === t}
+      aria-label={label}
+      title={`${label} (Alt+D to switch)`}
+      onClick={() => props.onTab(t)}
+    >
+      {icon}
+    </button>
+  );
+  return (
+    <div className="desk-switch" role="tablist" aria-label="Library or Files">
+      {item("library", "Library", <DrawerIcon />)}
+      {item("files", "Files", <FolderIcon />)}
+    </div>
+  );
+}
+
+const scopeKey = (s: Scope) => (s.kind === "collection" ? `c:${s.id}` : s.kind);
+/** 文獻庫頁左欄選的範圍（舊版記的 `f:…` 是檔案庫的資料夾，交給 `fileScopeFrom`） */
+function scopeFrom(k: string | undefined, lib: Library): Scope {
   if (k === "unfiled" || k === "trash") return { kind: k };
-  if (k?.startsWith("f:")) {
-    const id = k.slice(2);
-    return { kind: "files", folder: id && lib.folders.some((f) => f.id === id) ? id : null };
-  }
   if (k?.startsWith("c:") && lib.collections.some((c) => c.id === k.slice(2))) return { kind: "collection", id: k.slice(2) };
   return { kind: "all" };
 }
-
 const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
 const stripExt = (n: string) => n.replace(/\.[^.]+$/, "");
 
@@ -147,7 +191,9 @@ type MenuState =
   | { kind: "folder"; x: number; y: number; id: string }
   | null;
 
-type Drag = { kind: "items"; ids: string[]; label: string } | { kind: "collection"; id: string; label: string } | EntryDrag;
+type FolderDrag = { kind: "folder"; id: string; label: string };
+
+type Drag = { kind: "items"; ids: string[]; label: string } | { kind: "collection"; id: string; label: string } | EntryDrag | FolderDrag;
 
 /* ─── 主畫面 ─── */
 
@@ -161,11 +207,30 @@ export function DrawerView(props: {
   onOpenSource: (s: Source) => void;
   /** 從別的地方點了備註的引用（`[[@引用鍵#r1]]`）：選取條目、打開 Remarks 分頁；stamp 每次點都不同 */
   focus?: DrawerFocus | null;
+  /** 文獻庫或檔案庫 */
+  tab: DrawerTab;
+  onTab: (t: DrawerTab) => void;
 }) {
   const lib = useMemo(() => parseLibrary(props.json ?? ""), [props.json]);
-  const { onModify } = props;
+  const { onModify, tab, onTab } = props;
   const ui = useMemo(loadUi, []);
-  const [scope, setScope] = useState<View>(() => scopeFrom(ui.scope, lib));
+  const [scope, setScope] = useState<Scope>(() => scopeFrom(ui.scope, lib));
+  const [fileScope, setFileScope] = useState<FileScope>(() => fileScopeFrom(ui.folder ?? (ui.scope?.startsWith("f:") ? ui.scope : undefined), lib));
+  /** 檔案庫頁打開的資料夾（範圍不是資料夾時是 null） */
+  const folder = fileScope.kind === "folder" ? fileScope.id : null;
+  const [fileTagSel, setFileTagSel] = useState<string[]>([]);
+  /** 附加的對話框：從檔案庫選檔案附加到條目，或把檔案附加到選的條目 */
+  const [picking, setPicking] = useState<{ kind: "files"; item: string } | { kind: "items"; file: string } | null>(null);
+  const files = tab === "files";
+  /** 到文獻庫的某個範圍／檔案庫的某個資料夾（換到那一頁） */
+  const goLibrary = (s: Scope) => {
+    setScope(s);
+    if (files) onTab("library");
+  };
+  const goFiles = (s: FileScope) => {
+    setFileScope(s);
+    if (!files) onTab("files");
+  };
   const [fileSel, setFileSel] = useState<string[]>([]);
   const [dupAsk, setDupAsk] = useState<{ checks: DuplicateCheck[]; total: number; skip: () => void; all: () => void } | null>(null);
   const [dupTool, setDupTool] = useState(false);
@@ -190,8 +255,8 @@ export function DrawerView(props: {
   const focusTitle = useRef(false);
 
   useEffect(() => {
-    saveUi({ scope: scopeKey(scope), sort, desc, style, collapsed: [...collapsed] });
-  }, [scope, sort, desc, style, collapsed]);
+    saveUi({ scope: scopeKey(scope), folder: fileScopeKey(fileScope), sort, desc, style, collapsed: [...collapsed] });
+  }, [scope, fileScope, sort, desc, style, collapsed]);
   // 編輯器裡的 [[@引用鍵]] 跟著用同一種格式
   useEffect(() => setCiteStyle(style), [style]);
 
@@ -199,8 +264,13 @@ export function DrawerView(props: {
   useEffect(() => {
     if (scope.kind === "collection" && props.json !== undefined && !lib.collections.some((c) => c.id === scope.id)) setScope({ kind: "all" });
     // 資料夾被刪掉了就回到 My Files
-    if (scope.kind === "files" && scope.folder && props.json !== undefined && !lib.folders.some((f) => f.id === scope.folder)) setScope({ kind: "files", folder: null });
-  }, [lib, scope, props.json]);
+    if (folder && props.json !== undefined && !lib.folders.some((f) => f.id === folder)) setFileScope({ kind: "all" });
+  }, [lib, scope, folder, props.json]);
+
+  // 每個檔案附件都存在檔案庫（`linkAttachments`）：附加檔案、拖檔案建條目、舊資料，一律在這裡補上
+  useEffect(() => {
+    if (props.json !== undefined && hasUnlinked(lib)) onModify(linkAttachments);
+  }, [lib, props.json, onModify]);
 
   useEffect(() => {
     if (!notice) return;
@@ -208,9 +278,11 @@ export function DrawerView(props: {
     return () => clearTimeout(t);
   }, [notice]);
 
-  const shown = useMemo(() => sortItems(filterItems(lib, scope.kind === "files" ? { kind: "all" } : scope, query, tags), sort, desc), [lib, scope, query, tags, sort, desc]);
+  const shown = useMemo(() => sortItems(filterItems(lib, scope, query, tags), sort, desc), [lib, scope, query, tags, sort, desc]);
   const counts = useMemo(() => collectionCounts(lib), [lib]);
   const tagList = useMemo(() => allTags(lib), [lib]);
+  const fileTagList = useMemo(() => fileTags(lib), [lib]);
+  const fileCounts = useMemo(() => folderCounts(lib), [lib]);
   const byId = useMemo(() => new Map(lib.items.map((i) => [i.id, i])), [lib]);
   const selected = sel.map((id) => byId.get(id)).filter((i): i is Item => !!i);
   const current = selected.length === 1 ? selected[0] : null;
@@ -222,7 +294,7 @@ export function DrawerView(props: {
     const f = props.focus;
     const it = f && byId.get(f.item);
     if (!it) return;
-    setScope(it.trashed ? { kind: "trash" } : { kind: "all" });
+    goLibrary(it.trashed ? { kind: "trash" } : { kind: "all" });
     setQuery("");
     setTags([]);
     setSel([it.id]);
@@ -252,12 +324,13 @@ export function DrawerView(props: {
       if (!items.length) return;
       const withColl = items.map((it) => (coll && !it.collections.includes(coll) ? { ...it, collections: [...it.collections, coll] } : it));
       onModify((l) => addItems(l, withColl));
-      if (scope.kind === "trash" || scope.kind === "files" || (scope.kind === "unfiled" && coll)) setScope({ kind: "all" });
+      if (scope.kind === "trash" || (scope.kind === "unfiled" && coll)) setScope({ kind: "all" });
+      if (files) onTab("library");
       setQuery("");
       setTags([]);
       setSel(withColl.map((i) => i.id));
     },
-    [onModify, scope.kind, scopeCollection],
+    [onModify, onTab, files, scope.kind, scopeCollection],
   );
 
   const newItem = (type: ItemType) => {
@@ -366,13 +439,17 @@ export function DrawerView(props: {
     });
   };
 
-  const attachSaved = (id: string, saved: { name: string; src: string }[]) =>
-    guardDuplicates(saved, (keep) => onModify((l) => keep.reduce((acc, s) => addAttachment(acc, id, { name: s.name, src: s.src, kind: "file" }), l)));
+  /** 附加到條目，同時存進檔案庫（同樣內容的檔案已經在檔案庫就連到那一筆，不另外存，所以不用問重複） */
+  const attachSaved = (id: string, saved: { name: string; src: string }[]) => {
+    if (!saved.length) return;
+    onModify((l) => linkAttachments(saved.reduce((acc, s) => addAttachment(acc, id, { name: s.name, src: s.src, kind: "file" }), l)));
+    setNotice(`Attached ${saved.length === 1 ? "1 file" : `${saved.length} files`} — ${saved.length === 1 ? "it's" : "they're"} also in Files`);
+  };
 
   const attachFiles = async (id: string, files: File[]) => attachSaved(id, await saveAll(files));
 
-  /** 放進檔案庫的資料夾，切到那個資料夾並選取新的檔案。 */
-  const addToFolder = (folder: string | null, saved: { name: string; src: string; size?: number }[]) =>
+  /** 加進檔案庫（放進資料夾，null 是 Unfiled），切到看得到它們的範圍並選取新的檔案。 */
+  const addIntoFiles = (folder: string | null, saved: { name: string; src: string; size?: number }[]) =>
     guardDuplicates(saved, (keep) => {
       let ids: string[] = [];
       onModify((l) => {
@@ -380,19 +457,19 @@ export function DrawerView(props: {
         ids = r.ids;
         return r.lib;
       });
-      setScope({ kind: "files", folder });
+      goFiles(folder ? { kind: "folder", id: folder } : fileScope.kind === "unfiled" ? fileScope : { kind: "all" });
+      setFileTagSel([]);
       setFileSel(ids);
-      setNotice(`Added ${ids.length === 1 ? "1 file" : `${ids.length} files`} to ${pathLabel(lib, folder)}`);
+      setNotice(`Added ${ids.length === 1 ? "1 file" : `${ids.length} files`}${folder ? ` to ${pathLabel(lib, folder)}` : ""}`);
     });
 
-  /** 檔案庫的檔案變成條目（檔案搬進條目當附件，不留兩份）。 */
+  /** 用檔案庫的檔案建一個條目（檔案留在檔案庫，附件連到它）。 */
   const convertToItem = (f: FileEntry) => {
     const it = blankItem("other");
     it.title = stripExt(f.name);
-    it.attachments = [{ id: `a${it.id}`, name: f.name, src: f.src, kind: "file", added: f.added || Date.now() }];
-    onModify((l) => removeEntries(l, [f.id]));
+    it.attachments = [{ id: `a${it.id}`, name: f.name, src: f.src, kind: "file", added: Date.now(), file: f.id }];
     addNew([it], null);
-    setNotice(`Moved “${f.name}” into a new item — fill in its details to cite it`);
+    setNotice(`Made a new item with “${f.name}” attached — fill in its details to cite it`);
   };
 
   /** 到某個重複檔案所在的地方。 */
@@ -400,10 +477,11 @@ export function DrawerView(props: {
     setDupAsk(null);
     setDupTool(false);
     if (p.kind === "file") {
-      setScope({ kind: "files", folder: p.file.folder });
+      goFiles(p.file.trashed ? { kind: "trash" } : { kind: "all" });
+      setFileTagSel([]);
       setFileSel([p.file.id]);
     } else {
-      setScope(p.item.trashed ? { kind: "trash" } : { kind: "all" });
+      goLibrary(p.item.trashed ? { kind: "trash" } : { kind: "all" });
       setQuery("");
       setTags([]);
       setSel([p.item.id]);
@@ -417,8 +495,8 @@ export function DrawerView(props: {
     if (!el?.closest(".drawer")) return;
     const row = el.closest<HTMLElement>("[data-item]")?.dataset.item;
     const coll = el.closest<HTMLElement>("[data-drop]")?.dataset.drop;
-    // 放在檔案庫（資料夾、麵包屑、左欄的資料夾）就加進那個資料夾
-    const toFolder = coll?.startsWith("f:") ? coll.slice(2) || null : scope.kind === "files" && !el.closest(".dr-side") ? scope.folder : undefined;
+    // 放在檔案庫（資料夾、麵包屑、左欄的資料夾）就加進那個資料夾；檔案庫頁的其他地方加進目前的資料夾（不是資料夾就是 Unfiled）
+    const toFolder = coll?.startsWith("f:") ? coll.slice(2) || null : coll?.startsWith("f-") ? null : files && !el.closest(".dr-side") ? folder : undefined;
     void (async () => {
       const saved: { name: string; src: string }[] = [];
       for (const p of paths) {
@@ -430,7 +508,7 @@ export function DrawerView(props: {
       }
       if (!saved.length) return;
       if (toFolder !== undefined) {
-        addToFolder(toFolder, saved);
+        addIntoFiles(toFolder, saved);
         return;
       }
       if (row && byId.has(row)) {
@@ -503,8 +581,10 @@ export function DrawerView(props: {
       setDrag({ ...d, x: ev.clientX, y: ev.clientY });
       const t = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-drop]");
       const drop = t?.dataset.drop ?? null;
-      // 檔案庫的東西只能放進資料夾，條目與收藏不能放進資料夾
-      setDropTarget(drop && (d.kind === "entries") === drop.startsWith("f:") ? drop : null);
+      // 檔案庫的東西只能放在檔案庫的目標（`f:資料夾`、`f-trash`），條目與收藏不能放進資料夾；資料夾不能丟進垃圾桶
+      const fileDrag = d.kind === "entries" || d.kind === "folder";
+      const ok = drop && fileDrag === drop.startsWith("f") && !(d.kind === "folder" && (drop === `f:${d.id}` || drop.startsWith("f-")));
+      setDropTarget(ok ? drop : null);
     };
     const up = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", move);
@@ -515,16 +595,24 @@ export function DrawerView(props: {
       if (!on) {
         // 沒拖動：點一下只選這一個（按下時保留多選，才能拖整組）
         if (d.kind === "items" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) setSel([d.ids[0]]);
-        if (d.kind === "entries" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && scope.kind === "files") setFileSel([d.ids[0]]);
+        if (d.kind === "entries" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && files) setFileSel([d.ids[0]]);
         return;
       }
       const t = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-drop]")?.dataset.drop;
       if (!t) return;
       if (d.kind === "entries") {
-        if (!t.startsWith("f:")) return;
-        const to = t.slice(2) || null;
-        onModify((l) => moveEntries(l, d.ids, to));
-        setNotice(`Moved ${d.ids.length === 1 ? "1 item" : `${d.ids.length} items`} to ${pathLabel(lib, to)}`);
+        if (t === "f-trash") {
+          onModify((l) => setFilesTrashed(l, d.ids, true));
+          setNotice(d.ids.length === 1 ? "Moved 1 file to the Trash" : `Moved ${d.ids.length} files to the Trash`);
+          return;
+        }
+        const to = t.startsWith("f:") ? t.slice(2) : "";
+        if (!to) return;
+        // 放進資料夾（原本的資料夾保留，像把條目加進收藏）
+        onModify((l) => addToFolder(l, d.ids, to));
+        setNotice(`Added ${d.ids.length === 1 ? "1 file" : `${d.ids.length} files`} to “${pathLabel(lib, to)}”`);
+      } else if (d.kind === "folder") {
+        if (t.startsWith("f:") && t.slice(2) !== d.id) onModify((l) => moveFolder(l, d.id, t.slice(2) || null));
       } else if (d.kind === "items") {
         if (t.startsWith("c:")) {
           const c = t.slice(2);
@@ -695,8 +783,7 @@ export function DrawerView(props: {
     });
     if (parent) setCollapsed((c) => new Set([...c].filter((x) => x !== parent)));
     if (made) {
-      setScope({ kind: "files", folder: parent });
-      setFileSel([made]);
+      goFiles({ kind: "folder", id: made });
       setRenaming(made);
     }
   };
@@ -704,17 +791,16 @@ export function DrawerView(props: {
   const deleteFolder = (id: string) => {
     const f = lib.folders.find((x) => x.id === id);
     if (!f) return;
-    const n = countRemoved(lib, [id]);
-    if (!window.confirm(`Delete the folder “${f.name}”${n.files ? ` and the ${n.files === 1 ? "file" : `${n.files} files`} in it` : ""}? This can't be undone.`)) return;
-    onModify((l) => removeEntries(l, [id]));
+    if (!window.confirm(`Delete the folder “${f.name}” and its subfolders? The files stay in All Files.`)) return;
+    onModify((l) => removeFolder(l, id));
   };
 
   const renderFolders = (parent: string | null, depth: number): ReactNode =>
     childFolders(lib, parent).map((f) => {
       const kids = childFolders(lib, f.id).length > 0;
       const open = !collapsed.has(f.id);
-      const on = scope.kind === "files" && scope.folder === f.id;
-      const n = folderFileCount(lib, f.id);
+      const on = folder === f.id;
+      const n = fileCounts.get(f.id) ?? 0;
       return (
         <Fragment key={f.id}>
           <div
@@ -725,11 +811,11 @@ export function DrawerView(props: {
             tabIndex={0}
             onPointerDown={(e) => {
               if ((e.target as HTMLElement).closest("input, .dr-twisty")) return;
-              startDrag(e, { kind: "entries", ids: [f.id], label: f.name });
+              startDrag(e, { kind: "folder", id: f.id, label: f.name });
             }}
             onClick={(e) => {
               if ((e.target as HTMLElement).closest("input, .dr-twisty")) return;
-              setScope({ kind: "files", folder: f.id });
+              setFileScope({ kind: "folder", id: f.id });
               setFileSel([]);
             }}
             onDoubleClick={() => setRenaming(f.id)}
@@ -739,7 +825,7 @@ export function DrawerView(props: {
             }}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
-              if (e.key === "Enter") setScope({ kind: "files", folder: f.id });
+              if (e.key === "Enter") setFileScope({ kind: "folder", id: f.id });
               if (e.key === "F2") setRenaming(f.id);
             }}
           >
@@ -778,10 +864,60 @@ export function DrawerView(props: {
 
   const empty = props.json !== undefined && !lib.items.length;
   const inTrash = scope.kind === "trash";
+  const liveFiles = lib.files.filter((x) => !x.trashed);
+  // 左欄的標籤：各頁各自的
+  const sideTags = files ? fileTagList : tagList;
+  const sideSel = files ? fileTagSel : tags;
+  const setSideSel = files ? setFileTagSel : setTags;
+
+  const fileScopeRow = (sc: FileScope, icon: ReactNode, label: string, count: number, drop: string) => (
+    <button
+      className={`dr-scope${fileScopeKey(fileScope) === fileScopeKey(sc) ? " on" : ""}${dropTarget === drop ? " drop" : ""}`}
+      data-drop={drop}
+      onClick={() => {
+        setFileScope(sc);
+        setFileSel([]);
+      }}
+    >
+      <span className="dr-twisty" />
+      {icon}
+      <span className="dr-scope-name">{label}</span>
+      {count > 0 && <span className="dr-count">{count}</span>}
+    </button>
+  );
 
   return (
     <div className={`drawer${drag ? " dragging" : ""}`}>
       <aside className="dr-side">
+        {files ? (
+          <>
+        {/* 和文獻庫一樣：上面是固定的範圍（全部、沒有資料夾的、垃圾桶），下面是資料夾樹 */}
+        <div className="dr-side-head">
+          <span>Files</span>
+        </div>
+        <div className="dr-fixed">
+          {fileScopeRow({ kind: "all" }, <DrawerIcon />, "All Files", liveFiles.length, "f-all")}
+          {fileScopeRow({ kind: "unfiled" }, <DocIcon />, "Unfiled Files", liveFiles.filter((x) => !x.folders.length).length, "f-unfiled")}
+          {fileScopeRow({ kind: "trash" }, <TrashIcon />, "Trash", lib.files.length - liveFiles.length, "f-trash")}
+        </div>
+        <div className={`dr-side-head dr-coll-head${dropTarget === "f:" ? " drop" : ""}`} data-drop="f:">
+          <span>Folders</span>
+          <button className="icon-btn" title="New folder" onClick={() => newFolder(null)}>
+            <PlusIcon />
+          </button>
+        </div>
+        <div className="dr-tree dr-ftree">
+          {lib.folders.length ? (
+            renderFolders(null, 0)
+          ) : (
+            <button className="dr-coll-empty" onClick={() => newFolder(null)}>
+              <PlusIcon /> New folder
+            </button>
+          )}
+        </div>
+          </>
+        ) : (
+          <>
         {/* 上面是固定的範圍（全部、未分類、垃圾桶），下面是使用者自己的收藏 */}
         <div className="dr-side-head">
           <span>Library</span>
@@ -806,45 +942,25 @@ export function DrawerView(props: {
             </button>
           )}
         </div>
-        <div className="dr-side-head dr-coll-head">
-          <span>Files</span>
-          <button className="icon-btn" title="New folder" onClick={() => newFolder(scope.kind === "files" ? scope.folder : null)}>
-            <PlusIcon />
-          </button>
-        </div>
-        <div className="dr-tree dr-ftree">
-          <button
-            className={`dr-scope${scope.kind === "files" && !scope.folder ? " on" : ""}${dropTarget === "f:" ? " drop" : ""}`}
-            data-drop="f:"
-            onClick={() => {
-              setScope({ kind: "files", folder: null });
-              setFileSel([]);
-            }}
-          >
-            <span className="dr-twisty" />
-            <FolderIcon />
-            <span className="dr-scope-name">My Files</span>
-            {lib.files.length > 0 && <span className="dr-count">{lib.files.length}</span>}
-          </button>
-          {renderFolders(null, 1)}
-        </div>
-        {tagList.length > 0 && (
+          </>
+        )}
+        {sideTags.length > 0 && (
           <div className="dr-tags">
             <div className="dr-side-head">
               <span>Tags</span>
-              {tags.length > 0 && (
-                <button className="dr-link" onClick={() => setTags([])}>
+              {sideSel.length > 0 && (
+                <button className="dr-link" onClick={() => setSideSel([])}>
                   Clear
                 </button>
               )}
             </div>
             <div className="dr-tag-list">
-              {tagList.map(({ tag, count }) => (
+              {sideTags.map(({ tag, count }) => (
                 <button
                   key={tag}
-                  className={`dr-tag${tags.includes(tag) ? " on" : ""}`}
-                  title={`${count} ${count === 1 ? "item" : "items"}`}
-                  onClick={() => setTags((ts) => (ts.includes(tag) ? ts.filter((t) => t !== tag) : [...ts, tag]))}
+                  className={`dr-tag${sideSel.includes(tag) ? " on" : ""}`}
+                  title={`${count} ${count === 1 ? (files ? "file" : "item") : files ? "files" : "items"}`}
+                  onClick={() => setSideSel((ts) => (ts.includes(tag) ? ts.filter((t) => t !== tag) : [...ts, tag]))}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setMenu({ kind: "tag", x: e.clientX, y: e.clientY, tag });
@@ -858,19 +974,25 @@ export function DrawerView(props: {
         )}
       </aside>
 
-      {scope.kind === "files" ? (
+      {files ? (
         <FilesPane
           lib={lib}
-          folder={scope.folder}
-          onFolder={(folder) => setScope({ kind: "files", folder })}
+          scope={fileScope}
+          onScope={(sc) => {
+            setFileScope(sc);
+            setFileSel([]);
+          }}
+          tags={fileTagSel}
+          onNewFolder={newFolder}
           sel={fileSel}
           onSel={setFileSel}
           onModify={onModify}
-          onAdd={(folder, files) => void saveAll(files).then((saved) => addToFolder(folder, saved))}
+          onAdd={(folder, list) => void saveAll(list).then((saved) => addIntoFiles(folder, saved))}
           onView={setViewing}
           onFindDuplicates={() => setDupTool(true)}
           onShowPlace={showPlace}
           onCreateItem={convertToItem}
+          onAttachTo={(fileId) => setPicking({ kind: "items", file: fileId })}
           startDrag={startDrag}
           dropTarget={dropTarget}
           onNotice={setNotice}
@@ -1030,6 +1152,14 @@ export function DrawerView(props: {
             onAttach={(files) => void attachFiles(current.id, files)}
             onAddLink={(url) => onModify((l) => addAttachment(l, current.id, { name: url, src: url, kind: "link" }))}
             onRemoveAttachment={(a) => onModify((l) => removeAttachment(l, current.id, a))}
+            onFromFiles={() => setPicking({ kind: "files", item: current.id })}
+            onShowFile={(fileId) => {
+              const f = lib.files.find((x) => x.id === fileId);
+              if (!f) return;
+              goFiles(f.trashed ? { kind: "trash" } : { kind: "all" });
+              setFileTagSel([]);
+              setFileSel([f.id]);
+            }}
             onView={setViewing}
             onOpenNotes={() => props.onOpenNotes(current)}
             onOpenSource={props.onOpenSource}
@@ -1077,7 +1207,7 @@ export function DrawerView(props: {
 
       {drag && (
         <div className="dr-ghost" style={{ left: drag.x + 12, top: drag.y + 8 }}>
-          {drag.kind === "collection" || (drag.kind === "entries" && lib.folders.some((f) => f.id === drag.ids[0])) ? <FolderIcon /> : <DocIcon />}
+          {drag.kind === "collection" || drag.kind === "folder" ? <FolderIcon /> : <DocIcon />}
           {drag.label}
         </div>
       )}
@@ -1206,11 +1336,11 @@ export function DrawerView(props: {
       )}
       {menu?.kind === "folder" && (
         <Menu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
-          <MenuRow icon={<OpenIcon />} label="Open" onClick={() => (setMenu(null), setScope({ kind: "files", folder: menu.id }))} />
+          <MenuRow icon={<OpenIcon />} label="Open" onClick={() => (setMenu(null), goFiles({ kind: "folder", id: menu.id }))} />
           <MenuRow icon={<PlusIcon />} label="New folder inside" onClick={() => (setMenu(null), newFolder(menu.id))} />
           <MenuRow icon={<DocIcon />} label="Rename" hint="F2" onClick={() => (setMenu(null), setRenaming(menu.id))} />
           {lib.folders.find((f) => f.id === menu.id)?.parent && (
-            <MenuRow icon={<FolderIcon />} label="Move to My Files" onClick={() => (setMenu(null), onModify((l) => moveEntries(l, [menu.id], null)))} />
+            <MenuRow icon={<FolderIcon />} label="Move to top level" onClick={() => (setMenu(null), onModify((l) => moveFolder(l, menu.id, null)))} />
           )}
           <div className="popover-sep" />
           <MenuRow icon={<TrashIcon />} label="Delete folder…" danger onClick={() => (setMenu(null), deleteFolder(menu.id))} />
@@ -1233,6 +1363,40 @@ export function DrawerView(props: {
           onShow={showPlace}
         />
       )}
+      {picking?.kind === "files" && (
+        <PickDialog
+          title="Attach from Files"
+          icon={<ClipIcon />}
+          placeholder="Search Files"
+          options={lib.files
+            .filter((f) => !f.trashed)
+            .sort((a, b) => b.added - a.added)
+            .map((f) => ({ id: f.id, label: f.name, sub: fileLocation(lib, f), icon: <FileGlyph name={f.name} src={f.src} /> }))}
+          done={new Set(byId.get(picking.item)?.attachments.flatMap((a) => (a.file ? [a.file] : [])) ?? [])}
+          empty="No files in Files yet."
+          onPick={(id) => onModify((l) => attachFile(l, picking.item, id))}
+          onClose={() => setPicking(null)}
+        />
+      )}
+      {picking?.kind === "items" && (
+        <PickDialog
+          title="Attach to item"
+          icon={<ClipIcon />}
+          placeholder="Search by title, creator, year"
+          options={sortItems(
+            lib.items.filter((i) => !i.trashed),
+            "added",
+            true,
+          ).map((i) => ({ id: i.id, label: i.title || "Untitled", sub: [creatorSummary(i), yearOf(i.date)].filter(Boolean).join(" · "), icon: <DocIcon /> }))}
+          done={new Set(lib.items.filter((i) => i.attachments.some((a) => a.file === picking.file)).map((i) => i.id))}
+          empty="No items in My Library yet."
+          onPick={(id) => {
+            onModify((l) => attachFile(l, id, picking.file));
+            setNotice(`Attached to “${byId.get(id)?.title || "Untitled"}”`);
+          }}
+          onClose={() => setPicking(null)}
+        />
+      )}
       {dupTool && <DuplicateFinder lib={lib} onModify={onModify} onShow={showPlace} onClose={() => setDupTool(false)} onNotice={setNotice} />}
       {menu?.kind === "tag" && (
         <Menu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
@@ -1243,8 +1407,8 @@ export function DrawerView(props: {
               setMenu(null);
               const to = window.prompt(`Rename the tag “${menu.tag}” to:`, menu.tag);
               if (to?.trim() && to.trim() !== menu.tag) {
-                onModify((l) => renameTag(l, menu.tag, to));
-                setTags((ts) => ts.map((t) => (t === menu.tag ? to.trim() : t)));
+                onModify((l) => (files ? renameFileTag : renameTag)(l, menu.tag, to));
+                setSideSel((ts) => ts.map((t) => (t === menu.tag ? to.trim() : t)));
               }
             }}
           />
@@ -1254,9 +1418,9 @@ export function DrawerView(props: {
             danger
             onClick={() => {
               setMenu(null);
-              if (window.confirm(`Remove the tag “${menu.tag}” from every item?`)) {
-                onModify((l) => renameTag(l, menu.tag, ""));
-                setTags((ts) => ts.filter((t) => t !== menu.tag));
+              if (window.confirm(`Remove the tag “${menu.tag}” from every ${files ? "file" : "item"}?`)) {
+                onModify((l) => (files ? renameFileTag : renameTag)(l, menu.tag, ""));
+                setSideSel((ts) => ts.filter((t) => t !== menu.tag));
               }
             }}
           />
@@ -1468,48 +1632,6 @@ function CreatorsEditor(props: { creators: Creator[]; onChange: (cs: Creator[]) 
   );
 }
 
-function TagsEditor(props: { tags: string[]; all: string[]; onChange: (t: string[]) => void }) {
-  const [v, setV] = useState("");
-  const add = () => {
-    const t = v.trim();
-    if (t && !props.tags.includes(t)) props.onChange([...props.tags, t]);
-    setV("");
-  };
-  return (
-    <div className="dr-tag-edit">
-      {props.tags.map((t) => (
-        <span className="dr-tag on" key={t}>
-          {t}
-          <button title="Remove tag" onClick={() => props.onChange(props.tags.filter((x) => x !== t))}>
-            <CloseIcon />
-          </button>
-        </span>
-      ))}
-      <input
-        value={v}
-        list="dr-tag-options"
-        placeholder={props.tags.length ? "Add…" : "Add a tag…"}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={add}
-        onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing) return;
-          if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            add();
-          } else if (e.key === "Backspace" && !v && props.tags.length) props.onChange(props.tags.slice(0, -1));
-        }}
-      />
-      <datalist id="dr-tag-options">
-        {props.all
-          .filter((t) => !props.tags.includes(t))
-          .map((t) => (
-            <option key={t} value={t} />
-          ))}
-      </datalist>
-    </div>
-  );
-}
-
 type PaneTab = "info" | "remarks" | "attachments" | "cite";
 
 /** 備註的文字框：跟著內容長高。 */
@@ -1545,6 +1667,10 @@ function ItemPane(props: {
   onAttach: (files: File[]) => void;
   onAddLink: (url: string) => void;
   onRemoveAttachment: (id: string) => void;
+  /** 從檔案庫選檔案附加 */
+  onFromFiles: () => void;
+  /** 在檔案庫打開附件存的那一筆 */
+  onShowFile: (fileId: string) => void;
   onView: (a: Attachment) => void;
   onOpenNotes: () => void;
   onOpenSource: (s: Source) => void;
@@ -1819,15 +1945,23 @@ function ItemPane(props: {
                     <FolderIcon />
                   </button>
                 )}
-                <button className="icon-btn" title="Remove attachment (the file stays in media/)" onClick={() => props.onRemoveAttachment(a.id)}>
+                {a.file && props.lib.files.some((f) => f.id === a.file) && (
+                  <button className="icon-btn" title="Show in Files" onClick={() => props.onShowFile(a.file!)}>
+                    <DrawerIcon />
+                  </button>
+                )}
+                <button className="icon-btn" title="Remove attachment (the file stays in Files)" onClick={() => props.onRemoveAttachment(a.id)}>
                   <TrashIcon />
                 </button>
               </div>
             ))}
-            {!it.attachments.length && <p className="dr-hint">Attach the PDF or other files for this item, or drop files onto its row.</p>}
+            {!it.attachments.length && <p className="dr-hint">Attach the PDF or other files for this item, or drop files onto its row. Attached files are kept in Files too.</p>}
             <div className="dr-actions">
               <button className="dr-btn" onClick={() => fileRef.current?.click()}>
                 <ClipIcon /> Attach file…
+              </button>
+              <button className="dr-btn" onClick={props.onFromFiles} title="Attach a file that's already in Files">
+                <FolderIcon /> From Files…
               </button>
               <button className="dr-btn" onClick={() => setLinking(true)}>
                 <LinkIcon /> Attach link…

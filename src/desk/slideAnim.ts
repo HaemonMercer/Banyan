@@ -29,6 +29,8 @@ export interface SlideAnim {
   notes?: string;
   /** 放映時跳過 */
   skip?: true;
+  /** 用哪一個母片（`slideMasters.ts`；沒有是預設母片） */
+  master?: string;
 }
 
 export const NO_ANIM: SlideAnim = { transition: "none", build: "none" };
@@ -60,7 +62,7 @@ const B_IDS = BUILDS.map((b) => b.id);
 export const isAnimated = (a: SlideAnim | undefined) => !!a && (a.transition !== "none" || a.build !== "none");
 
 /** 這張投影片有沒有任何設定（動畫、物件、改過主文字方塊的位置） */
-const hasMeta = (a: SlideAnim | undefined) => isAnimated(a) || !!a?.main || !!a?.boxes?.length || !!a?.noBody || !!a?.bg || !!a?.notes || !!a?.skip;
+const hasMeta = (a: SlideAnim | undefined) => isAnimated(a) || !!a?.main || !!a?.boxes?.length || !!a?.noBody || !!a?.bg || !!a?.notes || !!a?.skip || !!a?.master;
 
 /** 第 i 張的動畫（沒設定就是沒有動畫） */
 export const animAt = (list: SlideAnim[] | undefined, i: number): SlideAnim => list?.[i] ?? NO_ANIM;
@@ -83,6 +85,7 @@ export function cleanAnim(raw: unknown): SlideAnim[] {
       if (typeof r.bg === "string" && /^#[0-9a-f]{6}$/i.test(r.bg)) a.bg = r.bg;
       if (typeof r.notes === "string" && r.notes.trim()) a.notes = r.notes;
       if (r.skip === true) a.skip = true;
+      if (typeof r.master === "string" && r.master) a.master = r.master;
       return a;
     }),
   );
@@ -100,6 +103,7 @@ export function trimAnim(list: SlideAnim[]): SlideAnim[] {
     if (a.bg) out.bg = a.bg;
     if (a.notes?.trim()) out.notes = a.notes;
     if (a.skip) out.skip = true;
+    if (a.master) out.master = a.master;
     return out;
   });
 }

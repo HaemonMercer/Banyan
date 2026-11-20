@@ -7,7 +7,7 @@
  * 搬移投影片時一起跟著走。座標是投影片的設計尺寸 960×540。這裡都是純函式。
  */
 
-import { COLORS, type Color } from "../editor/inline";
+import { isInk, type Ink } from "../editor/inline";
 
 export const SLIDE_W = 960;
 export const SLIDE_H = 540;
@@ -41,8 +41,39 @@ export interface SlideBox extends Frame {
   /** 旋轉（度，順時針；沒有是 0） */
   rot?: number;
   /** 填色、框線：色盤名稱，null 是沒有 */
-  fill?: Color | null;
-  line?: Color | null;
+  fill?: Ink | null;
+  line?: Ink | null;
+  /** 框線粗細（設計尺寸的 px，960 寬＝960pt，所以也是 pt；沒有是 `DEFAULT_LW`） */
+  lw?: number;
+  /** 框線樣式（沒有是實線） */
+  dash?: LineDash;
+  /** 不透明度 10～100（沒有是 100） */
+  opacity?: number;
+  /** 陰影 */
+  shadow?: true;
+}
+
+export type LineDash = "dash" | "dot";
+/** 框線的預設粗細 */
+export const DEFAULT_LW = 3;
+export const LINE_DASHES: { id: LineDash | null; label: string }[] = [
+  { id: null, label: "Solid" },
+  { id: "dash", label: "Dashed" },
+  { id: "dot", label: "Dotted" },
+];
+
+/** SVG 的虛線（照粗細算） */
+export const dashArray = (dash: LineDash | undefined, lw: number) => (dash === "dash" ? `${lw * 3} ${lw * 2}` : dash === "dot" ? `0 ${lw * 2}` : undefined);
+
+/** 換形狀：換成線時沒有填色、一定有框線；從線換回來補上填色 */
+export function withShape(b: SlideBox, shape: ShapeKind): SlideBox {
+  if (b.kind !== "shape" || b.shape === shape) return b;
+  const out: SlideBox = { ...b, shape };
+  if (shape === "line") {
+    out.fill = null;
+    if (!out.line) out.line = "gray";
+  } else if (b.shape === "line") out.fill = "blue";
+  return out;
 }
 
 export const SHAPES: { id: ShapeKind; label: string }[] = [
@@ -67,7 +98,8 @@ let seq = 0;
 export const newBoxId = () => `b${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 10) / 10 : d);
-const color = (v: unknown): Color | null | undefined => (v === null ? null : COLORS.includes(v as Color) ? (v as Color) : undefined);
+/** 色盤名稱或自訂的 #rrggbb（自訂的存成小寫） */
+const color = (v: unknown): Ink | null | undefined => (v === null ? null : isInk(v) ? (v.startsWith("#") ? (v.toLowerCase() as Ink) : v) : undefined);
 
 /** 存檔讀回來：不認得的物件丟掉，數字補預設 */
 export function cleanBoxes(raw: unknown): SlideBox[] {
@@ -99,6 +131,16 @@ export function cleanBoxes(raw: unknown): SlideBox[] {
     const line = color(r.line);
     if (fill !== undefined) b.fill = fill;
     if (line !== undefined) b.line = line;
+    if (typeof r.lw === "number" && Number.isFinite(r.lw)) {
+      const lw = Math.min(40, Math.max(0.5, Math.round(r.lw * 2) / 2));
+      if (lw !== DEFAULT_LW) b.lw = lw;
+    }
+    if (r.dash === "dash" || r.dash === "dot") b.dash = r.dash;
+    if (typeof r.opacity === "number" && Number.isFinite(r.opacity)) {
+      const o = Math.min(100, Math.max(10, Math.round(r.opacity)));
+      if (o < 100) b.opacity = o;
+    }
+    if (r.shadow === true) b.shadow = true;
     out.push(b);
   }
   return out;

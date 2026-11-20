@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CalendarIcon, DocIcon, ImageIcon, ImportIcon, LinkIcon, ListIcon, PanelRightIcon, PlusIcon, RuleIcon, SearchIcon, TableIcon, VideoIcon } from "../editor/icons";
+import { CalendarIcon, ChartIcon, DocIcon, ImageIcon, ImportIcon, LinkIcon, ListIcon, PanelRightIcon, PlusIcon, RuleIcon, SearchIcon, TableIcon, VideoIcon } from "../editor/icons";
 import { importWord, saveImported, withImportedText, WORD_IMPORT } from "./docImport";
 import { GAP, PaperEditor } from "./PaperEditor";
 import { DocFind } from "./DocFind";
-import { countWords, DEFAULT_PAGE, docStats, FONTS, headingsOf, MARGINS, PAPERS, SIZES, SPACINGS, marginOf, paperOf, tocMarkdown, type PageSetup } from "./pageSetup";
+import { countWords, DEFAULT_PAGE, docStats, fontOf, headingsOf, MARGINS, PAPERS, marginOf, paperOf, tocMarkdown, type PageSetup } from "./pageSetup";
 import {
   Field,
   FormatInspector,
@@ -22,7 +22,9 @@ import {
   useEditorStatus,
   useFormatTab,
   usePanel,
+  PaperColors,
   type StyleLib,
+  ImageMenuItems,
   type ParaStyle,
 } from "./DocChrome";
 
@@ -237,11 +239,19 @@ export function WordView(props: { value: string; onChange: (md: string) => void;
             </div>
           )}
         </TMenu>
-        <TBtn icon={<TableIcon />} label="Table" title="Insert a table" onClick={() => run((c) => c.insert("table"))} />
+        <TMenu icon={<TableIcon />} label="Table" title="Insert a table, or a table or chart from Excel">
+          {(close) => (
+            <>
+              <MenuItem icon={<TableIcon />} label="New Table" onClick={() => (close(), run((c) => c.insert("table")))} />
+              <MenuItem icon={<ChartIcon />} label="From Excel…" onClick={() => (close(), run((c) => c.insertSheet()))} />
+            </>
+          )}
+        </TMenu>
         <TMenu icon={<ImageIcon />} label="Media" title="Insert a picture or a video">
           {(close) => (
             <>
-              <MenuItem icon={<ImageIcon />} label="Photo or Image…" onClick={() => (close(), run((c) => c.insert("image")))} />
+              <ImageMenuItems close={close} onImage={(tab) => run((c) => c.insertImage(tab))} />
+              <div className="popover-sep" />
               <MenuItem icon={<VideoIcon />} label="Video…" onClick={() => (close(), run((c) => c.insert("video")))} />
             </>
           )}
@@ -337,7 +347,7 @@ export function WordView(props: { value: string; onChange: (md: string) => void;
           <FormatInspector tabs={["text", "layout"]} tab={fmtTab} onTab={setFmtTab}>
             {(t) =>
               t === "text" ? (
-                <TextFormat st={st} run={run} styles={STYLES} lib={props.styles} code />
+                <TextFormat st={st} run={run} styles={STYLES} lib={props.styles} code baseSize={setup.size} />
               ) : (
                 <LayoutFormat st={st} run={run} checklist shading />
               )
@@ -349,6 +359,9 @@ export function WordView(props: { value: string; onChange: (md: string) => void;
             <Section title="Printer & Paper Size">
               <Field label="Paper">
                 <Popup label="Paper size" value={setup.paper ?? "a4"} options={PAPERS.map((p) => ({ id: p.id, label: p.label, hint: p.hint }))} onPick={(id) => set({ paper: id === "a4" ? undefined : id })} />
+              </Field>
+              <Field label="Page Color">
+                <PaperColors value={setup.color} onPick={(c) => set({ color: c === "white" || c === "#ffffff" ? undefined : c })} />
               </Field>
               <Field label="Orientation">
                 <Seg label="Orientation">
@@ -378,28 +391,16 @@ export function WordView(props: { value: string; onChange: (md: string) => void;
               </label>
               <p className="dc-note">Type {"{page}"} or {"{pages}"} for the page number and page count.</p>
             </Section>
-            <Section title="Body Text">
-              <Field label="Font">
-                <Popup
-                  label="Font"
-                  value={setup.font}
-                  options={FONTS.map((f) => ({ id: f.id, label: f.label, render: <span style={{ fontFamily: f.css }}>{f.label}</span> }))}
-                  onPick={(id) => set({ font: id })}
-                />
-              </Field>
-              <Field label="Size">
-                <Popup label="Font size" value={setup.size} options={SIZES.map((n) => ({ id: n, label: `${n} pt` }))} onPick={(n) => set({ size: n })} />
-              </Field>
-              <Field label="Spacing">
-                <Popup
-                  label="Line spacing"
-                  value={setup.spacing}
-                  options={SPACINGS.map((n) => ({ id: n, label: `${n === 1.15 ? n.toFixed(2) : n.toFixed(1)} – Lines` }))}
-                  onPick={(n) => set({ spacing: n })}
-                />
-              </Field>
-              <p className="dc-note">Applies to the whole document and to the exported .docx.</p>
-            </Section>
+            {(setup.font !== DEFAULT_PAGE.font || setup.size !== DEFAULT_PAGE.size || setup.spacing !== DEFAULT_PAGE.spacing) && (
+              <Section title="Body Text">
+                <p className="dc-note">
+                  This document uses {fontOf(setup).label}, {setup.size} pt, {setup.spacing} line spacing for body text. Change fonts and sizes in Format ▸ Style ▸ Font instead.
+                </p>
+                <button className="dp-btn" onClick={() => set({ font: DEFAULT_PAGE.font, size: DEFAULT_PAGE.size, spacing: DEFAULT_PAGE.spacing })}>
+                  Reset Body Text
+                </button>
+              </Section>
+            )}
             <Section title="Proofing">
               <label className="dc-check" style={{ marginTop: 0 }}>
                 <input type="checkbox" checked={spell} onChange={(e) => setSpell(e.target.checked)} /> Check spelling while typing

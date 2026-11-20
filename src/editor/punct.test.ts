@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cjkPunct, cjkPunctText, inChinese, isCjk } from "./punct";
+import { cjkPunct, cjkPunctText, inChinese, isCjk, markdownEnglish } from "./punct";
 
 const t = (before: string, key: string) => cjkPunct(before, key)?.text ?? null;
 
@@ -44,6 +44,62 @@ describe("中文標點", () => {
     expect(isCjk("，")).toBe(true);
     expect(isCjk("a")).toBe(false);
     expect(isCjk("1")).toBe(false);
+  });
+});
+
+describe("Markdown 語法裡不換", () => {
+  it("跳脫", () => {
+    expect(t("你好\\", ".")).toBeNull();
+  });
+  it("行內程式碼裡", () => {
+    expect(t("執行 `a", ",")).toBeNull();
+    expect(t("執行 `a,b` 之後", ",")).toBe("，");
+  });
+  it("連結、圖片的網址與標題", () => {
+    expect(t("看[說明](https", ":")).toBeNull();
+    expect(t("看[說明](https://a", ".")).toBeNull();
+    expect(t("看[說明](a.md ", '"')).toBeNull();
+    expect(t("看[說明](a.md)了", ",")).toBe("，");
+  });
+  it("HTML 標籤與自動連結", () => {
+    expect(t('文字<span style=', '"')).toBeNull();
+    expect(t("網址 <https", ":")).toBeNull();
+    expect(t("文字<b>粗</b>好", ",")).toBe("，");
+  });
+  it("圖片：！[ 換回 ![", () => {
+    expect(cjkPunct("如圖！", "[")).toEqual({ text: "![", remove: 1 });
+    expect(cjkPunctText("如圖", "![")).toEqual({ text: "![", remove: 0 });
+    expect(t("如圖", "[")).toBeNull();
+  });
+  it("連結文字後面的括號不換", () => {
+    expect(t("看[說明]", "(")).toBeNull();
+  });
+});
+
+describe("只會打英文的 Markdown 語法", () => {
+  it("行內程式碼、程式碼區塊的語言", () => {
+    expect(markdownEnglish("執行 `")).toBe(true);
+    expect(markdownEnglish("執行 `npm")).toBe(true);
+    expect(markdownEnglish("執行 `npm` 之後")).toBe(false);
+    expect(markdownEnglish("```")).toBe(true);
+  });
+  it("連結網址、HTML 標籤、自動連結", () => {
+    expect(markdownEnglish("看[說明](")).toBe(true);
+    expect(markdownEnglish("看[說明](https://a")).toBe(true);
+    expect(markdownEnglish("看[說明](a.md)後")).toBe(false);
+    expect(markdownEnglish("看[說")).toBe(false);
+    expect(markdownEnglish("文字<")).toBe(true);
+    expect(markdownEnglish("文字<span style=")).toBe(true);
+    expect(markdownEnglish("文字<b>粗")).toBe(false);
+  });
+  it("任務標記、核取方塊", () => {
+    expect(markdownEnglish("{")).toBe(true);
+    expect(markdownEnglish("- {")).toBe(true);
+    expect(markdownEnglish("- [")).toBe(true);
+    expect(markdownEnglish("1. [")).toBe(true);
+    expect(markdownEnglish("[")).toBe(false);
+    expect(markdownEnglish("[[")).toBe(false);
+    expect(markdownEnglish("中文{")).toBe(false);
   });
 });
 

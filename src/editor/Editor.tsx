@@ -17,7 +17,11 @@ import {
 import { BLOCK_TYPES, filterBlockTypes, kindLabel, type SlashItem } from "./blockTypes";
 import { expandTemplate, findTemplate, getTemplates } from "../pages/templates";
 import { bibliographyMarkdown, citeStamp, subscribeCites, suggestCites } from "../drawer/citeRef";
-import { docKindLabel, getDocLinks, linkMenu } from "../desk/docLinks";
+import { pickImages, type ImageTab } from "../drawer/drawerImages";
+import { pickSheetObject } from "../sheet/pickSheet";
+import { editEmbedCell, TableLookMenu } from "../sheet/embedEdit";
+import { formatLook, parseLook, type TableLook } from "../sheet/sheetEmbed";
+import { docKindLabel, getDocLinks, linkMenu, objectEmbedOf, objectRef } from "../desk/docLinks";
 import { TaskGlyph, TaskIcon, WhenChip } from "../bujo/TaskGlyph";
 import { clock, contentWhen, lineWhen, parseClock, setTimeAt, stripWhenHtml, whenLabel, type TaskTime } from "../bujo/time";
 import {
@@ -31,7 +35,7 @@ import {
   stripTaskHtml,
   type TaskState,
 } from "../bujo/tasks";
-import { cleanName, getPageNames, linkPages, openPage, pageKey, suggestPages } from "../pages/pageRef";
+import { cleanName, getPageNames, linkPages, openPage, pageKey, REF_SOURCE, suggestPages } from "../pages/pageRef";
 import {
   AlignCenterIcon,
   CaptionBottomIcon,
@@ -46,7 +50,8 @@ import {
   PlusIcon,
   TrashIcon,
 } from "./icons";
-import { COLORS, COLOR_LABELS, marksAt, setColor, toggleMark, type Color, type Mark, type Marks } from "./inline";
+import { inkCss, inkLabel, isCustomInk, marksAt, setColor, toggleMark, type Ink, type Mark, type Marks } from "./inline";
+import { ColorMenu } from "./ColorPicker";
 import { caretFromPoint } from "./caret";
 import { RichBlock, SpellCheck, textareaSurface, type Shortcut, type Surface } from "./RichBlock";
 import { highlightBlocksHtml, parseCodeBlock, setCodeLang } from "./codeHighlight";
@@ -247,7 +252,7 @@ export interface EditorStatus {
   marks: Marks | null;
   /** 編輯中（或第一個選取）的區塊類型 */
   type: BlockType | null;
-  bg: Color | null;
+  bg: Ink | null;
   align: Align;
   /** 區塊樣式（`blockStyle.ts` 的 style 文字；編輯中或第一個選取的區塊，沒有就是空字串） */
   box: string;
@@ -262,10 +267,10 @@ export interface EditorCommands {
   /** 結束編輯、取消選取的區塊（簡報的文字方塊按 Esc：改成選取整個文字方塊） */
   release: () => void;
   mark: (m: Mark) => void;
-  color: (kind: "color" | "highlight", c: Color | null) => void;
+  color: (kind: "color" | "highlight", c: Ink | null) => void;
   /** 選取的文字套用字元樣式（`<span data-cs="名稱">`；null 是拿掉） */
   charStyle: (name: string | null) => void;
-  blockBg: (c: Color | null) => void;
+  blockBg: (c: Ink | null) => void;
   turnInto: (t: BlockType) => void;
   indent: (outdent: boolean) => void;
   align: (a: Align) => void;
@@ -273,6 +278,10 @@ export interface EditorCommands {
   box: (fn: (v: BoxValue) => BoxValue) => void;
   /** 插入：編輯中的區塊或選取的區塊後面，都沒有就是文件最後 */
   insert: (kind: "image" | "video" | "table" | "hr") => void;
+  /** 打開「插入圖片」對話框（`pickImages`，tab 是一開始的分頁），選好的圖片放在同一個位置 */
+  insertImage: (tab: ImageTab) => void;
+  /** 打開「插入 Excel 的表格或圖表」對話框（`pickSheetObject`），選好的放在同一個位置 */
+  insertSheet: () => void;
   /** 在編輯中（或選取）的區塊後面插入一段 Markdown（分頁、目錄…） */
   insertMarkdown: (md: string) => void;
   undo: () => void;
@@ -385,6 +394,8 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   /** 子彈筆記符號的右鍵選單（任務所在的行） */
   const [taskMenu, setTaskMenu] = useState<{ line: number; x: number; y: number } | null>(null);
   const [whenMenu, setWhenMenu] = useState<{ line: number; x: number; y: number } | null>(null);
+  /** 嵌入的 Excel 表格的 Style 選單：哪一行、哪個嵌入（名稱）、Excel 本來的樣子 */
+  const [lookMenu, setLookMenu] = useState<{ line: number; name: string; x: number; y: number; base: { theme: string; banded: boolean } } | null>(null);
   /** 頁面連結的自動完成：目前選到第幾個、按 Esc 關掉的那個 `[[` 的位置 */
   const [refIndex, setRefIndex] = useState(0);
   const [refClosed, setRefClosed] = useState<number | null>(null);
@@ -694,7 +705,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   };
 
   /** 設定選取文字的文字顏色或螢光標記。 */
-  const applyColor = (kind: "color" | "highlight", color: Color | null) => {
+  const applyColor = (kind: "color" | "highlight", color: Ink | null) => {
     const surf = surfRef.current;
     const s = stateRef.current;
     if (!surf || !s.region) return;
@@ -730,7 +741,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   };
 
   /** 設定正在編輯的整個區塊的背景顏色，然後繼續編輯同一個區塊。 */
-  const applyBlockBg = (color: Color | null) => {
+  const applyBlockBg = (color: Ink | null) => {
     const surf = surfRef.current;
     const s = stateRef.current;
     if (!s.region) return;
@@ -836,7 +847,23 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       }
       return;
     }
-    if (type === "image" || type === "video") {
+    if (type === "sheet") {
+      // 拿掉「/指令」、離開編輯，選好的表格或圖表放在這個區塊
+      commit(applyText(s, text, text.length));
+      const start = s.region!.start;
+      const map = leaveEditing();
+      pickSheetFromDialog(map(start));
+      return;
+    }
+    if (type === "image") {
+      // 和插入圖片的對話框一樣（Upload、Drawer、By URL）：拿掉「/指令」、離開編輯，選好的圖片放在這個區塊
+      commit(applyText(s, text, text.length));
+      const start = s.region!.start;
+      const map = leaveEditing();
+      pickFromDialog("upload", map(start));
+      return;
+    }
+    if (type === "video") {
       // 先拿掉「/指令」，離開編輯（選檔案時焦點會離開），選好檔案後放在這個區塊
       commit(applyText(s, text, text.length));
       const start = s.region!.start;
@@ -952,6 +979,16 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       }
     }
     return parts.join("\n\n");
+  };
+
+  /** 插入圖片的對話框：選好的圖片（Drawer 的是同一個 `media/` 檔案）放在 at 這個區塊，好幾張之間空一行。 */
+  const pickFromDialog = (tab: ImageTab, at: number | null) => {
+    void pickImages({ tab }).then((list) => placeMedia(list.map((i) => mediaMarkdown(i.src, "image", i.alt)).join("\n\n"), at));
+  };
+
+  /** Excel 的表格或圖表（連結 `![[檔案/標題#^id]]`）放在 at 這個區塊 */
+  const pickSheetFromDialog = (at: number | null) => {
+    void pickSheetObject().then((md) => md && placeMedia(md, at));
   };
 
   /** 開啟選擇檔案的視窗，選好的圖片或影片放在 at 這個區塊。 */
@@ -1232,6 +1269,27 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
 
   const blocksNow = () => parseDoc(stateRef.current.source).blocks;
 
+  /** 改嵌入的 Excel 表格在這個位置的樣子：改寫那一行裡同名的 `![[…]]` 的選項 */
+  const setTableLook = (line: number, name: string, look: TableLook) => {
+    const map = leaveEditing();
+    const at = map(line);
+    const s = stateRef.current;
+    const lines = s.source.split("\n");
+    const before = lines[at] ?? "";
+    const target = objectRef(name);
+    if (!target) return;
+    const opts = formatLook(look);
+    const next = before.replace(REF_SOURCE, (all, raw: string) => {
+      const o = objectRef(raw.replace(/\\([!-/:-@[-`{-~])/g, "$1").trim());
+      // objectEmbedOf 回傳 `![[…]]`；前面的 `!` 原本就在，這裡只換 `[[…]]`
+      return o && o.id === target.id && pageKey(o.doc) === pageKey(target.doc) ? objectEmbedOf(o.doc, o.id, opts).slice(1) : all;
+    });
+    if (next === before) return;
+    lines[at] = next;
+    commit({ source: lines.join("\n"), region: null, caret: 0 });
+    setLookMenu((m) => (m ? { ...m, line: at, name: `${target.doc}#^${target.id}${opts ? `|${opts}` : ""}` } : m));
+  };
+
   // ─── 子彈筆記 ──────────────────────────────────────────────
 
   /** 設定某一行的任務狀態（"cycle"：任務 ↔ 完成；null：變回一般清單項目）。 */
@@ -1315,7 +1373,33 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
 
   const onUnitMouseDown = (e: MouseEvent<HTMLDivElement>, unit: Unit) => {
     if (e.button !== 0) return;
-    const link = (e.target as HTMLElement).closest("a");
+    const hit = e.target as HTMLElement;
+    // 嵌入的 Excel 表格：點格子直接編輯（改的是 Excel），Style 改這個位置的樣子；都不開始編輯原始碼
+    const cell = hit.closest<HTMLElement>(".sheet-table [data-r][data-c]");
+    if (cell && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      setMenu(null);
+      leaveEditing();
+      select([]);
+      editEmbedCell(cell);
+      return;
+    }
+    const styleBtn = hit.closest<HTMLElement>(".xe-style");
+    if (styleBtn) {
+      e.preventDefault();
+      const box = styleBtn.closest<HTMLElement>(".sheet-embed");
+      const r = styleBtn.getBoundingClientRect();
+      if (box)
+        setLookMenu({
+          line: unit.start,
+          name: box.dataset.page ?? "",
+          x: r.right - 240,
+          y: r.bottom + 4,
+          base: { theme: box.dataset.theme ?? "blue", banded: box.dataset.banded === "1" },
+        });
+      return;
+    }
+    const link = hit.closest("a");
     // 影片的播放控制要能按
     if (!(e.target as HTMLElement).closest("video")) e.preventDefault();
     setMenu(null);
@@ -1332,6 +1416,17 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
     if (e.shiftKey) return extendTo(unit);
     if (e.ctrlKey || e.metaKey) return toggle(unit);
 
+    // 嵌入的 Excel 表格、圖表（格子以外的地方）：跟圖片一樣點一下選取（選取時才顯示來源列），連按兩下編輯原始碼
+    if (hit.closest(".sheet-embed")) {
+      if (e.detail >= 2) {
+        go(unit, "end");
+        return;
+      }
+      const map = leaveEditing();
+      const st = map(unit.start);
+      select([st], st, st);
+      return;
+    }
     const src = regionText(doc.lines, unit);
     // 圖片、影片：點一下選取（可以拖曳、刪除），連按兩下才編輯原始碼；影片的播放控制照常可以按
     if (isMediaBlock(src)) {
@@ -2068,6 +2163,20 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
       // 分隔線用 ***：簡報裡前面空一行的 --- 是換投影片
       placeMedia(kind === "table" ? newTable() : "***", at);
     },
+    insertImage: (tab) => {
+      const s = stateRef.current;
+      const sel = selRef.current;
+      const at = s.region ? s.region.start : sel.length ? sel[sel.length - 1] : null;
+      const map = s.region ? leaveEditing() : (l: number) => l;
+      pickFromDialog(tab, at === null ? null : map(at));
+    },
+    insertSheet: () => {
+      const s = stateRef.current;
+      const sel = selRef.current;
+      const at = s.region ? s.region.start : sel.length ? sel[sel.length - 1] : null;
+      const map = s.region ? leaveEditing() : (l: number) => l;
+      pickSheetFromDialog(at === null ? null : map(at));
+    },
     insertMarkdown: (md) => {
       const s = stateRef.current;
       const sel = selRef.current;
@@ -2080,7 +2189,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
   cmdRef.current = commands;
   const statusAlign = region ? blockAlign(doc, region) : selected.length ? blockAlign(doc, { start: selected[0], end: selected[0] + 1 }) : "left";
   const boxNow = region ? blockBox(doc, region) : selected.length ? blockBox(doc, { start: selected[0], end: selected[0] + 1 }) : { css: "" };
-  const statusBg = region ? ((blockBg(doc, region) as Color | null) ?? null) : null;
+  const statusBg = region ? ((blockBg(doc, region) as Ink | null) ?? null) : null;
   const selType = !region && selected.length ? (doc.units.find((u) => u.start === selected[0]) ?? null) : null;
   const statusType = editType ?? (selType ? blockTypeOf(selType) : null);
   useEffect(() => {
@@ -2113,6 +2222,8 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         align: (a) => cmdRef.current.align(a),
         box: (fn) => cmdRef.current.box(fn),
         insert: (k) => cmdRef.current.insert(k),
+        insertImage: (t) => cmdRef.current.insertImage(t),
+        insertSheet: () => cmdRef.current.insertSheet(),
         insertMarkdown: (md) => cmdRef.current.insertMarkdown(md),
         undo: () => cmdRef.current.undo(),
         redo: () => cmdRef.current.redo(),
@@ -2219,8 +2330,12 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         return (
           <div
             key={`${n.kind}:${n.open.start}`}
-            className={`${bg ? `block-bg bg-${bg.color}` : ""}${box ? ` block-box ${blockStyleClasses(box.color ?? "")}` : ""}${dragged ? " dragging" : ""}`}
-            style={box ? blockStyleCss(box.color ?? "") : undefined}
+            className={`${bg ? `block-bg${isCustomInk(bg.color) ? " bg-custom" : ` bg-${bg.color}`}` : ""}${box ? ` block-box ${blockStyleClasses(box.color ?? "")}` : ""}${dragged ? " dragging" : ""}`}
+            style={
+              box || (bg && isCustomInk(bg.color))
+                ? { ...(bg && isCustomInk(bg.color) ? { background: bg.color } : {}), ...(box ? blockStyleCss(box.color ?? "") : {}) }
+                : undefined
+            }
           >
             {renderNodes(pair ? pair.children : n.children)}
           </div>
@@ -2262,7 +2377,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         <FormatBar
           kind={editKind}
           marks={marks}
-          bg={(blockBg(doc, region) as Color | null) ?? null}
+          bg={(blockBg(doc, region) as Ink | null) ?? null}
           enabled={formattable}
           current={editType}
           onTurn={turnEditingInto}
@@ -2275,6 +2390,16 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
         <div className="drag-ghost" style={{ left: drag.x + 12, top: drag.y + 8 }}>
           {drag.label || "(empty)"}
         </div>
+      )}
+      {lookMenu && (
+        <TableLookMenu
+          look={parseLook(objectRef(lookMenu.name)?.opts ?? "")}
+          base={lookMenu.base}
+          x={lookMenu.x}
+          y={lookMenu.y}
+          onChange={(look) => setTableLook(lookMenu.line, lookMenu.name, look)}
+          onClose={() => setLookMenu(null)}
+        />
       )}
       {whenMenu && (() => {
         const line = state.source.split("\n")[whenMenu.line] ?? "";
@@ -2327,7 +2452,7 @@ export function Editor({ value, onChange, compact = false, placeholder = "Click 
             current={many ? null : blockTypeOf(menu.unit)}
             canIndent={noItems && targets.some((t) => canIndent(menuDoc, t))}
             canOutdent={noItems && targets.some((t) => canOutdent(menuDoc, t))}
-            bg={many ? null : ((blockBg(menuDoc, menu.unit) as Color | null) ?? null)}
+            bg={many ? null : ((blockBg(menuDoc, menu.unit) as Ink | null) ?? null)}
             onBg={(color) => {
               setMenu(null);
               applyMany(setBlocksBg(state.source, targets, color));
@@ -2738,45 +2863,31 @@ function CodeGlyph() {
   return <span className="fb-code">{"</>"}</span>;
 }
 
-/** 一排顏色：預設＋九種。kind 決定樣本的畫法（文字、螢光、區塊背景）。 */
-export function Swatches(props: { kind: "color" | "highlight" | "bg"; value: Color | null; onPick: (c: Color | null) => void }) {
-  return (
-    <div className="swatches">
-      {[null, ...COLORS].map((c) => (
-        <button
-          key={c ?? "default"}
-          className={`swatch ${props.kind}${c ? ` ${props.kind === "color" ? "tc" : props.kind === "highlight" ? "hl" : "bg"}-${c}` : " none"}${
-            props.value === c ? " on" : ""
-          }`}
-          title={c ? COLOR_LABELS[c] : "Default"}
-          onClick={() => props.onPick(c)}
-        >
-          {props.kind === "bg" ? "" : "A"}
-        </button>
-      ))}
-    </div>
-  );
+/** 顏色選單（`ColorPicker.tsx` 的 `ColorMenu`）：預設、主題色、標準色、自訂。kind 決定是文字、螢光還是區塊背景。 */
+export function Swatches(props: { kind: "color" | "highlight" | "bg"; value: Ink | null; onPick: (c: Ink | null) => void }) {
+  return <ColorMenu kind={props.kind} value={props.value} onPick={props.onPick} />;
 }
 
 /** 編輯時固定在畫面下方的格式列：顯示游標所在文字的狀態，點按鈕切換格式、選顏色。 */
 function FormatBar(props: {
   kind: string;
   marks: Marks | null;
-  bg: Color | null;
+  bg: Ink | null;
   enabled: boolean;
   /** 編輯中區塊的類型（「Turn into」選單打勾） */
   current: BlockType | null;
   onTurn: (t: BlockType) => void;
   onToggle: (m: Mark) => void;
-  onColor: (kind: "color" | "highlight", c: Color | null) => void;
-  onBlockBg: (c: Color | null) => void;
+  onColor: (kind: "color" | "highlight", c: Ink | null) => void;
+  onBlockBg: (c: Ink | null) => void;
 }) {
   const [open, setOpen] = useState<"turn" | "color" | null>(null);
+  const [colorTab, setColorTab] = useState<"color" | "highlight" | "bg">("color");
   const m = props.marks;
   const active = FORMATS.filter((f) => m?.[f.mark]).map((f) => f.label);
-  if (m?.color) active.push(`${COLOR_LABELS[m.color]} text`);
-  if (m?.highlight) active.push(`${COLOR_LABELS[m.highlight]} highlight`);
-  if (props.bg) active.push(`${COLOR_LABELS[props.bg]} background`);
+  if (m?.color) active.push(`${inkLabel(m.color)} text`);
+  if (m?.highlight) active.push(`${inkLabel(m.highlight)} highlight`);
+  if (props.bg) active.push(`${inkLabel(props.bg)} background`);
   return (
     <div className="format-bar" role="toolbar" aria-label="Text formatting" onMouseDown={(e) => e.preventDefault()}>
       <button
@@ -2807,7 +2918,12 @@ function FormatBar(props: {
         title="Color: text, highlight, block background"
         onClick={() => setOpen((v) => (v === "color" ? null : "color"))}
       >
-        <span className={`fb-a${m?.color ? ` tc-${m.color}` : ""}${m?.highlight ? ` hl-${m.highlight}` : ""}`}>A</span>
+        <span
+          className={`fb-a${m?.color && !isCustomInk(m.color) ? ` tc-${m.color}` : ""}${m?.highlight && !isCustomInk(m.highlight) ? ` hl-${m.highlight}` : ""}`}
+          style={{ ...(m?.color && isCustomInk(m.color) ? { color: inkCss("tc", m.color) } : {}), ...(m?.highlight && isCustomInk(m.highlight) ? { background: inkCss("hl", m.highlight) } : {}) }}
+        >
+          A
+        </span>
         <span className="fb-caret">▾</span>
       </button>
       <span className="fb-sep" />
@@ -2836,16 +2952,17 @@ function FormatBar(props: {
       )}
       {open === "color" && (
         <div className="popover color-menu">
-          {props.enabled && (
-            <>
-              <div className="popover-title">Text color</div>
-              <Swatches kind="color" value={m?.color ?? null} onPick={(c) => props.onColor("color", c)} />
-              <div className="popover-title">Highlight</div>
-              <Swatches kind="highlight" value={m?.highlight ?? null} onPick={(c) => props.onColor("highlight", c)} />
-            </>
-          )}
-          <div className="popover-title">Block background</div>
-          <Swatches kind="bg" value={props.bg} onPick={props.onBlockBg} />
+          {/* 文字、螢光、區塊背景分成三個分頁（一次只顯示一個選單） */}
+          <div className="cm-tabs" role="tablist">
+            {(props.enabled ? (["color", "highlight", "bg"] as const) : (["bg"] as const)).map((k) => (
+              <button key={k} role="tab" aria-selected={colorTab === k || !props.enabled} className={`cm-tab${colorTab === k || !props.enabled ? " on" : ""}`} onClick={() => setColorTab(k)}>
+                {k === "color" ? "Text" : k === "highlight" ? "Highlight" : "Background"}
+              </button>
+            ))}
+          </div>
+          {props.enabled && colorTab === "color" && <Swatches kind="color" value={m?.color ?? null} onPick={(c) => props.onColor("color", c)} />}
+          {props.enabled && colorTab === "highlight" && <Swatches kind="highlight" value={m?.highlight ?? null} onPick={(c) => props.onColor("highlight", c)} />}
+          {(!props.enabled || colorTab === "bg") && <Swatches kind="bg" value={props.bg} onPick={props.onBlockBg} />}
         </div>
       )}
     </div>
@@ -3185,8 +3302,8 @@ function BlockMenu(props: {
   current: BlockType | null;
   canIndent: boolean;
   canOutdent: boolean;
-  bg: Color | null;
-  onBg: (c: Color | null) => void;
+  bg: Ink | null;
+  onBg: (c: Ink | null) => void;
   onClose: () => void;
   onTurn: (t: BlockType) => void;
   onIndent: (outdent: boolean) => void;

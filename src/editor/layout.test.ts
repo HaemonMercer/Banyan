@@ -422,6 +422,15 @@ describe("區塊背景顏色", () => {
     expect(setBlockBg(g.source, find(g.source, "b"), null).source).toBe(src);
   });
 
+  it("自訂顏色：<div class=\"bg\" style=\"background: #…\">", () => {
+    const src = "a\n\nb\n";
+    const r = setBlockBg(src, find(src, "b"), "#ddeeff");
+    expect(r.source).toBe('a\n\n<div class="bg" style="background: #ddeeff">\n\nb\n\n</div>\n');
+    expect(blockBg(parseDoc(r.source), find(r.source, "b"))).toBe("#ddeeff");
+    expect(setBlockBg(r.source, find(r.source, "b"), "red").source).toBe('a\n\n<div class="bg-red">\n\nb\n\n</div>\n');
+    expect(setBlockBg(r.source, find(r.source, "b"), null).source).toBe(src);
+  });
+
   it("清單項目套用到整份清單", () => {
     const src = "- a\n- b\n";
     expect(setBlockBg(src, find(src, "- b"), "red").source).toBe('<div class="bg-red">\n\n- a\n- b\n\n</div>\n');

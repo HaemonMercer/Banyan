@@ -41,7 +41,10 @@ export function defaultDrawerStore(): DocStore {
 const UI_KEY = "banyan.drawerUi";
 
 export interface DrawerUi {
+  /** 文獻庫頁選的範圍 */
   scope: string;
+  /** 檔案庫頁打開的資料夾（空字串是 My Files） */
+  folder: string;
   sort: string;
   desc: boolean;
   style: string;

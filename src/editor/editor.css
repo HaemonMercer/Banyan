@@ -944,6 +944,9 @@ kbd {
 .block-box.bx-t :is(.content h1, .content h2, .content h3, .content h4, .content h5, .content h6, .edit) {
   letter-spacing: inherit;
 }
+.block-box.bx-s :is(.content h1, .content h2, .content h3, .content h4, .content h5, .content h6, .edit) {
+  font-size: inherit;
+}
 .block-box.bx-i :is(.content blockquote, .edit) {
   font-style: inherit;
 }
@@ -1049,8 +1052,8 @@ kbd {
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: 292px;
-  padding: 6px 8px 10px;
+  width: 240px;
+  padding: 6px 10px 10px;
   animation: none;
 }
 .swatches {
@@ -2309,4 +2312,265 @@ li.task.t-cancelled .when-chip {
 /* 白板、Draw 右下角有縮放按鈕：往上讓開 */
 body:has(.board-zoom) .ime-badge {
   bottom: 56px;
+}
+
+/* ─── 自訂顏色（`ColorPicker.tsx`，所有色盤下方共用） ─── */
+.custom-color {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--ed-faint);
+  font-size: 12px;
+}
+.custom-color .cc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.custom-color .cc-title {
+  flex: none;
+  color: var(--ed-muted);
+}
+.custom-color .cc-recent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.custom-color .cc-swatch,
+.custom-color .cc-add {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(120, 120, 120, 0.45);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.custom-color .cc-swatch.on {
+  box-shadow: 0 0 0 2px var(--ed-accent);
+}
+.custom-color .cc-add {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ed-text-soft);
+  font-size: 14px;
+  line-height: 1;
+}
+.custom-color .cc-add.on {
+  border-style: solid;
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+.custom-color .cc-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.custom-color .cc-sv {
+  position: relative;
+  height: 110px;
+  border-radius: 6px;
+  cursor: crosshair;
+  touch-action: none;
+}
+.custom-color .cc-sv-white,
+.custom-color .cc-sv-black {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.custom-color .cc-sv-white {
+  background: linear-gradient(to right, #fff, rgba(255, 255, 255, 0));
+}
+.custom-color .cc-sv-black {
+  background: linear-gradient(to top, #000, rgba(0, 0, 0, 0));
+}
+.custom-color .cc-hue {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  cursor: pointer;
+  touch-action: none;
+}
+.custom-color .cc-knob {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.custom-color .cc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.custom-color .cc-preview {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(120, 120, 120, 0.45);
+  border-radius: 5px;
+}
+.custom-color .cc-hex {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 5px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: 11px var(--ed-mono, ui-monospace, monospace);
+  outline: none;
+}
+.custom-color .cc-hex:focus {
+  border-color: var(--ed-accent);
+}
+.custom-color .cc-hex.bad {
+  border-color: var(--ed-danger, #d44c47);
+}
+.custom-color .cc-apply {
+  flex: none;
+  width: auto;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--ed-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.custom-color .cc-apply:hover {
+  background: var(--ed-accent);
+  filter: brightness(1.08);
+}
+.custom-color .cc-apply:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ─── 顏色選單（`ColorMenu`：預設、主題色、標準色、自訂；參考 Google 文件、Word） ─── */
+.color-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 212px;
+  font-size: 12px;
+}
+.color-pick .cp-none {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.color-pick .cp-none:hover {
+  background: var(--ed-hover);
+}
+.color-pick .cp-none-chip {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(120, 120, 120, 0.45);
+  border-radius: 4px;
+  background: linear-gradient(135deg, transparent 45%, var(--ed-danger, #d44c47) 45%, var(--ed-danger, #d44c47) 55%, transparent 55%), var(--ed-bg);
+  font-weight: 700;
+  font-size: 12px;
+}
+.color-pick .cp-none-chip.color {
+  background: var(--ed-bg);
+  color: var(--ed-text);
+}
+.color-pick .cp-none-label {
+  flex: 1;
+}
+.color-pick .cp-check {
+  color: var(--ed-accent);
+  font-size: 12px;
+}
+.color-pick .cp-label {
+  margin: 4px 2px 0;
+  color: var(--ed-muted);
+  font-size: 11px;
+}
+.color-pick .cp-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 18px);
+  gap: 3px;
+  padding: 0 2px;
+}
+.color-pick .cp-theme {
+  grid-template-columns: repeat(9, 18px);
+}
+.color-pick .cp-swatch {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 80ms ease;
+}
+.color-pick .cp-swatch.light {
+  border-color: rgba(120, 120, 120, 0.45);
+}
+.color-pick .cp-swatch:hover {
+  z-index: 1;
+  transform: scale(1.18);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.color-pick .cp-swatch.on {
+  box-shadow: 0 0 0 2px var(--ed-bg), 0 0 0 3.5px var(--ed-accent);
+}
+.color-pick .custom-color {
+  margin-top: 4px;
+}
+.custom-color .cc-dropper {
+  border-style: solid;
+}
+.block-menu .color-pick {
+  padding: 0 8px 6px;
+}
+
+.color-menu .cm-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 6px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--ed-hover);
+}
+.color-menu .cm-tab {
+  flex: 1;
+  justify-content: center;
+  padding: 3px 4px;
+  border-radius: 5px;
+  color: var(--ed-text-soft);
+  font-size: 12px;
+}
+.color-menu .cm-tab.on {
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }

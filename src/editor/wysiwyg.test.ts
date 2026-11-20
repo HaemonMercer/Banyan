@@ -71,6 +71,7 @@ describe("DOM 與 Markdown 來回轉換", () => {
       "**粗體**與*斜體*",
       "`code` 與 [連結](https://a.b)",
       '<u>底線</u> <s>刪除</s> <span class="red">紅</span> <mark class="yellow">亮</mark>',
+      '<span style="color: #aa3366">自訂</span> <mark style="background-color: #ffee00">螢光</mark>',
       "第一行\\\n第二行",
       "***粗斜***",
     ]) {

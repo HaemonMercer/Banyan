@@ -24,13 +24,13 @@ export const BLOCK_TYPES: BlockTypeItem[] = [
   { type: "quote", label: "Quote", description: "Capture a quote", hint: ">", icon: "❝", keywords: "quote blockquote citation" },
   { type: "code", label: "Code", description: "A monospaced code block", hint: "```", icon: "{ }", keywords: "code fence snippet" },
   { type: "hr", label: "Divider", description: "Visually divide blocks", hint: "---", icon: "—", keywords: "divider hr rule line separator" },
-  { type: "image", label: "Image", description: "Upload an image or GIF", hint: "", icon: "🖼", keywords: "image picture photo gif" },
+  { type: "image", label: "Image", description: "Upload, pick from Drawer or link an image", hint: "", icon: "🖼", keywords: "image picture photo gif drawer url upload" },
   { type: "video", label: "Video", description: "Upload a video", hint: "", icon: "▶", keywords: "video movie mp4 clip" },
   { type: "table", label: "Table", description: "A simple table", hint: "", icon: "▦", keywords: "table grid" },
 ];
 
 /** 斜線選單裡不是區塊類型的指令：引用 Drawer 的條目、插入參考文獻、插入頁面範本。 */
-export type SlashType = BlockType | "cite" | "bibliography" | "template";
+export type SlashType = BlockType | "cite" | "bibliography" | "template" | "sheet";
 
 export interface SlashItem extends Omit<BlockTypeItem, "type"> {
   type: SlashType;
@@ -40,6 +40,7 @@ export interface SlashItem extends Omit<BlockTypeItem, "type"> {
 
 export const SLASH_COMMANDS: SlashItem[] = [
   { type: "cite", label: "Citation", description: "Cite an item from Drawer", hint: "[[@", icon: "❞", keywords: "cite citation reference drawer source zotero" },
+  { type: "sheet", label: "Excel table or chart", description: "Link a table or chart from Excel; edit cells right here", hint: "", icon: "▤", keywords: "excel sheet spreadsheet table chart graph numbers embed" },
   { type: "bibliography", label: "Bibliography", description: "List the works cited on this page", hint: "", icon: "☰", keywords: "bibliography references works cited sources drawer" },
 ];
 

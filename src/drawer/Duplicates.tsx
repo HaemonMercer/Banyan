@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { CloseIcon, CopyIcon, TrashIcon } from "../editor/icons";
-import { duplicateGroups, extraCopies, placeKey, placeLabel, removeEntries, removePlace, type Place } from "./files";
+import { duplicateGroups, extraCopies, placeKey, placeLabel, removePlace, setFilesTrashed, type Place } from "./files";
 import type { Library } from "./model";
 import { PlaceRow } from "./FilesPane";
 
@@ -92,12 +92,12 @@ export function DuplicateFinder(props: {
 
   const removeExtras = () => {
     if (!extras.length) return;
-    if (!window.confirm(`Delete ${extras.length === 1 ? "1 extra copy" : `${extras.length} extra copies`} from My Files? The oldest copy of each file stays.`)) return;
-    onModify((l) => removeEntries(l, extras.map((f) => f.id)));
+    if (!window.confirm(`Move ${extras.length === 1 ? "1 extra copy" : `${extras.length} extra copies`} in Files to the Trash? The oldest copy of each file stays.`)) return;
+    onModify((l) => setFilesTrashed(l, extras.map((f) => f.id), true));
     props.onNotice(`Removed ${extras.length === 1 ? "1 duplicate" : `${extras.length} duplicates`}`);
   };
   const removeOne = (p: Place) => {
-    const what = p.kind === "file" ? `Delete “${p.file.name}” from ${placeLabel(lib, p)}?` : `Remove the attachment “${p.att.name}” from “${p.item.title || "Untitled"}”?`;
+    const what = p.kind === "file" ? `Move “${p.file.name}” (${placeLabel(lib, p)}) to the Trash?` : `Remove the attachment “${p.att.name}” from “${p.item.title || "Untitled"}”?`;
     if (!window.confirm(what)) return;
     onModify((l) => removePlace(l, p));
   };
@@ -115,7 +115,7 @@ export function DuplicateFinder(props: {
         {groups.length ? (
           <>
             <p className="dr-dialog-text">
-              {groups.length === 1 ? "1 file is" : `${groups.length} files are`} stored more than once, in My Files or attached to items. Files with the same content
+              {groups.length === 1 ? "1 file is" : `${groups.length} files are`} stored more than once, in Files or attached to items. Files with the same content
               match even when their names differ.
             </p>
             <div className="dr-dialog-list">
@@ -134,7 +134,7 @@ export function DuplicateFinder(props: {
                         i === 0 ? (
                           <span className="dr-dup-keep">Oldest</span>
                         ) : (
-                          <button className="icon-btn" title={p.kind === "file" ? "Delete this copy" : "Remove this attachment"} onClick={() => removeOne(p)}>
+                          <button className="icon-btn" title={p.kind === "file" ? "Move this copy to the Trash" : "Remove this attachment"} onClick={() => removeOne(p)}>
                             <TrashIcon />
                           </button>
                         )

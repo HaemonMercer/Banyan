@@ -86,7 +86,7 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
     items: [
       [["Ctrl", "\\"], "Show/hide sidebar"],
       [["Alt", "S"], "Favorite / unfavorite this page"],
-      [["Alt", "D"], "Cycle Whiteboard / Dock / Tasks (in a Desk file)"],
+      [["Alt", "D"], "Cycle Whiteboard / Dock / Tasks (Desk file) or Library / Files (Drawer)"],
       [["Alt", "H"], "Version history"],
       [["Alt", ","], "Settings"],
       [["Shift"], "Switch Chinese / English input (tap alone)"],

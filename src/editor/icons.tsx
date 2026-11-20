@@ -855,3 +855,11 @@ export const BanyanMark = ({ size = 22, ...p }: IconProps & { size?: number }) =
     <path d="M22 62V98M34 62V92M86 62V92M98 62V98" fill="none" stroke="#fff" strokeWidth="4.5" strokeLinecap="round" />
   </svg>
 );
+
+/** 圖表（直條） */
+export const ChartIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 13.5h11" />
+    <path d="M4.5 13.5V8.5M8 13.5V4M11.5 13.5V6.5" strokeWidth={2.2} />
+  </svg>
+);

@@ -1,3 +1,4 @@
+import { CustomColor } from "../editor/ColorPicker";
 import { useEffect, useState } from "react";
 import { COLORS, COLOR_LABELS } from "../editor/inline";
 import {
@@ -26,7 +27,6 @@ import {
   groupItems,
   MENU_KINDS,
   MIN_SIZE,
-  normalizeHex,
   patchShapes,
   radiusOf,
   reorder,
@@ -574,36 +574,9 @@ function NumField(props: {
   );
 }
 
-/** 色碼欄位（#rrggbb，也接受 #abc） */
+/** 自訂顏色（所有色盤共用的 `CustomColor`：最近用過、色彩方塊、色碼） */
 function HexField(props: { value: Paint; onPick: (p: Paint) => void }) {
-  const shown = isHexPaint(props.value) ? props.value : "";
-  const [v, setV] = useState(shown);
-  useEffect(() => setV(shown), [shown]);
-  const commit = () => {
-    const h = normalizeHex(v);
-    if (h && h !== props.value) props.onPick(h);
-    else setV(shown);
-  };
-  return (
-    <label className="dwb-field dwb-hex" title="Any color: type a hex code">
-      <span className="dwb-hex-chip" style={{ background: normalizeHex(v) ?? "transparent" }} />
-      <input
-        value={v}
-        placeholder="#000000"
-        spellCheck={false}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
-            setV(shown);
-            e.currentTarget.blur();
-          }
-        }}
-      />
-    </label>
-  );
+  return <CustomColor value={isHexPaint(props.value) ? props.value : null} onPick={props.onPick} />;
 }
 
 /* ─── 選色 ─── */

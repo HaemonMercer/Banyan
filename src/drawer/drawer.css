@@ -1730,3 +1730,110 @@
     left: 0;
   }
 }
+
+/* 檔案庫的範圍名稱（All Files、Unfiled Files、Trash）：不能點 */
+.dr-crumb.here {
+  cursor: default;
+  color: var(--ed-text);
+  font-weight: 600;
+}
+.dr-crumb.here:hover {
+  background: none;
+}
+/* 檔案的資料夾（可以好幾個，每個可以拿掉）與標籤 */
+.dr-ffolders {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dr-ffolder {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.dr-ffolder .dr-link {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-ffolder .icon-btn {
+  width: 20px;
+  height: 20px;
+  opacity: 0;
+}
+.dr-ffolder:hover .icon-btn,
+.dr-ffolder .icon-btn:focus-visible {
+  opacity: 1;
+}
+.dr-ffolder .icon-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.dr-ftags {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+.dr-ftags-label {
+  color: var(--ed-muted);
+}
+
+/* 選一筆的對話框（`ui.tsx` 的 PickDialog） */
+.dr-pick-search {
+  padding: 4px 18px 10px;
+}
+.dr-pick-search input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--ed-border, var(--ed-faint));
+  border-radius: 8px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+}
+.dr-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dr-pick-row:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+.dr-pick-row.done {
+  opacity: 0.55;
+  cursor: default;
+}
+.dr-pick-row > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--ed-muted);
+}
+.dr-pick-done {
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+/* 檔案右欄的「Attached to」 */
+.dr-attached {
+  margin-top: 14px;
+  font-size: 13px;
+}
+.dr-attached > strong {
+  display: block;
+  margin-bottom: 4px;
+}

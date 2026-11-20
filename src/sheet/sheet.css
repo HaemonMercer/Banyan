@@ -1229,3 +1229,484 @@
 .sv-msg {
   color: var(--ed-text-soft);
 }
+
+/* ─── 嵌入文件的表格、圖表 ![[檔案/標題#^id]]（`sheetEmbed.tsx`；Word、簡報、Note） ─── */
+
+.xl-embed,
+.xp-preview {
+  --sv-line: rgba(47, 46, 43, 0.14);
+  --sv-line-strong: rgba(47, 46, 43, 0.28);
+  --sv-chart-bg: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .xl-embed,
+  :root:not([data-theme="light"]) .xp-preview {
+    --sv-line: rgba(255, 255, 255, 0.12);
+    --sv-line-strong: rgba(255, 255, 255, 0.26);
+    --sv-chart-bg: #1e1e1e;
+  }
+}
+:root[data-theme="dark"] .xl-embed,
+:root[data-theme="dark"] .xp-preview {
+  --sv-line: rgba(255, 255, 255, 0.12);
+  --sv-line-strong: rgba(255, 255, 255, 0.26);
+  --sv-chart-bg: #1e1e1e;
+}
+.sheet-embed .pe-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.sheet-embed .pe-sub {
+  color: var(--ed-muted);
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.xl-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.xl-table {
+  --th: #2f7fd8;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 4px 0;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  background: var(--ed-bg);
+}
+.xl-table.theme-gray {
+  --th: #7a8088;
+}
+.xl-table.theme-green {
+  --th: #2e9e65;
+}
+.xl-table.theme-orange {
+  --th: #e08a1e;
+}
+.xl-table.theme-red {
+  --th: #d9534f;
+}
+.xl-table.theme-purple {
+  --th: #7d5bc9;
+}
+.xl-table td,
+.xl-table th {
+  padding: 3px 7px;
+  border: 1px solid var(--sv-line);
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.xl-table td.wrap,
+.xl-table th.wrap {
+  white-space: normal;
+  word-break: break-word;
+}
+.xl-table tr.h > * {
+  background: color-mix(in srgb, var(--th) 16%, var(--ed-bg));
+  font-weight: 600;
+  border-bottom-color: color-mix(in srgb, var(--th) 40%, var(--ed-bg));
+}
+.xl-table .hc {
+  background: color-mix(in srgb, var(--th) 7%, var(--ed-bg));
+  font-weight: 600;
+}
+.xl-table tr.f > * {
+  background: color-mix(in srgb, var(--th) 10%, var(--ed-bg));
+  font-weight: 600;
+  border-top: 1px solid color-mix(in srgb, var(--th) 40%, var(--ed-bg));
+}
+.xl-table tr.band > td {
+  background: color-mix(in srgb, var(--th) 4%, var(--ed-bg));
+}
+.xl-table .stars {
+  color: #f0a030;
+}
+.xl-chart {
+  margin: 4px 0;
+  border-radius: 8px;
+  background: var(--sv-chart-bg);
+  box-shadow: 0 0 0 1px var(--sv-line);
+  padding-bottom: 6px;
+}
+.xl-chart .sc-plot {
+  height: auto;
+}
+.xl-chart .sc-legend {
+  height: auto;
+  min-height: 20px;
+}
+.xl-chart .pe-note {
+  padding: 24px 12px;
+  text-align: center;
+}
+
+/* ─── 插入 Excel 的表格、圖表的對話框（`SheetPicker.tsx`；外框沿用插入圖片的 `.ip`） ─── */
+
+.modal.ip.xp {
+  width: min(1040px, 100%);
+}
+.xp-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px 240px 1fr;
+  border-top: 1px solid var(--ed-faint);
+}
+.xp-books,
+.xp-objects {
+  overflow-y: auto;
+  padding: 8px;
+  border-right: 1px solid var(--ed-faint);
+}
+.xp-book,
+.xp-object {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.xp-book svg,
+.xp-object svg {
+  flex: none;
+  color: var(--ed-muted);
+}
+.xp-book:hover,
+.xp-object:hover {
+  background: var(--ed-hover);
+}
+.xp-book.on,
+.xp-object.on {
+  background: var(--ed-select);
+}
+.xp-book.on svg,
+.xp-object.on svg {
+  color: var(--ed-accent);
+}
+.xp-book-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.xp-book-title,
+.xp-book-file,
+.xp-object span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.xp-book-file {
+  font-size: 11px;
+  color: var(--ed-muted);
+}
+.xp-sheet {
+  padding: 8px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ed-muted);
+}
+.xp-group:first-child .xp-sheet {
+  padding-top: 2px;
+}
+.xp-none {
+  padding: 12px 8px;
+  font-size: 13px;
+  color: var(--ed-muted);
+}
+.xp-preview {
+  min-width: 0;
+  overflow: auto;
+  padding: 20px;
+  background: var(--ed-code-bg);
+}
+.xp-preview-box {
+  color: var(--ed-text);
+}
+.xp-hint {
+  font-size: 12px;
+  color: var(--ed-muted);
+}
+@media (max-width: 760px) {
+  .xp-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
+    overflow-y: auto;
+  }
+  .xp-books,
+  .xp-objects {
+    border-right: none;
+    border-bottom: 1px solid var(--ed-faint);
+    max-height: 180px;
+  }
+}
+
+/* ─── 嵌入的表格：在文件裡改格子、這個位置的樣子（`embedEdit.tsx`） ─── */
+
+.sheet-table .pe-head .xe-hint {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--ed-muted);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sheet-table .xe-style {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sheet-table:hover .xe-hint,
+.sheet-table:hover .xe-style,
+.sheet-table .xe-style:focus-visible {
+  opacity: 1;
+}
+.sheet-table .xe-style:hover {
+  color: var(--ed-accent);
+  border-color: var(--ed-accent);
+}
+.sheet-table .xl-table [data-r] {
+  cursor: cell;
+}
+.sheet-table .xl-table [data-r]:hover {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ed-accent) 60%, transparent);
+}
+.sheet-table .xl-table .xe-editing {
+  color: transparent;
+}
+.xe-input {
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 7px;
+  border: 2px solid var(--ed-accent);
+  border-radius: 2px;
+  outline: none;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font-family: var(--ed-font);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--ed-shadow);
+}
+
+/* 這個位置的樣子：不上色、字的大小、撐滿寬度 */
+.xl-table.theme-plain tr.h > *,
+.xl-table.theme-plain .hc,
+.xl-table.theme-plain tr.f > * {
+  background: transparent;
+  border-color: var(--sv-line-strong);
+}
+.xl-table.theme-plain tr.band > td {
+  background: var(--ed-hover);
+}
+.xl-table.size-small {
+  font-size: 0.75em;
+}
+.xl-table.size-small td,
+.xl-table.size-small th {
+  padding: 2px 5px;
+}
+.xl-table.size-large {
+  font-size: 1em;
+}
+.xl-table.size-large td,
+.xl-table.size-large th {
+  padding: 5px 9px;
+}
+.xl-table.full {
+  width: 100%;
+}
+
+/* Style 選單 */
+.popover.xe-menu {
+  position: fixed;
+  z-index: 1000;
+  width: 240px;
+  padding: 10px 12px 12px;
+  font-size: 13px;
+}
+.xe-label {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ed-muted);
+}
+.xe-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.xe-menu .xe-swatch {
+  display: block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.xe-menu .xe-swatch.plain {
+  background: linear-gradient(135deg, transparent 45%, var(--ed-danger) 45% 55%, transparent 55%), var(--ed-bg);
+}
+.xe-menu .xe-swatch.on {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 1px;
+}
+.xe-menu .xe-auto {
+  display: block;
+  width: auto;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 11px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.xe-menu .xe-auto.on {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+.xe-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+  cursor: pointer;
+}
+.xe-seg {
+  display: flex;
+  margin-bottom: 6px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.xe-menu .xe-seg button {
+  display: block;
+  border-radius: 0;
+  text-align: center;
+  flex: 1;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  cursor: pointer;
+}
+.xe-menu .xe-seg button + button {
+  border-left: 1px solid var(--ed-faint);
+}
+.xe-menu .xe-seg button.on {
+  background: var(--ed-select);
+  color: var(--ed-accent);
+  font-weight: 600;
+}
+.xe-menu .xe-reset {
+  display: block;
+  width: 100%;
+  padding: 5px 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.xe-menu .xe-reset:disabled {
+  color: var(--ed-muted);
+  cursor: default;
+}
+.xe-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--ed-muted);
+}
+
+/* 嵌入的 Excel 表格、圖表：平常只有內容；選取時（點一下，跟圖片一樣）上方浮出來源列（↗ 檔案/標題 · 名稱、Style），
+   浮在內容上面，不推動版面（使用者：「把那個綠色的Bar也刪掉 只有選取才會顯示來源」） */
+.page-embed.sheet-embed {
+  position: relative;
+  margin: 6px 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+.sheet-embed .pe-head {
+  display: none;
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  bottom: calc(100% + 2px);
+  max-width: 100%;
+  margin: 0;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 7px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  font-size: 0.78em;
+}
+.row.selected .sheet-embed .pe-head {
+  display: flex;
+}
+.sheet-embed .pe-head .dock-ref::after {
+  content: " ↗";
+  font-weight: 600;
+  color: var(--ed-accent);
+}
+/* 選取時一直顯示（不用滑過） */
+.row.selected .sheet-table .xe-hint,
+.row.selected .sheet-table .xe-style {
+  opacity: 1;
+}
+.sheet-table .pe-head .xe-hint {
+  margin-left: 12px;
+}
+.sheet-embed .pe-body {
+  padding: 0;
+}
+.sheet-embed.empty .pe-body {
+  padding: 6px 0;
+}
+.sheet-embed .xl-table {
+  margin: 0;
+}
+.sheet-embed .xl-chart {
+  margin: 0 auto 0 0;
+}

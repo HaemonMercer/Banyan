@@ -1,5 +1,6 @@
 import { createContext } from "react";
 import type { SlideAnim } from "./slideAnim";
+import { cleanMasters, masterOf, type SlideMaster } from "./slideMasters";
 
 /**
  * 簡報整份的設定（像 Keynote／PowerPoint／Google 簡報的主題、頁碼、頁尾）：存在 `DockDoc.deck`，沒改過就不寫。
@@ -46,6 +47,8 @@ export interface DeckSetup {
   numbers?: boolean;
   /** 投影片左下角的頁尾文字 */
   footer?: string;
+  /** 投影片母片（`slideMasters.ts`；第一個是預設） */
+  masters?: SlideMaster[];
 }
 
 export const DeckContext = createContext<DeckSetup>({});
@@ -58,6 +61,8 @@ export function cleanDeck(raw: unknown): DeckSetup {
   if (DECK_THEMES.some((t) => t.id === o.theme) && o.theme !== "white") out.theme = o.theme as DeckTheme;
   if (o.numbers === true) out.numbers = true;
   if (typeof o.footer === "string" && o.footer.trim()) out.footer = o.footer.slice(0, 200);
+  const masters = cleanMasters(o.masters);
+  if (masters.length) out.masters = masters;
   return out;
 }
 
@@ -72,10 +77,13 @@ const darkBg = (hex: string) => {
   return lum < 110;
 };
 
-/** 這張投影片的顏色：主題，背景另外選過就照背景決定深淺 */
-export function slideColors(deck: DeckSetup | undefined, meta: SlideAnim | undefined): ThemeColors {
+/**
+ * 這張投影片的顏色：主題，背景另外選過（投影片自己的，沒有就是母片的）就照背景決定深淺。
+ * master 沒給就照投影片的設定找；null 是不看母片（編輯母片時，背景已經在 meta 裡）。
+ */
+export function slideColors(deck: DeckSetup | undefined, meta: SlideAnim | undefined, master: SlideMaster | null = masterOf(deck?.masters, meta) ?? null): ThemeColors {
   const base = themeOf(deck).c;
-  const bg = meta?.bg;
+  const bg = meta?.bg ?? master?.bg;
   if (!bg) return base;
   if (darkBg(bg) === darkBg(base.bg)) return { ...base, bg };
   const flip = darkBg(bg) ? DECK_THEMES.find((t) => t.id === "black")!.c : DECK_THEMES[0].c;
@@ -83,8 +91,8 @@ export function slideColors(deck: DeckSetup | undefined, meta: SlideAnim | undef
 }
 
 /** 投影片元素的 style：覆蓋編輯器的顏色變數（文字、背景、程式碼底色） */
-export function slideStyle(deck: DeckSetup | undefined, meta: SlideAnim | undefined): React.CSSProperties {
-  const c = slideColors(deck, meta);
+export function slideStyle(deck: DeckSetup | undefined, meta: SlideAnim | undefined, master?: SlideMaster | null): React.CSSProperties {
+  const c = master === undefined ? slideColors(deck, meta) : slideColors(deck, meta, master);
   return {
     background: c.bg,
     ["--ed-text" as string]: c.text,

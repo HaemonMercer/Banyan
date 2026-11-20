@@ -880,6 +880,31 @@ body.dock-resizing iframe {
   margin: 0 auto;
   padding: 28px 48px 120px;
 }
+/* 筆記的外觀（DockDoc.look）：文字大小寫成 --note-size，頁面顏色在 .dp-body（.dp-tinted 換成紙張的深色字） */
+.dp-write .md-editor {
+  font-size: var(--note-size, 16px);
+}
+.dp-body.dp-tinted {
+  background: var(--paper-bg);
+}
+/* 自訂的深色頁面：字換成淺色（`paperIsDark`） */
+.paper-dark .paper-page,
+.paper-dark .paper-flow,
+.dp-tinted.paper-dark {
+  --ed-text: #f1f0ec;
+  --ed-text-soft: rgba(241, 240, 236, 0.8);
+  --ed-muted: rgba(241, 240, 236, 0.5);
+  --ed-faint: rgba(241, 240, 236, 0.18);
+  --ed-hover: rgba(241, 240, 236, 0.08);
+  --ed-bg: var(--paper-bg);
+  --ed-code-bg: rgba(255, 255, 255, 0.08);
+  --ed-inline-code-bg: rgba(255, 255, 255, 0.12);
+}
+.paper-dark .paper-num,
+.paper-dark .paper-header,
+.paper-dark .paper-footer {
+  color: rgba(241, 240, 236, 0.55);
+}
 .dp-write.paper-width {
   max-width: 794px;
 }
@@ -910,7 +935,8 @@ body.dock-resizing iframe {
 }
 .paper-page,
 .paper-flow,
-.slide {
+.slide,
+.dp-tinted {
   --ed-text: #2f2e2b;
   --ed-text-soft: rgba(47, 46, 43, 0.78);
   --ed-muted: rgba(47, 46, 43, 0.48);
@@ -935,7 +961,8 @@ body.dock-resizing iframe {
   left: 0;
   width: 794px;
   height: 1123px;
-  background: #fff;
+  /* 頁面顏色（版面設定的 color，PaperEditor 寫在 .paper-sheets 上） */
+  background: var(--paper-bg, #fff);
   box-shadow: 0 1px 3px rgba(15, 15, 15, 0.12), 0 8px 24px rgba(15, 15, 15, 0.08);
 }
 .paper-flow {
@@ -1765,8 +1792,49 @@ body.dock-resizing iframe {
   font-weight: 700;
 }
 .dc-swatch-menu {
-  width: 236px;
+  width: auto;
   min-width: 0;
+  padding: 8px 10px 10px;
+}
+/* 顏色按鈕：字母（或螢光筆、油漆桶）下面一條目前的顏色 */
+.dc-well:hover:not(:disabled),
+.dc-well.open {
+  border-color: var(--ed-muted);
+}
+.dc-well-glyph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 22px;
+  height: 20px;
+  color: var(--ed-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.dc-well-bar {
+  display: block;
+  width: 18px;
+  height: 4px;
+  border-radius: 1px;
+  box-shadow: inset 0 0 0 1px rgba(120, 120, 120, 0.3);
+}
+.dc-well-bar.none {
+  background: linear-gradient(135deg, transparent 40%, var(--ed-danger, #d44c47) 40%, var(--ed-danger, #d44c47) 60%, transparent 60%), var(--ed-bg);
+}
+/* Font 裡的字元樣式 */
+.dc-cs {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ed-faint);
+}
+.dc-sublabel {
+  margin-bottom: 6px;
+  color: var(--ed-text-soft);
+  font-size: 12px;
+  font-weight: 600;
 }
 .dc-margins {
   display: grid;
@@ -3320,4 +3388,281 @@ body.dock-resizing iframe {
 .dc-cs-edit .dc-nums,
 .dc-cs-edit .dc-row {
   margin: 0;
+}
+
+/* ─── 簡報：母片（slideMasters.ts）：投影片下層的母片物件、編輯母片、Slide Master 選擇 ─── */
+
+.sl-master {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.sl-placeholder > .slide-content {
+  opacity: 0.55;
+}
+.slide-layout .sl-main {
+  outline: 1px dashed rgba(47, 46, 43, 0.35);
+}
+.slide-layout .sl-main.on {
+  outline-color: var(--ed-accent);
+}
+.slide-layout .sl-main,
+.slide-layout .sl-main * {
+  cursor: move;
+}
+.deck-master-bar {
+  flex: none;
+  max-width: 100%;
+  margin-bottom: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--ed-select);
+  color: var(--ed-text-soft);
+  font-size: 12px;
+  text-align: center;
+}
+.deck-master-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.deck-master-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 168px;
+  color: var(--ed-text-soft);
+  font-size: 12px;
+}
+.deck-master-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deck-master-name em {
+  flex: none;
+  color: var(--ed-accent);
+  font-size: 11px;
+  font-style: normal;
+}
+.deck-master-name small {
+  flex: none;
+  margin-left: auto;
+  color: var(--ed-muted);
+  font-size: 11px;
+}
+.deck-thumb.on .deck-master-name {
+  color: var(--ed-text);
+  font-weight: 500;
+}
+.deck-layouts {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.deck-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--ed-text-soft);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.deck-layout > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deck-layout .slide-frame {
+  border: 1px solid var(--ed-faint);
+  border-radius: 3px;
+}
+.deck-layout.on {
+  border-color: var(--ed-accent);
+  color: var(--ed-text);
+}
+
+/* ─── 簡報：物件的外觀（Format → Style：形狀、框線、效果） ─── */
+
+.sl-shape-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.sl-shape-grid button {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text-soft);
+  cursor: pointer;
+}
+.sl-shape-grid button:hover {
+  color: var(--ed-text);
+}
+.sl-shape-grid button.on {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+}
+.sl-lw .dc-num {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.sl-lw .dc-num input {
+  width: 56px;
+}
+.sl-opacity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.sl-opacity input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--ed-accent);
+}
+.sl-opacity span {
+  width: 36px;
+  color: var(--ed-text-soft);
+  font-size: 12px;
+  text-align: right;
+}
+
+/* ─── 頁面顏色（Word 的 Document 檢閱器、筆記的 Aa 選單） ─── */
+.dc-paper-colors {
+  display: grid;
+  grid-template-columns: repeat(4, 24px);
+  gap: 6px;
+}
+.dc-paper-color {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(120, 120, 120, 0.45);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.dc-paper-color:hover {
+  box-shadow: 0 0 0 2px var(--ed-hover);
+}
+.dc-paper-color.on {
+  box-shadow: 0 0 0 2px var(--ed-accent);
+}
+.dp-look {
+  min-width: 180px;
+  padding: 10px 12px;
+}
+.dp-look-label {
+  margin: 2px 0 6px;
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+.dp-look-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.dp-look .dp-look-size button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+.dp-look .dp-look-size button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.dp-look-value {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dp-look-icon {
+  font-weight: 600;
+  font-size: 13px;
+}
+.dp-look .dp-look-reset {
+  margin-top: 10px;
+  width: 100%;
+  justify-content: center;
+  color: var(--ed-text-soft);
+  font-size: 12px;
+}
+
+/* Style → Font 的字級：輸入框右邊的 ▾ 列出常用字級 */
+.dc-size {
+  position: relative;
+  min-width: 0;
+}
+.dc-size-box {
+  position: relative;
+}
+.dc-size-box .dc-num input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 24px;
+}
+.dc-size-open {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 5px 5px 0;
+  background: transparent;
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.dc-size-open:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.dc-size-menu {
+  left: 0;
+  top: 30px;
+  min-width: 140px;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 30;
+}
+
+.dc-menu.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+/* 檢閱器的顏色選單畫在 body 上（不被檢閱器裁掉）；太高時自己捲動 */
+.dc-swatch-float {
+  z-index: 1000;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }

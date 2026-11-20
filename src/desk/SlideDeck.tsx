@@ -1,3 +1,4 @@
+import { CustomColor } from "../editor/ColorPicker";
 import { DECK_THEMES, DeckContext, SLIDE_BGS, themeOf, type DeckSetup } from "./deckSetup";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -22,6 +23,7 @@ import {
   ShapesIcon,
   TextIcon,
   TableIcon,
+  ChartIcon,
   VideoIcon,
   PasteIcon,
   PlayIcon,
@@ -31,8 +33,25 @@ import {
 import { importSlides, saveImported, SLIDES_IMPORT, withImportedSlides } from "./docImport";
 import { duplicateSlides, insertSlide, insertSlides, joinSlides, moveGroup, moveSlides, removeSlides, sameSlide, setSlide, splitSlides } from "./file";
 import { clickPick, keepPick, noPick, stepPick, type Picked } from "./selection";
-import { BoxFormat, pickImageBox, SlideCanvas, SlideView } from "./SlideCanvas";
-import { MAIN, newShapeBox, newTextBox, removeBoxes, shapePath, SHAPES, type ShapeKind, type SlideBox } from "./slideBoxes";
+import { BoxFormat, pickImageBoxes, ShapeGlyph, SlideCanvas, SlideView } from "./SlideCanvas";
+import { MAIN, MAIN_FRAME, newShapeBox, newTextBox, removeBoxes, SHAPES, type SlideBox } from "./slideBoxes";
+import {
+  duplicateMaster,
+  insertMaster,
+  makeDefault,
+  MASTER_PRESETS,
+  masterAsMeta,
+  masterOf,
+  masterUsage,
+  metaIntoMaster,
+  moveMaster,
+  presetMaster,
+  removeMaster,
+  uniqueName,
+  updateMaster,
+  type MasterPreset,
+  type SlideMaster,
+} from "./slideMasters";
 import {
   Field,
   FormatInspector,
@@ -49,6 +68,7 @@ import {
   useFormatTab,
   usePanel,
   type StyleLib,
+  ImageMenuItems,
   type ParaStyle,
 } from "./DocChrome";
 import {
@@ -77,6 +97,9 @@ import {
  * 內容仍是一份 Markdown，投影片之間是前面空一行、單獨一行的 `---`（`file.ts` 的 `splitSlides`）；
  * 這裡的操作都經過 `file.ts` 的純函式（`setSlide`、`insertSlide`…），
  * 並用 `onEdit(fn)` 拿最新的內容改。
+ *
+ * 母片（View ▸ Edit Slide Masters，`slideMasters.ts`）：左邊換成母片清單、中間編輯母片（同一個 `SlideCanvas`，`layout`），
+ * 改的是 `DeckSetup.masters`（`setMasters`，有自己的復原 `mhist`）；投影片在 Format ▸ Style 的 Slide Layout 選母片。
  */
 
 /** 設計尺寸 960×540；畫面上用 transform 縮放 */
@@ -90,7 +113,7 @@ export function buildUnits(content: Element): HTMLElement[] {
   const out: HTMLElement[] = [];
   // 對齊、背景、縮排這些排版容器（<div class="align-center"> …）看裡面的區塊
   const flat = (els: Element[]): Element[] =>
-    els.flatMap((el) => (el.tagName === "DIV" && /\b(align-|bg-|indent|width-|caption-)/.test(el.className) && el.children.length ? flat([...el.children]) : [el]));
+    els.flatMap((el) => (el.tagName === "DIV" && /\b(align-|bg\b|indent|width-|caption-)/.test(el.className) && el.children.length ? flat([...el.children]) : [el]));
   flat([...content.children]).forEach((el, i) => {
     if (i === 0 && /^H[1-6]$/.test(el.tagName)) return;
     if (el.tagName === "UL" || el.tagName === "OL") out.push(...([...el.children].filter((li) => li.tagName === "LI") as HTMLElement[]));
@@ -190,8 +213,8 @@ export function SlideDeck(props: {
   styles?: StyleLib;
 }) {
   const { slides, anim, current, onCurrent, onEdit } = props;
-  /** Navigator（左邊縮圖＋投影片）或 Light Table（全部投影片排成格子） */
-  const [view, setView] = useState<"navigator" | "table">("navigator");
+  /** Navigator（左邊縮圖＋投影片）、Light Table（全部投影片排成格子）或編輯母片 */
+  const [view, setView] = useState<"navigator" | "table" | "masters">("navigator");
   const stage = useRef<HTMLDivElement>(null);
   const scope = useRef<HTMLDivElement>(null);
   const st = useEditorStatus(scope);
@@ -224,7 +247,8 @@ export function SlideDeck(props: {
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+    // 換檢視時中間的區域重新掛上
+  }, [view]);
 
   /** 對第 i 張的操作要處理哪些投影片：它在多選裡就是整組 */
   const targets = (i: number) => (pick.sel.length > 1 && pick.sel.includes(i) ? pick.sel : [i]);
@@ -282,7 +306,19 @@ export function SlideDeck(props: {
   };
 
   const sorted = (idx: number[]) => [...new Set(idx)].sort((a, b) => a - b);
-  const add = (at: number) => commit((d) => ({ content: insertSlide(d.content, at), anim: animInsert(d.anim, at) }), at, [at]);
+  /** 新投影片用目前這張的母片（跟 PowerPoint 一樣） */
+  const add = (at: number) => {
+    const m = animAt(anim, current).master;
+    commit(
+      (d) => {
+        let a = animInsert(d.anim, at);
+        if (m) a = setMeta(a, at, (x) => ({ ...x, master: m }));
+        return { content: insertSlide(d.content, at), anim: a };
+      },
+      at,
+      [at],
+    );
+  };
   const duplicate = (idx: number[]) => {
     const s = sorted(idx);
     const at = s[s.length - 1] + 1;
@@ -365,8 +401,102 @@ export function SlideDeck(props: {
   const last = (idx: number[]) => Math.max(...idx);
   /** 這張投影片上選取的物件（換張就清掉） */
   const [boxSel, setBoxSel] = useState<string[]>([]);
-  useEffect(() => setBoxSel([]), [current]);
   const meta = animAt(anim, current);
+
+  /* ─── 母片 ─── */
+  const masters = props.deck.masters ?? [];
+  /** 最新的整份設定（同一次操作裡連續改好幾次時不會拿到舊的） */
+  const deckRef = useRef(props.deck);
+  deckRef.current = props.deck;
+  /** 母片的復原與重做（整份設定的前後） */
+  const mhist = useRef<{ undo: { before: DeckSetup; after: DeckSetup }[]; redo: { before: DeckSetup; after: DeckSetup }[] }>({ undo: [], redo: [] });
+  const setDeck = (fn: (d: DeckSetup) => DeckSetup, history = true) => {
+    const before = deckRef.current;
+    const after = fn(before);
+    if (history) {
+      mhist.current.undo.push({ before, after });
+      if (mhist.current.undo.length > 100) mhist.current.undo.shift();
+      mhist.current.redo = [];
+    }
+    deckRef.current = after;
+    props.onDeck(after);
+  };
+  const setMasters = (fn: (ms: SlideMaster[]) => SlideMaster[], history = true) =>
+    setDeck((d) => {
+      const ms = fn(d.masters ?? []);
+      const out = { ...d };
+      if (ms.length) out.masters = ms;
+      else delete out.masters;
+      return out;
+    }, history);
+  const sameDeck = (a: DeckSetup, b: DeckSetup) => JSON.stringify(a) === JSON.stringify(b);
+  /** 母片的復原；回傳有沒有做 */
+  const masterUndo = (redo = false) => {
+    const h = mhist.current;
+    const step = (redo ? h.redo : h.undo).pop();
+    if (!step) return false;
+    if (!sameDeck(deckRef.current, redo ? step.before : step.after)) {
+      h.undo = [];
+      h.redo = [];
+      setToast({ text: "Can't undo: the master was edited since", key: Date.now() });
+      return true;
+    }
+    (redo ? h.undo : h.redo).push(step);
+    deckRef.current = redo ? step.after : step.before;
+    props.onDeck(deckRef.current);
+    setBoxSel([]);
+    return true;
+  };
+  const [masterId, setMasterId] = useState<string | null>(null);
+  const editing = view === "masters" ? (masters.find((m) => m.id === masterId) ?? masters[0]) : undefined;
+  useEffect(() => setBoxSel([]), [current, view, editing?.id]);
+  /** 進入母片編輯：選目前這張投影片用的母片；還沒有母片就先做一個空白的預設母片 */
+  const editMasters = () => {
+    if (!masters.length) {
+      const m = presetMaster("blank", "Main");
+      setMasters(() => [m], false);
+      setMasterId(m.id);
+    } else setMasterId(masterOf(masters, meta)?.id ?? null);
+    setView("masters");
+  };
+  const addMaster = (preset: MasterPreset) => {
+    const label = MASTER_PRESETS.find((p) => p.id === preset)?.label ?? "Master";
+    const m = presetMaster(preset, uniqueName(deckRef.current.masters ?? [], preset === "blank" ? "Master" : label));
+    setMasters((ms) => insertMaster(ms, m, editing?.id));
+    setMasterId(m.id);
+  };
+  const dupMaster = (id: string) => {
+    const r = duplicateMaster(deckRef.current.masters ?? [], id);
+    if (!r.copy) return;
+    setMasters(() => r.masters);
+    setMasterId(r.copy.id);
+  };
+  const delMaster = (id: string) => {
+    const ms = deckRef.current.masters ?? [];
+    const at = ms.findIndex((m) => m.id === id);
+    const used = masterUsage(ms, anim, slides.length, id);
+    setMasters((list) => removeMaster(list, id));
+    const left = ms.filter((m) => m.id !== id);
+    setMasterId(left[Math.min(at, left.length - 1)]?.id ?? null);
+    if (!left.length) setView("navigator");
+    setToast({
+      text: used ? `Deleted the master. ${used === 1 ? "1 slide now uses" : `${used} slides now use`} the default master` : "Deleted the master",
+      key: Date.now(),
+    });
+  };
+  /** 改正在編輯的母片的物件（畫布、檢閱器用跟投影片一樣的介面） */
+  const editMasterMeta = (fn: (m: SlideAnim) => SlideAnim, history = true) => {
+    const id = editing?.id;
+    if (!id) return;
+    setMasters((ms) => updateMaster(ms, id, (m) => metaIntoMaster(m, fn(masterAsMeta(m)))), history);
+  };
+  const patchMaster = (p: Partial<SlideMaster>) => {
+    const id = editing?.id;
+    if (id) setMasters((ms) => updateMaster(ms, id, (m) => ({ ...m, ...p })));
+  };
+  const masterMeta = editing ? masterAsMeta(editing) : null;
+  /** 工具列加物件時的對象：編輯母片時是母片 */
+  const activeMeta = masterMeta ?? meta;
   /** 改這張投影片的物件；history 是記不記結構操作的復原 */
   const editMeta = (fn: (m: SlideAnim) => SlideAnim, history = true) => {
     const apply = (d: Deck): Deck => ({ ...d, anim: setMeta(d.anim, current, fn) });
@@ -374,9 +504,15 @@ export function SlideDeck(props: {
     else onEdit(apply);
   };
   const addBox = (b: SlideBox) => {
-    editMeta((m) => ({ ...m, boxes: [...(m.boxes ?? []), b] }));
+    (editing ? editMasterMeta : editMeta)((m) => ({ ...m, boxes: [...(m.boxes ?? []), b] }));
     setBoxSel([b.id]);
     if (b.kind === "text") setAutoEdit(b.id);
+  };
+  /** 一次加好幾個物件（插入好幾張圖片），一起選取、一次復原 */
+  const addBoxes = (bs: SlideBox[]) => {
+    if (!bs.length) return;
+    (editing ? editMasterMeta : editMeta)((m) => ({ ...m, boxes: [...(m.boxes ?? []), ...bs] }));
+    setBoxSel(bs.map((b) => b.id));
   };
   const [autoEdit, setAutoEdit] = useState<string | null>(null);
   /** 刪掉主文字方塊（跟 PowerPoint 刪掉版面配置的文字框一樣）：內容清空、藏起來；objs 是一起刪的物件 */
@@ -422,8 +558,8 @@ export function SlideDeck(props: {
     );
 
   // 投影片上的 Ctrl＋Z／Y：沒在編輯文字、最後一次改動是物件或投影片的操作，就復原它（在編輯器自己的復原之前）
-  const undoRef = useRef({ undo, content: props.content, anim });
-  undoRef.current = { undo, content: props.content, anim };
+  const undoRef = useRef({ undo, content: props.content, anim, masters: view === "masters", masterUndo });
+  undoRef.current = { undo, content: props.content, anim, masters: view === "masters", masterUndo };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -434,6 +570,12 @@ export function SlideDeck(props: {
       const s = editorBus.status();
       if (s.root && scope.current?.contains(s.root) && (s.editing || s.selected)) return;
       const redo = k === "y" || e.shiftKey;
+      if (undoRef.current.masters) {
+        if (!undoRef.current.masterUndo(redo)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       const h = history.current;
       const step = (redo ? h.redo : h.undo)[(redo ? h.redo : h.undo).length - 1];
       const now: Deck = { content: undoRef.current.content, anim: undoRef.current.anim };
@@ -466,29 +608,58 @@ export function SlideDeck(props: {
             <>
               <MenuItem label="Navigator" current={view === "navigator"} onClick={() => (close(), setView("navigator"))} />
               <MenuItem label="Light Table" current={view === "table"} onClick={() => (close(), setView("table"))} />
+              <div className="popover-sep" />
+              <MenuItem label="Edit Slide Masters" current={view === "masters"} onClick={() => (close(), editMasters())} />
             </>
           )}
         </TMenu>
-        <TBtn icon={<PlusIcon />} label="Add Slide" title="Add a slide after this one (Ctrl+M)" onClick={() => add(current + 1)} />
-        <TBtn icon={<PlayIcon />} label="Play" title="Play from this slide" accent onClick={() => props.onPresent(current)} />
+        {editing ? (
+          <>
+            <TMenu icon={<PlusIcon />} label="New Master" title="Add a slide master">
+              {(close) =>
+                MASTER_PRESETS.map((p) => <MenuItem key={p.id} icon={<MasterGlyph preset={p.id} />} label={p.label} onClick={() => (close(), addMaster(p.id))} />)
+              }
+            </TMenu>
+            <TBtn icon={<CloseIcon />} label="Done" title="Stop editing slide masters" accent onClick={() => setView("navigator")} />
+          </>
+        ) : (
+          <>
+            <TBtn icon={<PlusIcon />} label="Add Slide" title="Add a slide after this one (Ctrl+M)" onClick={() => add(current + 1)} />
+            <TBtn icon={<PlayIcon />} label="Play" title="Play from this slide" accent onClick={() => props.onPresent(current)} />
+          </>
+        )}
         <span className="dc-sep" />
-        <TBtn icon={<TextIcon />} label="Text" title="Add a text box" onClick={() => addBox(newTextBox(meta.boxes ?? []))} />
-        <TMenu icon={<ShapesIcon />} label="Shape" title="Add a shape">
+        <TBtn icon={<TextIcon />} label="Text" title={editing ? "Add a text box to the master" : "Add a text box"} onClick={() => addBox(newTextBox(activeMeta.boxes ?? []))} />
+        <TMenu icon={<ShapesIcon />} label="Shape" title={editing ? "Add a shape to the master" : "Add a shape"}>
           {(close) =>
             SHAPES.map((sh) => (
-              <MenuItem key={sh.id} icon={<ShapeGlyph shape={sh.id} />} label={sh.label} onClick={() => (close(), addBox(newShapeBox(meta.boxes ?? [], sh.id)))} />
+              <MenuItem key={sh.id} icon={<ShapeGlyph shape={sh.id} />} label={sh.label} onClick={() => (close(), addBox(newShapeBox(activeMeta.boxes ?? [], sh.id)))} />
             ))
           }
         </TMenu>
-        <TMenu icon={<ImageIcon />} label="Media" title="Add a picture or a video">
+        <TMenu icon={<ImageIcon />} label="Media" title={editing ? "Add a picture to the master (a logo, a background)" : "Add a picture or a video"}>
           {(close) => (
             <>
-              <MenuItem icon={<ImageIcon />} label="Photo or Image…" onClick={() => (close(), pickImageBox(meta.boxes ?? [], addBox))} />
-              <MenuItem icon={<VideoIcon />} label="Video in Text…" onClick={() => (close(), run((c) => c.insert("video")))} />
+              <ImageMenuItems close={close} onImage={(tab) => void pickImageBoxes(tab, activeMeta.boxes ?? [], addBoxes)} />
+              {!editing && (
+                <>
+                  <div className="popover-sep" />
+                  <MenuItem icon={<VideoIcon />} label="Video in Text…" onClick={() => (close(), run((c) => c.insert("video")))} />
+                </>
+              )}
             </>
           )}
         </TMenu>
-        <TBtn icon={<TableIcon />} label="Table" title="Insert a table in the text you're editing" onClick={() => run((c) => c.insert("table"))} />
+        {!editing && (
+          <>
+        <TMenu icon={<TableIcon />} label="Table" title="Insert a table in the text you're editing, or a table or chart from Excel">
+          {(close) => (
+            <>
+              <MenuItem icon={<TableIcon />} label="New Table" onClick={() => (close(), run((c) => c.insert("table")))} />
+              <MenuItem icon={<ChartIcon />} label="From Excel…" onClick={() => (close(), run((c) => c.insertSheet()))} />
+            </>
+          )}
+        </TMenu>
         <TBtn
           icon={<ImportIcon />}
           label={importing ? "Importing…" : "Import"}
@@ -507,6 +678,8 @@ export function SlideDeck(props: {
             if (f) void importFile(f);
           }}
         />
+          </>
+        )}
         <span className="dc-gap" />
         <TBtn icon={<PanelRightIcon />} label="Format" title="Show or hide the Format inspector" on={panel === "format"} onClick={() => setPanel(panel === "format" ? null : "format")} />
         <TBtn icon={<AnimIcon />} label="Animate" title="Show or hide the Animate inspector" on={panel === "animate"} onClick={() => setPanel(panel === "animate" ? null : "animate")} />
@@ -524,6 +697,51 @@ export function SlideDeck(props: {
             }}
             onPick={onCurrent}
           />
+        )}
+        {editing && masterMeta && (
+          <>
+            <MasterStrip
+              masters={masters}
+              current={editing.id}
+              usage={(id) => masterUsage(masters, anim, slides.length, id)}
+              onPick={setMasterId}
+              onDuplicate={dupMaster}
+              onDelete={delMaster}
+              onMove={(id, before) => setMasters((ms) => moveMaster(ms, id, before))}
+              onAdd={() => addMaster("blank")}
+            />
+            <div className="deck-stage" ref={stage}>
+              <div className="deck-master-bar">
+                Editing slide master <b>{editing.name}</b>. What you add here appears behind the content of every slide that uses it.
+              </div>
+              <div className="deck-canvas-wrap" style={{ width }}>
+                <SlideCanvas
+                  key={`m-${editing.id}`}
+                  source=""
+                  meta={masterMeta}
+                  layout={editing}
+                  width={width}
+                  onText={() => {}}
+                  onMeta={editMasterMeta}
+                  sel={boxSel}
+                  onSel={setBoxSel}
+                  autoEdit={autoEdit}
+                  onAutoEdited={() => setAutoEdit(null)}
+                  onDeleteBody={(objs) => editMasterMeta((m) => ({ ...m, boxes: removeBoxes(m.boxes ?? [], objs) }))}
+                  num={1}
+                />
+              </div>
+              <div className="dc-count" role="status">
+                Master {masters.indexOf(editing) + 1} of {masters.length}
+                {` · used by ${masterUsage(masters, anim, slides.length, editing.id)} of ${slides.length} slides`}
+                {toast && (
+                  <span className="deck-toast" key={toast.key}>
+                    {toast.text}
+                  </span>
+                )}
+              </div>
+            </div>
+          </>
         )}
         {view === "navigator" && (
         <>
@@ -619,8 +837,27 @@ export function SlideDeck(props: {
                 <TextFormat st={st} run={run} styles={SLIDE_STYLES} lib={props.styles} hint={TEXT_HINT} />
               ) : t === "layout" ? (
                 <LayoutFormat st={st} run={run} hint={TEXT_HINT} />
+              ) : editing && masterMeta ? (
+                t === "arrange" ? (
+                  <BoxFormat part="arrange" meta={masterMeta} sel={boxSel} onMeta={(fn) => editMasterMeta(fn)} onSel={setBoxSel} onDeleteBody={() => {}} layout />
+                ) : (
+                  <>
+                    <BoxFormat part="style" meta={masterMeta} sel={boxSel} onMeta={(fn) => editMasterMeta(fn)} onSel={setBoxSel} onDeleteBody={() => {}} layout />
+                    {!boxSel.length && (
+                      <MasterFormat
+                        master={editing}
+                        index={masters.indexOf(editing)}
+                        themeBg={themeOf(props.deck).c.bg}
+                        onPatch={patchMaster}
+                        onDefault={() => setMasters((ms) => makeDefault(ms, editing.id))}
+                        onDuplicate={() => dupMaster(editing.id)}
+                        onDelete={() => delMaster(editing.id)}
+                      />
+                    )}
+                  </>
+                )
               ) : t === "arrange" ? (
-                <BoxFormat part="arrange" meta={meta} sel={boxSel} onMeta={(fn) => editMeta(fn)} onSel={setBoxSel} onDeleteBody={deleteBody} />
+                <BoxFormat part="arrange" meta={meta} sel={boxSel} onMeta={(fn) => editMeta(fn)} onSel={setBoxSel} onDeleteBody={deleteBody} base={masterOf(masters, meta)?.main ?? MAIN_FRAME} />
               ) : (
           <>
             {meta.noBody && !boxSel.length && !(slides[current] ?? "").trim() && (
@@ -630,7 +867,29 @@ export function SlideDeck(props: {
                 </button>
               </Section>
             )}
-            <BoxFormat part="style" meta={meta} sel={boxSel} onMeta={(fn) => editMeta(fn)} onSel={setBoxSel} onDeleteBody={deleteBody} />
+            <BoxFormat part="style" meta={meta} sel={boxSel} onMeta={(fn) => editMeta(fn)} onSel={setBoxSel} onDeleteBody={deleteBody} base={masterOf(masters, meta)?.main ?? MAIN_FRAME} />
+            {!boxSel.length && (
+              <Section title={many ? `Slide Master · ${group.length} slides` : "Slide Master"}>
+                {masters.length > 0 && (
+                  <div className="deck-layouts">
+                    {masters.map((m) => (
+                      <button
+                        key={m.id}
+                        className={`deck-layout${masterOf(masters, cur)?.id === m.id ? " on" : ""}`}
+                        title={`Use the “${m.name}” master`}
+                        onClick={() => setSlideMeta({ master: m.id })}
+                      >
+                        <SlideView source="" meta={masterAsMeta(m)} layout={m} width={98} />
+                        <span>{m.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button className="dp-btn" onClick={editMasters} title="Design the backgrounds, logos and layouts that slides share">
+                  Edit Slide Masters…
+                </button>
+              </Section>
+            )}
             {!boxSel.length && (
               <Section title={many ? `Slide Background · ${group.length} slides` : "Slide Background"}>
                 <div className="deck-bgs">
@@ -639,6 +898,7 @@ export function SlideDeck(props: {
                     <button key={b.id} className={`deck-bg${cur.bg === b.id ? " on" : ""}`} title={b.label} style={{ background: b.id }} onClick={() => setSlideMeta({ bg: b.id })} />
                   ))}
                 </div>
+                <CustomColor value={cur.bg && !SLIDE_BGS.some((b) => b.id === cur.bg) ? cur.bg : null} onPick={(bg) => setSlideMeta({ bg })} />
                 <label className="dc-check">
                   <input type="checkbox" checked={!!cur.skip} onChange={(e) => setSlideMeta({ skip: e.target.checked ? true : undefined })} /> Skip slide when presenting
                 </label>
@@ -743,6 +1003,176 @@ export function SlideDeck(props: {
   );
 }
 
+/** 檢閱器：正在編輯的母片（名稱、背景、頁碼頁尾、預設、複製、刪除） */
+function MasterFormat(props: {
+  master: SlideMaster;
+  index: number;
+  themeBg: string;
+  onPatch: (p: Partial<SlideMaster>) => void;
+  onDefault: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}) {
+  const { master: m } = props;
+  return (
+    <>
+      <Section title="Slide Master">
+        <input
+          className="dc-input"
+          key={m.id + m.name}
+          defaultValue={m.name}
+          aria-label="Master name"
+          placeholder="Master name"
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+          onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== m.name && props.onPatch({ name: e.target.value.trim().slice(0, 80) })}
+        />
+        <label className="dc-check">
+          <input type="checkbox" checked={!m.noFoot} onChange={(e) => props.onPatch({ noFoot: e.target.checked ? undefined : true })} /> Show slide numbers & footer
+        </label>
+        <p className="dc-note">Turn slide numbers and the footer on in the Document inspector.</p>
+      </Section>
+      <Section title="Background">
+        <div className="deck-bgs">
+          <button className={`deck-bg theme${!m.bg ? " on" : ""}`} title="Theme background" style={{ background: props.themeBg }} onClick={() => props.onPatch({ bg: undefined })} />
+          {SLIDE_BGS.map((b) => (
+            <button key={b.id} className={`deck-bg${m.bg === b.id ? " on" : ""}`} title={b.label} style={{ background: b.id }} onClick={() => props.onPatch({ bg: b.id })} />
+          ))}
+        </div>
+        <CustomColor value={m.bg && !SLIDE_BGS.some((b) => b.id === m.bg) ? m.bg : null} onPick={(bg) => props.onPatch({ bg })} />
+        <p className="dc-note">A slide’s own background (Format ▸ Style) wins over the master’s.</p>
+      </Section>
+      <Section>
+        <div className="dc-btns">
+          <button className="dp-btn" disabled={props.index === 0} onClick={props.onDefault} title="Slides that haven't picked a master use the default one">
+            {props.index === 0 ? "Default Master" : "Make Default"}
+          </button>
+          <button className="dp-btn" onClick={props.onDuplicate}>
+            <CopyIcon /> Duplicate
+          </button>
+        </div>
+        <button className="dp-btn danger" style={{ marginTop: 8 }} onClick={props.onDelete}>
+          <TrashIcon /> Delete Master
+        </button>
+      </Section>
+    </>
+  );
+}
+
+/** 母片清單（編輯母片時左邊）：點了切換、拖曳排序（第一個是預設）、複製、刪除 */
+function MasterStrip(props: {
+  masters: SlideMaster[];
+  current: string;
+  usage: (id: string) => number;
+  onPick: (id: string) => void;
+  onDuplicate: (id: string) => void;
+  onDelete: (id: string) => void;
+  onMove: (id: string, before: number) => void;
+  onAdd: () => void;
+}) {
+  const list = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<{ id: string; over: number } | null>(null);
+  const n = props.masters.length;
+  const down = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0) return;
+    const y0 = e.clientY;
+    let over = -1;
+    let started = false;
+    const move = (ev: PointerEvent) => {
+      if (!started && Math.abs(ev.clientY - y0) < 5) return;
+      started = true;
+      const rows = [...(list.current?.querySelectorAll<HTMLElement>(".deck-thumb") ?? [])];
+      over = rows.length;
+      for (let k = 0; k < rows.length; k++) {
+        const r = rows[k].getBoundingClientRect();
+        if (ev.clientY < r.top + r.height / 2) {
+          over = k;
+          break;
+        }
+      }
+      setDrag({ id, over });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setDrag(null);
+      if (!started) props.onPick(id);
+      else if (over >= 0) props.onMove(id, over);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const key = (e: React.KeyboardEvent, i: number) => {
+    const to = e.key === "ArrowDown" ? i + 1 : e.key === "ArrowUp" ? i - 1 : -1;
+    if (to >= 0 && to < n) {
+      props.onPick(props.masters[to].id);
+      requestAnimationFrame(() => list.current?.querySelectorAll<HTMLElement>(".deck-thumb")[to]?.focus());
+    } else if (e.key === "Delete" || e.key === "Backspace") props.onDelete(props.masters[i].id);
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") props.onDuplicate(props.masters[i].id);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  return (
+    <aside className={`deck-strip deck-master-strip no-box${drag ? " dragging" : ""}`} ref={list} role="listbox" aria-label="Slide masters">
+      {props.masters.map((m, i) => {
+        const used = props.usage(m.id);
+        return (
+          <div
+            key={m.id}
+            className={`deck-thumb${m.id === props.current ? " on sel" : ""}${drag?.id === m.id ? " moving" : ""}${drag && drag.over === i ? " drop-before" : ""}${
+              drag && drag.over === n && i === n - 1 ? " drop-after" : ""
+            }`}
+            role="option"
+            aria-selected={m.id === props.current}
+            tabIndex={m.id === props.current ? 0 : -1}
+            aria-label={`Master ${m.name}`}
+            onPointerDown={(e) => down(e, m.id)}
+            onKeyDown={(e) => key(e, i)}
+          >
+            <span className="deck-num">{i + 1}</span>
+            <div className="deck-master-tile">
+              <SlideView source="" meta={masterAsMeta(m)} layout={m} width={168} num={1} />
+              <span className="deck-master-name" title={`${m.name}${i === 0 ? " (default)" : ""} · ${used} ${used === 1 ? "slide" : "slides"}`}>
+                <span>{m.name}</span>
+                {i === 0 && <em>Default</em>}
+                <small>{used}</small>
+              </span>
+            </div>
+            <span className="deck-thumb-tools" onPointerDown={(e) => e.stopPropagation()}>
+              <button title="Duplicate (Ctrl+D)" tabIndex={-1} onClick={() => props.onDuplicate(m.id)}>
+                <CopyIcon />
+              </button>
+              <button title="Delete (Delete)" tabIndex={-1} onClick={() => props.onDelete(m.id)}>
+                <TrashIcon />
+              </button>
+            </span>
+          </div>
+        );
+      })}
+      <button className="deck-add" onClick={props.onAdd} title="Add a blank master">
+        <PlusIcon /> New master
+      </button>
+    </aside>
+  );
+}
+
+/** New Master 選單的小圖 */
+function MasterGlyph(props: { preset: MasterPreset }) {
+  const p = props.preset;
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+      <rect x="1.5" y="3.5" width="13" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      {p === "header" && <rect x="1.5" y="3.5" width="13" height="2" fill="currentColor" />}
+      {p === "side" && <rect x="1.5" y="3.5" width="4" height="9" fill="currentColor" opacity=".5" />}
+      {p === "band" && <rect x="1.5" y="10.5" width="13" height="2" fill="currentColor" />}
+      {p === "frame" && <rect x="3" y="5" width="10" height="6" fill="none" stroke="currentColor" strokeWidth="0.9" />}
+    </svg>
+  );
+}
+
 /** Light Table（像 Keynote 的看片台、PowerPoint 的投影片瀏覽）：全部投影片排成格子；點一下選取、連按兩下打開 */
 function LightTable(props: { slides: string[]; anim: SlideAnim[]; current: number; onOpen: (i: number) => void; onPick: (i: number) => void }) {
   return (
@@ -775,17 +1205,6 @@ const SLIDE_STYLES: ParaStyle[] = [
   { type: "h3", label: "Subheading", cls: "s-h3" },
   { type: "paragraph", label: "Body", cls: "s-body" },
 ];
-
-/** 形狀選單的小圖 */
-function ShapeGlyph(props: { shape: ShapeKind }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
-      <g transform="translate(2 3)">
-        <path d={shapePath(props.shape, 12, 10)} fill="none" stroke="currentColor" strokeWidth="1.3" />
-      </g>
-    </svg>
-  );
-}
 
 /** 轉場、逐項顯示的小圖（功能區的效果庫） */
 function FxGlyph(props: { fx: string }) {

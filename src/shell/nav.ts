@@ -54,6 +54,8 @@ export function renameFileTargets(list: NavTarget[], from: string, to: string): 
 
 /** Desk 上次停在哪裡（首頁或某個檔案的白板／Dock 文件）：再按 Desk 時直接回到那裡。 */
 export const DESK_LAST_KEY = "banyan.deskLast";
+/** Drawer 上次看的那一頁（文獻庫或檔案庫） */
+export const DRAWER_TAB_KEY = "banyan.drawerTab";
 
 /** 從收藏或最近清單拿掉一個目標（刪除文件時用）。 */
 export function forgetTarget(list: NavTarget[], t: NavTarget): NavTarget[] {

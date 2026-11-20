@@ -1,3 +1,4 @@
+import { CustomColor } from "../editor/ColorPicker";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1914,12 +1915,15 @@ function Stepper(props: { label: string; value: number; min?: number; max: numbe
 
 function Swatches(props: { value?: string; colors: string[]; onPick: (c: string | undefined) => void }) {
   return (
+    <>
     <div className="sv-swatches">
       <button className={`none${!props.value ? " on" : ""}`} title="None" onClick={() => props.onPick(undefined)} />
       {props.colors.map((c) => (
         <button key={c} className={props.value === c ? "on" : ""} style={{ background: c }} title={c} onClick={() => props.onPick(c)} />
       ))}
     </div>
+    <CustomColor value={props.value && !props.colors.includes(props.value) ? props.value : null} onPick={props.onPick} />
+    </>
   );
 }
 

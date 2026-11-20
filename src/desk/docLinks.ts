@@ -156,8 +156,30 @@ export function setDocLinks(list: DocLink[]): void {
 
 export const getDocLinks = () => links;
 
-/** `[[…]]` 裡的名稱 → Dock 文件（不認得就是 undefined）。 */
-export const docLinkOf = (name: string) => byName.get(linkKey(name));
+/** `[[…]]` 裡的名稱 → Dock 文件（不認得就是 undefined）；指向 Excel 表格、圖表的 `檔案/標題#^id` 也算那份文件。 */
+export const docLinkOf = (name: string) => byName.get(linkKey(objectRef(name)?.doc ?? name));
+
+// ─── Excel 的表格、圖表：`檔案/標題#^id`（嵌入 `![[…]]` 顯示那個表格或圖表） ───
+// 後面可以加 `|選項`（像 Obsidian 嵌入圖片的 `|100`）：這個位置自己的樣子，例如 `#^t1|green banded`
+
+const OBJECT = /^(.+?)#\^([A-Za-z0-9]+)(?:\|([^|]*))?$/;
+
+/** 名稱是不是指向文件裡的一個物件（Excel 的表格或圖表）：`檔案/標題#^id|選項` → 文件名稱、物件 id、選項文字。 */
+export function objectRef(name: string): { doc: string; id: string; opts: string } | null {
+  const m = OBJECT.exec(name.trim());
+  return m ? { doc: m[1].trim(), id: m[2], opts: (m[3] ?? "").trim() } : null;
+}
+
+/** 嵌入 Excel 表格或圖表的 Markdown：`![[檔案/標題#^id]]` 或 `![[檔案/標題#^id|選項]]`（照編輯器的方式跳脫） */
+export function objectEmbed(file: string, title: string, id: string, opts = ""): string {
+  return objectEmbedOf(docLinkName(file, title), id, opts);
+}
+
+/** 同上，文件名稱已經是 `檔案/標題` */
+export function objectEmbedOf(doc: string, id: string, opts = ""): string {
+  const o = opts.trim();
+  return `![[${doc.replace(/[\\`*_<]/g, "\\$&")}#^${id}${o ? `|${o}` : ""}]]`;
+}
 
 /**
  * 改寫原始碼裡的 Dock 文件連結 `[[檔案/標題]]`：to(檔案, 標題) 回傳新的名稱就換掉，null 不動。
@@ -177,13 +199,17 @@ export function rewriteDocLinks(source: string, to: (file: string, title: string
     }
     if (fence || !line.includes("[[")) return line;
     return line.replace(/\[\[((?:\\.|[^[\]\n\\])+?)\]\]/g, (all, raw: string) => {
-      const name = raw.replace(/\\([!-/:-@[-`{-~])/g, "$1").trim();
+      const full = raw.replace(/\\([!-/:-@[-`{-~])/g, "$1").trim();
+      // 指向 Excel 表格、圖表的 `檔案/標題#^id|選項`：只改文件名稱，後面照舊
+      const obj = objectRef(full);
+      const name = obj ? obj.doc : full;
+      const tail = obj ? `#^${obj.id}${obj.opts ? `|${obj.opts}` : ""}` : "";
       const cut = name.lastIndexOf("/");
       if (cut < 0) return all;
       const next = to(name.slice(0, cut), name.slice(cut + 1));
       if (next === null || next === name) return all;
       changed = true;
-      return `[[${esc(next)}]]`;
+      return `[[${esc(next)}${tail}]]`;
     });
   });
   return changed ? lines.join("\n") : source;

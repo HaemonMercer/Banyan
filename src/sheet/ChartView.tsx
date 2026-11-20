@@ -61,7 +61,7 @@ export function ChartView(props: {
   );
 }
 
-function Plot(props: { data: ChartData; type: Chart["type"]; w: number; h: number; legend: boolean }) {
+export function Plot(props: { data: ChartData; type: Chart["type"]; w: number; h: number; legend: boolean }) {
   const { data, type, w } = props;
   const legendH = props.legend ? 24 : 0;
   const h = Math.max(60, props.h - legendH);
