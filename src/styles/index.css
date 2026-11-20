@@ -1,4 +1,0 @@
-/* Global stylesheet entry: imported once from main.tsx. Order matters. */
-@import "./tokens.css";
-@import "./base.css";
-@import "./components.css";

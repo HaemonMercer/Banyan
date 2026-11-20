@@ -1,0 +1,615 @@
+/* ─── Draw（參考 draw.io）：介面沿用白板（.board、工具列、樣式列、右鍵選單），這裡只有圖表自己的部分 ─── */
+
+:root {
+  --draw-fill: var(--board-card);
+  --draw-line: rgba(47, 46, 43, 0.62);
+  --draw-edge: var(--board-edge);
+}
+:root[data-theme="dark"] {
+  --draw-line: rgba(255, 255, 255, 0.55);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --draw-line: rgba(255, 255, 255, 0.55);
+    }
+}
+
+.kind-draw .dp-body {
+  display: flex;
+  overflow: hidden;
+}
+.dw-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* 圖形 */
+.dw-shape-hit {
+  fill: transparent;
+}
+.dw-shape path {
+  stroke-linejoin: round;
+  transition: fill 0.12s, stroke 0.12s;
+}
+.dw-shape.shadow {
+  filter: drop-shadow(0 1px 2px rgba(15, 15, 15, 0.06)) drop-shadow(0 6px 16px rgba(15, 15, 15, 0.08));
+}
+.dw-text-empty {
+  fill: none;
+  stroke: var(--ed-faint);
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 連線 */
+.dw-edge-hit {
+  fill: none;
+  stroke: transparent;
+  cursor: pointer;
+}
+.dw-edge-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.dw-edge-glow {
+  fill: none;
+  stroke: var(--ed-accent-soft);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+/* 選取：和白板的卡片一樣（藍框＋淡藍光暈） */
+.dw-sel rect {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.dw-sel-ring {
+  stroke: var(--ed-accent-ring);
+  stroke-width: 2;
+}
+.dw-sel-line {
+  stroke: var(--ed-accent);
+  stroke-width: 1;
+}
+.dw-side-handle {
+  fill: transparent;
+}
+.dw-handle {
+  fill: var(--board-card);
+  stroke: var(--ed-accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 藍色圓點（同白板卡片的 .bc-dot） */
+.dw-dot {
+  fill: var(--board-card);
+  stroke: var(--ed-accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  transition: transform 0.12s;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.dw-conn {
+  cursor: crosshair;
+}
+.dw-conn-hit {
+  fill: transparent;
+}
+.dw-conn:hover .dw-dot {
+  transform: scale(1.3);
+}
+.dw-dot.endpoint {
+  cursor: move;
+}
+.dw-dot.port {
+  pointer-events: none;
+}
+.dw-dot.port.on {
+  fill: var(--ed-accent);
+}
+.dw-target {
+  fill: none;
+  stroke: var(--ed-accent);
+  stroke-width: 4;
+  stroke-opacity: 0.25;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.dw-link {
+  fill: none;
+  stroke: var(--ed-accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* 文字與標籤（HTML，跟圖形一起縮放） */
+.dw-labels {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.dw-text {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dw-text.v-top {
+  align-items: flex-start;
+}
+.dw-text.v-bottom {
+  align-items: flex-end;
+}
+.dw-text-in,
+.dw-edit {
+  width: 100%;
+}
+.dw-edit {
+  min-height: 1.4em;
+  outline: none;
+  pointer-events: auto;
+  cursor: text;
+  user-select: text;
+  caret-color: var(--ed-accent);
+}
+.dw-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--board-bg);
+  color: var(--ed-text-soft);
+  line-height: 1.4;
+  white-space: pre;
+  text-align: center;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.dw-label.on {
+  color: var(--ed-accent);
+}
+.dw-label.editing {
+  background: var(--board-card);
+  box-shadow: 0 0 0 1px var(--ed-accent);
+}
+.dw-label .dw-edit {
+  min-width: 24px;
+  white-space: pre;
+}
+
+.dw-stage .board-toolbar button.on {
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent);
+}
+
+/* 圖形選單：兩欄 */
+.dw-shape-menu {
+  width: 340px;
+}
+.dw-shape-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px 4px;
+}
+.dw-shape-grid button {
+  gap: 8px;
+  cursor: pointer;
+}
+.dw-shape-grid .glyph {
+  color: var(--ed-text-soft);
+}
+.dw-menu {
+  width: 250px;
+}
+.dw-menu .hint {
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+
+/* 下方樣式列的 Draw 部分 */
+.dwb-kinds {
+  display: grid;
+  grid-template-columns: repeat(4, 84px);
+  gap: 6px;
+}
+.dwb-kinds .mmb-tile span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 78px;
+}
+.dwb-colors {
+  grid-template-columns: repeat(6, 24px);
+}
+.dwb-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.dwb-size {
+  min-width: 18px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.mm-bar .mmb-btn.italic {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  font-style: italic;
+}
+.dwb-ring {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border: 3px solid var(--draw-line);
+  border-radius: 50%;
+}
+.dwb-ring.none {
+  border: 1px solid var(--ed-faint);
+  background: linear-gradient(135deg, transparent 45%, var(--tc-red) 45% 55%, transparent 55%);
+}
+.dw-bar .mmb-pop {
+  white-space: nowrap;
+}
+
+.dw-ghost {
+  position: fixed;
+  z-index: 1000;
+  transform: translate(-50%, -50%);
+  overflow: visible;
+  opacity: 0.8;
+  pointer-events: none;
+}
+.dw-ghost path {
+  fill: var(--ed-accent-soft);
+  stroke: var(--ed-accent);
+  stroke-width: 1.5;
+}
+
+/* Dock 標題列的匯出選單 */
+.dp-export {
+  position: relative;
+}
+.dp-export-menu {
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 210px;
+  padding: 6px;
+}
+.dp-export-menu .hint {
+  margin-left: auto;
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+
+/* ─── 網頁設計（參考 Figma） ─── */
+
+/* 畫板裡一律是淺色主題的顏色（像一張紙） */
+.dw-light {
+  --draw-fill: #ffffff;
+  --draw-line: rgba(47, 46, 43, 0.62);
+  --draw-edge: rgba(47, 46, 43, 0.42);
+  --ed-text: #2f2e2b;
+  --tc-gray: #787774;
+  --bg-gray: #f1f1ef;
+  --tc-brown: #9f6b53;
+  --bg-brown: #f4eeee;
+  --tc-orange: #d9730d;
+  --bg-orange: #fbecdd;
+  --tc-yellow: #cb912f;
+  --bg-yellow: #fbf3db;
+  --tc-green: #448361;
+  --bg-green: #edf3ec;
+  --tc-blue: #337ea9;
+  --bg-blue: #e7f3f8;
+  --tc-purple: #9065b0;
+  --bg-purple: #f6f3f9;
+  --tc-pink: #c14c8a;
+  --bg-pink: #faf1f5;
+  --tc-red: #d44c47;
+  --bg-red: #fdebec;
+}
+.dw-frame-title {
+  position: absolute;
+  transform: translateY(calc(-100% - 0.4em));
+  overflow: hidden;
+  color: var(--ed-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+  cursor: default;
+}
+.dw-frame-title:hover,
+.dw-frame-title.on {
+  color: var(--ed-accent);
+}
+.dw-frame-title .dw-edit {
+  min-width: 4em;
+  color: var(--ed-text);
+}
+.dw-frame-clip {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dw-shape.locked {
+  pointer-events: none;
+}
+.dw-img-empty {
+  fill: #f1f1ef;
+}
+.dw-size {
+  fill: var(--ed-accent);
+  text-anchor: middle;
+  dominant-baseline: hanging;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.dw-stage.dw-tool,
+.dw-stage.dw-tool * {
+  cursor: crosshair !important;
+}
+.dw-draft {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--ed-accent);
+  background: var(--ed-accent-soft);
+  pointer-events: none;
+}
+
+/* 圖層：工具列 Layers 打開的浮動清單 */
+.dw-layers {
+  left: 12px;
+  top: 56px;
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  max-height: calc(100% - 140px);
+  padding: 6px;
+}
+.dw-layers-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 6px;
+  color: var(--ed-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.dw-layers-count {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--ed-hover);
+  font-weight: 500;
+}
+.dw-layers-list {
+  overflow-y: auto;
+}
+.dw-layers-empty {
+  margin: 6px 8px 8px;
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+.dw-layer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding-right: 4px;
+  border-radius: 6px;
+  color: var(--ed-text-soft);
+  font-size: 13px;
+  cursor: default;
+  user-select: none;
+}
+.dw-layer:hover {
+  background: var(--ed-hover);
+}
+.dw-layer.on {
+  background: var(--ed-accent-soft);
+  color: var(--ed-text);
+}
+.dw-layer.is-hidden .dw-layer-name,
+.dw-layer.is-hidden .dw-layer-icon {
+  opacity: 0.45;
+}
+.dw-layer.moving {
+  opacity: 0.5;
+}
+.dw-layer.drop-above {
+  box-shadow: inset 0 2px 0 var(--ed-accent);
+}
+.dw-layer.drop-below {
+  box-shadow: inset 0 -2px 0 var(--ed-accent);
+}
+.dw-layer.drop-into {
+  box-shadow: inset 0 0 0 1.5px var(--ed-accent);
+}
+.dw-layer-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  color: var(--ed-muted);
+}
+.dw-layer-icon svg {
+  max-width: 18px;
+  max-height: 14px;
+}
+.dw-layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dw-layer-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--ed-hover);
+  color: var(--ed-muted);
+  font-size: 11px;
+}
+.dw-layer-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--ed-accent);
+  border-radius: 5px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  outline: none;
+}
+.dw-layers .dw-layer-btn {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 5px;
+  color: var(--ed-muted);
+  opacity: 0;
+}
+.dw-layer:hover .dw-layer-btn,
+.dw-layers .dw-layer-btn.keep {
+  opacity: 1;
+}
+.dw-layers .dw-layer-btn:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.dw-layers .dw-layer-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 樣式列的精確屬性 */
+.dwb-num {
+  font-variant-numeric: tabular-nums;
+}
+.dwb-aa {
+  font-weight: 700;
+}
+.mm-bar .dwb-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+}
+.mm-bar .dwb-form.wide {
+  min-width: 260px;
+}
+.dwb-form .popover-title {
+  padding: 2px 2px 0;
+}
+.dwb-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.dwb-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 7px;
+  background: var(--ed-bg);
+  font-size: 12.5px;
+}
+.dwb-field:focus-within {
+  border-color: var(--ed-accent);
+}
+.dwb-field.disabled {
+  opacity: 0.5;
+}
+.dwb-field span {
+  flex: none;
+  color: var(--ed-muted);
+}
+.dwb-field input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.dwb-field em {
+  color: var(--ed-muted);
+  font-style: normal;
+}
+.dwb-hex-chip {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 4px;
+}
+.dwb-select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 7px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.dwb-range {
+  flex: 1;
+  accent-color: var(--ed-accent);
+}
+.dwb-row .dwb-field {
+  width: 78px;
+}
+.mm-bar .dwb-list {
+  min-width: 200px;
+  padding: 6px;
+}
+.mm-bar .dwb-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mm-bar .dwb-item:hover,
+.mm-bar .dwb-item.on {
+  background: var(--ed-hover);
+}
+.dwb-hint {
+  margin-left: auto;
+  color: var(--ed-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

@@ -1,65 +1,203 @@
-/* App shell: module rail + main area. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font-family: var(--ed-font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ed-faint) transparent;
+}
 
 .app {
-    display: grid;
-    grid-template-columns: var(--rail-w) minmax(0, 1fr);
-    height: 100vh;
-    overflow: hidden;
+  display: flex;
+  height: 100%;
 }
 
-.app-rail {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
-    padding: var(--sp-2) 4px;
-    background: var(--sidebar);
-    border-right: 1px solid var(--border);
+/* 側邊欄右邊的主欄：頂端列＋內容 */
+.main-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
-.rail-brand {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    margin: 2px auto var(--sp-3);
-    border-radius: var(--r-lg);
-    background: var(--accent);
-    color: var(--on-accent);
-    box-shadow: var(--shadow-xs);
-    user-select: none;
+/* ─── 頂端列 ─── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 46px;
+  padding: 0 10px 0 16px;
+  flex: none;
+  font-size: 13.5px;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+.topbar.scrolled {
+  border-bottom-color: var(--ed-faint);
 }
 
-.rail-btn {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 3px;
-    padding: 7px 0 6px;
-    border: none;
-    border-radius: var(--r-lg);
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-    transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
-.rail-btn:hover { background: var(--hover); color: var(--text); }
-.rail-btn.active { background: var(--accent-soft); color: var(--accent-text); }
-.rail-btn.active::before {
-    content: "";
-    position: absolute;
-    left: -4px;
-    top: 9px;
-    bottom: 9px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: var(--accent);
+.crumbs .brand {
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
-.rail-icon { display: block; }
-.rail-label { font-size: 9.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-weight: var(--fw-medium); letter-spacing: 0.01em; }
+.crumbs .sep {
+  color: var(--ed-muted);
+}
+.crumbs .doc-icon {
+  flex: none;
+  color: var(--ed-muted);
+}
+.crumbs .doc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-.rail-spacer { flex: 1; }
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--ed-muted);
+}
+.save-state {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 28px;
+  cursor: default;
+}
+.save-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4dab9a;
+  transition: background 0.2s;
+}
+.save-state.saving::before {
+  background: var(--ed-muted);
+  animation: save-pulse 1s ease-in-out infinite;
+}
+@keyframes save-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .save-state.saving::before {
+    animation: none;
+  }
+}
 
-.app-main { min-width: 0; min-height: 0; overflow: hidden; }
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ed-text-soft);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.tool:hover {
+  background: var(--ed-hover);
+}
+.tool.on {
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent);
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ed-muted);
+  cursor: pointer;
+}
+.icon-btn:hover {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+
+/* ─── 頁面 ─── */
+
+.workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.page {
+  flex: 1;
+  overflow-y: auto;
+  padding: 72px 96px 0;
+}
+.page > .md-editor {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 40px 20px 0 64px;
+  }
+  .actions .stat {
+    display: none;
+  }
+}
+
+/* 行事曆填滿整個內容區（不留白、自己處理捲動） */
+.page.page-cal {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+@media (max-width: 900px) {
+  .page.page-cal {
+    overflow-y: auto;
+  }
+}
+
+/* 頂端列右邊全是圖示：一樣大、按下去的（日曆開著）有底色 */
+.actions .icon-btn {
+  width: 28px;
+  height: 28px;
+}
+.actions .icon-btn.on {
+  background: var(--ed-hover);
+  color: var(--ed-text);
+}
+.actions .stat {
+  margin: 0 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}

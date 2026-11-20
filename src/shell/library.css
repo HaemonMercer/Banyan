@@ -1,0 +1,256 @@
+/* ─── 所有頁面 ─── */
+
+.library {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-bottom: 96px;
+}
+
+/* 搜尋框 */
+.lib-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.lib-search .ls-icon {
+  position: absolute;
+  left: 13px;
+  color: var(--ed-muted);
+  pointer-events: none;
+}
+.lib-search input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  padding: 0 130px 0 38px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 10px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.lib-search input::placeholder {
+  color: var(--ed-muted);
+}
+.lib-search input:focus {
+  border-color: var(--ed-accent);
+  box-shadow: 0 0 0 3px var(--ed-accent-soft);
+}
+.ls-hint {
+  position: absolute;
+  right: 12px;
+  color: var(--ed-muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+.ls-hint kbd,
+.lib-empty kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--ed-faint);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+/* ─── 頁面卡片（像 Heptabase 的卡片庫；一排四張） ─── */
+
+.cl-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+/* 依內容區的寬度（側邊欄開著時比較窄）減少欄數 */
+.card-library {
+  container-type: inline-size;
+}
+@container (max-width: 680px) {
+  .cl-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@container (max-width: 500px) {
+  .cl-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container (max-width: 320px) {
+  .cl-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.lib-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 208px;
+  box-sizing: border-box;
+  padding: 20px 22px 0;
+  overflow: hidden;
+  border: 1px solid var(--ed-faint);
+  border-radius: 14px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s;
+}
+.lib-card:hover,
+.lib-card:focus-visible {
+  border-color: var(--ed-accent-ring);
+  box-shadow: 0 8px 22px rgba(15, 15, 15, 0.08);
+  transform: translateY(-1px);
+}
+.lc-title {
+  flex: none;
+  margin-bottom: 10px;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.3;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 內容：文字、圖片依順序，超出的直接切掉 */
+.cl-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--ed-text-soft);
+  font-size: 12.5px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.cl-body p {
+  margin: 0 0 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cl-body p.muted {
+  color: var(--ed-muted);
+  font-style: italic;
+}
+.cl-body img {
+  display: block;
+  max-width: 52%;
+  height: auto;
+  margin-bottom: 8px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+/* 還沒寫的頁面（只是被連到）：虛線框 */
+.lib-card.ghost {
+  border-style: dashed;
+  background: transparent;
+}
+/* 新增 */
+.lib-card.create {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 20px;
+  border: 1.5px dashed var(--ed-faint);
+  background: transparent;
+  color: var(--ed-muted);
+  font-size: 14px;
+  text-align: center;
+}
+.lib-card.create:hover,
+.lib-card.create:focus-visible {
+  border-color: var(--ed-accent);
+  color: var(--ed-accent);
+  box-shadow: none;
+}
+.lib-card.create .lcc-plus {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--ed-hover);
+}
+.lib-card.create:hover .lcc-plus {
+  background: var(--ed-accent-soft);
+}
+.lib-card.create .lcc-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+/* 刪除按鈕：滑過才出現 */
+.lib-del {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: var(--ed-popover);
+  box-shadow: var(--ed-shadow);
+  color: var(--ed-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.lib-card:hover .lib-del,
+.lib-card:focus-within .lib-del {
+  opacity: 1;
+}
+.lib-del:hover {
+  color: var(--ed-danger);
+}
+.cl-none {
+  grid-column: 1 / -1;
+  padding: 40px 0;
+  color: var(--ed-muted);
+  text-align: center;
+  font-size: 14px;
+}
+
+/* 沒有東西 */
+.lib-empty {
+  padding: 56px 24px;
+  border: 1.5px dashed var(--ed-faint);
+  border-radius: 14px;
+  color: var(--ed-muted);
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.lib-empty strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ed-text-soft);
+  font-size: 16px;
+}
+.lib-empty code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--ed-hover);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .lib-search input {
+    padding-right: 12px;
+  }
+  .ls-hint {
+    display: none;
+  }
+}

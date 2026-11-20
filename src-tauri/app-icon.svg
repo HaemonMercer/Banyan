@@ -1,0 +1,7 @@
+<!-- Banyan 的 App 圖示原稿（npx tauri icon src-tauri/app-icon.svg 產生 src-tauri/icons/）：層層起伏的寬樹冠、底部外擴的粗樹幹與垂下的氣根（單色剪影） -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 120 120">
+  <rect width="120" height="120" rx="27" fill="#1f5a40"/>
+  <path d="M8 62Q8 48 22 46Q24 32 42 32Q48 18 64 21Q80 15 90 29Q108 29 110 45Q114 54 112 62Z" fill="#fff"/>
+  <path d="M51 62H69V86Q69 97 84 102H36Q51 97 51 86Z" fill="#fff"/>
+  <path d="M22 62V98M34 62V92M86 62V92M98 62V98" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,251 @@
+/* ─── 頁面 ─── */
+
+.page-view,
+.all-pages {
+  max-width: 720px;
+  margin: 0 auto;
+  padding-bottom: 96px;
+}
+
+.page-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 14px;
+}
+.page-title {
+  margin: 0;
+  font-size: 2.3rem;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+.page-note {
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+
+/* ─── 反向連結 ─── */
+
+.backlinks {
+  margin-top: 40px;
+  padding-top: 18px;
+  border-top: 1px solid var(--ed-faint);
+}
+.backlinks-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--ed-text-soft);
+  font-size: 14px;
+  font-weight: 600;
+}
+.bl-icon {
+  color: var(--ed-muted);
+}
+.backlinks-empty {
+  margin: 0;
+  color: var(--ed-muted);
+  font-size: 14px;
+}
+.backlinks-empty code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--ed-hover);
+  font-size: 13px;
+}
+.bl-source {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--ed-chrome);
+}
+.bl-title {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.bl-title:hover {
+  color: var(--ed-accent);
+}
+.bl-blocks {
+  margin-top: 4px;
+}
+.bl-block {
+  padding: 2px 6px;
+  margin: 0 -6px;
+  border-radius: 5px;
+  font-size: 15px;
+  line-height: 1.65;
+  cursor: pointer;
+}
+.bl-block:hover {
+  background: var(--ed-hover);
+}
+.bl-block p {
+  margin: 0;
+}
+
+/* ─── 所有頁面 ─── */
+
+.page-search input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 8px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+}
+.page-search input:focus {
+  border-color: var(--ed-accent);
+  box-shadow: 0 0 0 3px var(--ed-accent-soft);
+}
+.page-list {
+  margin-top: 12px;
+}
+.page-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--ed-faint);
+  background: none;
+  color: var(--ed-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.page-row:hover {
+  background: var(--ed-hover);
+}
+.page-row.create {
+  color: var(--ed-accent);
+}
+.pr-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--ed-hover);
+  color: var(--ed-muted);
+  font-size: 12px;
+}
+.pr-del {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--ed-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+.page-row:hover .pr-del,
+.page-row:focus-within .pr-del,
+.pr-del:focus-visible {
+  opacity: 1;
+}
+.pr-del:hover {
+  background: var(--ed-hover);
+  color: var(--ed-danger);
+}
+.pr-refs {
+  color: var(--ed-muted);
+  font-size: 13px;
+}
+
+/* ─── 範本（`templates.ts`） ─── */
+
+.page-badge {
+  align-self: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ed-faint);
+  color: var(--ed-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.page-action {
+  align-self: center;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: none;
+  color: var(--ed-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.page-action:hover {
+  color: inherit;
+  background: var(--ed-faint);
+}
+.page-action svg,
+.tpl-chip svg {
+  width: 14px;
+  height: 14px;
+}
+.tpl-help {
+  margin: -6px 0 14px;
+  color: var(--ed-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.tpl-help code {
+  font-size: 12px;
+}
+.tpl-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 2px 0 10px;
+}
+.tpl-start-label {
+  color: var(--ed-muted);
+  font-size: 13px;
+  margin-right: 2px;
+}
+.tpl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tpl-chip:hover {
+  background: var(--ed-faint);
+}
