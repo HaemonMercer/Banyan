@@ -14,6 +14,9 @@ import { whenLabel } from "../bujo/time";
 import { stripTaskShortcut, stripTodoShortcut, taskShortcut, todoShortcut, type TaskState } from "../bujo/tasks";
 import type { ListInfo, UnitKind } from "./markdown";
 import { assistText, typingPrefs } from "./typing";
+import { predictData } from "./predict";
+import { caretPoint, hidePredictions } from "./PredictBar";
+import { createPredictor, registerPredictor, type Predictor } from "./predictor";
 import {
   caretLine,
   contentToRegion,
@@ -193,7 +196,9 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
    * 一般打字在 beforeinput 換（不用 keydown：輸入法送出的字不一定有對應的按鍵事件）。
    */
   const onBeforeInput = (e: InputEvent) => {
-    if (e.inputType !== "insertText" || e.isComposing || !e.data) return;
+    // 用數字鍵、空白鍵選了預測的字：輸入法結束組字後那個鍵又送出來的字不要
+    if (predictor.beforeInput(e)) return;
+    if (e.inputType !== "insertText" || e.isComposing || !e.data || predictor.inserting()) return;
     const before = textBeforeCaret();
     if (before === null) return;
     const out = assistText(before, e.data, typingPrefs());
@@ -215,6 +220,35 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     document.execCommand("insertText", false, out.text);
     punct.current = { text: out.text, ascii: pre.slice(pre.length - out.remove) + data };
   };
+  // ─── 字預測（`predictor.ts`：打字邏輯與選字按鍵；畫面是 `PredictBar.tsx`） ───
+  const predictorRef = useRef<Predictor | null>(null);
+  predictorRef.current ??= createPredictor({
+    el: () => elRef.current,
+    textBefore: () => textBeforeCaret(),
+    caret: () => (elRef.current ? caretPoint(elRef.current) : null),
+    endComposition: () => {
+      const el = elRef.current;
+      const sel = el?.ownerDocument.getSelection();
+      if (!el || !sel?.rangeCount) return;
+      const saved = sel.getRangeAt(0).cloneRange();
+      // 焦點暫時移到一個看不見的元素（`editor-ui`：編輯器不會因此離開編輯），再移回來
+      const tmp = document.createElement("span");
+      tmp.tabIndex = -1;
+      tmp.className = "editor-ui predict-bar";
+      tmp.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;";
+      document.body.appendChild(tmp);
+      tmp.focus({ preventScroll: true });
+      el.focus({ preventScroll: true });
+      tmp.remove();
+      const now = el.ownerDocument.getSelection();
+      if (now && (!now.rangeCount || !el.contains(now.getRangeAt(0).startContainer))) {
+        now.removeAllRanges();
+        now.addRange(saved);
+      }
+    },
+  });
+  const predictor = predictorRef.current;
+
   const beforeInputRef = useRef(onBeforeInput);
   beforeInputRef.current = onBeforeInput;
   const listenBeforeInput = useRef((e: Event) => beforeInputRef.current(e as InputEvent)).current;
@@ -358,6 +392,8 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     const el = elRef.current;
     if (!el) return;
     const ne = e?.nativeEvent as InputEvent | undefined;
+    // 字預測：一般打字（不在組字中）時看游標前正在打的英文字
+    predictor.input(ne);
     // 剛打的字（不在輸入法組字中）：套上等待中的格式
     if (pending.current && ne && !ne.isComposing && ne.inputType?.startsWith("insert") && ne.data) {
       applyPending(ne.data.length);
@@ -433,6 +469,8 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     ref: (el: HTMLElement | null) => {
       if (elRef.current && elRef.current !== el) elRef.current.removeEventListener("beforeinput", listenBeforeInput);
       if (el && elRef.current !== el) el.addEventListener("beforeinput", listenBeforeInput);
+      // 按鍵（Banyan 輸入、選字）由 PredictBar 依焦點所在元素找到這個 Predictor
+      if (el) registerPredictor(el, predictor);
       elRef.current = el;
     },
     className: "rich",
@@ -442,7 +480,13 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
     "data-placeholder": p.placeholder,
     onInput,
     // 輸入法選好字：這時才套用等待中的格式（組字中動 DOM 會打斷輸入法）
+    // 字預測的資料第一次用到才載入：開始編輯就先載入
+    onFocus: () => void predictData(),
+    onCompositionStart: () => predictor.compositionStart(),
+    onCompositionUpdate: (e: React.CompositionEvent<HTMLElement>) => predictor.compositionUpdate(e.data ?? ""),
     onCompositionEnd: (e: React.CompositionEvent<HTMLElement>) => {
+      // 選了預測列的字（換掉組字的內容），或丟掉選字用的按鍵
+      if (predictor.compositionEnd(e.data ?? "")) return;
       if (pending.current && e.data) {
         applyPending(e.data.length);
         onInput();
@@ -455,21 +499,27 @@ export const RichBlock = forwardRef<Surface, Props>(function RichBlock(p, ref) {
       } else if (e.data) {
         assistComposed(e.data);
       }
+      if (e.data) predictor.follow();
     },
     onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
       // 游標移走：取消等待中的格式
       if (/^(Arrow|Home|End|Page)/.test(e.key)) pending.current = null;
+      // 輸入法沒送 compositionend 就結束了組字（例如焦點切換）：一般按鍵進來時不在組字中，重設，預測才不會一直停著
+      // （選字的按鍵由 PredictBar 在 window 捕捉階段處理）
+      predictor.keySeen(e.nativeEvent);
       if (punctKey(e)) return;
       p.onKeyDown(e);
     },
     onMouseDown: () => {
       pending.current = null;
       punct.current = null;
+      hidePredictions();
     },
     onPaste: p.onPaste,
     onBlur: (e: React.FocusEvent<HTMLElement>) => {
       const related = e.relatedTarget as Element | null;
       if (!related?.closest?.(".format-bar, .editor-ui")) pending.current = null;
+      if (!related?.closest?.(".predict-bar")) hidePredictions();
       p.onBlur(e.currentTarget, related);
     },
     onSelect: p.onSelect,

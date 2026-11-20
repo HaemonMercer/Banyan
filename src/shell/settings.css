@@ -288,3 +288,20 @@
   outline: 2px solid var(--ed-accent);
   outline-offset: 2px;
 }
+
+/* 字預測（Typing 底下） */
+.set-sub {
+  margin: 20px 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.set-select {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--ed-faint);
+  border-radius: 6px;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  font-size: 13px;
+}

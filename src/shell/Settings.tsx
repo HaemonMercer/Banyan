@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FolderIcon, MonitorIcon, MoonIcon, SunIcon } from "../editor/icons";
 import { setTypingPref, typingPrefs, type TypingPrefs } from "../editor/typing";
+import { inputSnapshot, predictPrefs, setPredictPrefs, subscribeInput, type ChineseInput } from "../editor/predict";
 import type { ThemePref } from "./nav";
 import {
   canChooseStorage,
@@ -107,7 +108,59 @@ function TypingSection() {
         </label>
       ))}
       <p className="set-note">Press Backspace right after a change to keep what you typed.</p>
+      <PredictRows />
     </section>
+  );
+}
+
+const CHINESE_INPUTS: { value: ChineseInput; label: string }[] = [
+  { value: "cangjie", label: "Cangjie" },
+  { value: "quick", label: "Quick" },
+  { value: "off", label: "Off" },
+];
+
+/** 字預測（`editor/predict.ts`）：打字時游標下方的預測列 */
+function PredictRows() {
+  // 右下角的輸入法標籤也能換倉頡／速成：跟著它更新
+  useSyncExternalStore(subscribeInput, inputSnapshot);
+  const prefs = predictPrefs();
+  return (
+    <>
+      <h3 className="set-sub">Word prediction</h3>
+      <label className="set-row set-toggle">
+        <div className="set-label">
+          <span>English</span>
+          <small>Suggest words as you type, including words you have written before</small>
+        </div>
+        <input
+          type="checkbox"
+          role="switch"
+          checked={prefs.english}
+          onChange={(e) => setPredictPrefs({ english: e.target.checked })}
+        />
+      </label>
+      <label className="set-row">
+        <div className="set-label">
+          <span>Chinese input</span>
+          <small>Type Cangjie or Quick codes with the English keyboard (turn off the Windows Chinese input method). Tap Shift to switch between Chinese and English; Alt+` switches Cangjie / Quick.</small>
+        </div>
+        <select
+          className="set-select"
+          value={prefs.chinese}
+          onChange={(e) => setPredictPrefs({ chinese: e.target.value as ChineseInput })}
+        >
+          {CHINESE_INPUTS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="set-note">
+        Chinese: Space, Enter or 1–9 picks a character, ← → move the highlight, ↑ ↓ (or - =) change page, Backspace removes a code, Esc cancels.
+        Suggestions: click or press 1–9, ← → then Tab or Enter, Esc hides the bar. Alt+0–9 types the digit.
+      </p>
+    </>
   );
 }
 

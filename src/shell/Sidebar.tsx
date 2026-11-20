@@ -23,9 +23,9 @@ import { sameTarget, targetKey, type NavTarget } from "./nav";
 export type MainView = "bujo" | "desk" | "drawer";
 
 const MAIN: { kind: MainView; label: string; icon: ReactNode; keys: string }[] = [
-  { kind: "bujo", label: "Calendar", icon: <CalendarIcon />, keys: "Alt+1" },
-  { kind: "desk", label: "Desk", icon: <DeskIcon />, keys: "Alt+2" },
-  { kind: "drawer", label: "Drawer", icon: <DrawerIcon />, keys: "Alt+3" },
+  { kind: "bujo", label: "Calendar", icon: <CalendarIcon />, keys: "Alt+Shift+1" },
+  { kind: "desk", label: "Desk", icon: <DeskIcon />, keys: "Alt+Shift+2" },
+  { kind: "drawer", label: "Drawer", icon: <DrawerIcon />, keys: "Alt+Shift+3" },
 ];
 
 /** Dock 文件的標題與種類（App 從 Desk 檔案查；查不到是 null：文件已經刪掉） */
@@ -139,7 +139,7 @@ export function Sidebar(props: {
             >
               <span className="sb-icon">{m.icon}</span>
               <span className="sb-label">{m.label}</span>
-              <kbd className="sb-kbd">{m.keys.replace("+", " ")}</kbd>
+              <kbd className="sb-kbd">{m.keys.split("+").join(" ")}</kbd>
             </button>
           ))}
         </nav>

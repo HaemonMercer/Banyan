@@ -78,10 +78,13 @@ describe("快捷鍵", () => {
 
   it("Alt 組合鍵", () => {
     expect(matchShortcut(ev("KeyT", { altKey: true }))).toBe("today");
-    expect(matchShortcut(ev("Digit1", { altKey: true }))).toBe("view-bujo");
-    expect(matchShortcut(ev("Digit2", { altKey: true }))).toBe("view-desk");
-    expect(matchShortcut(ev("Digit3", { altKey: true }))).toBe("view-drawer");
+    expect(matchShortcut(ev("Digit1", { altKey: true, shiftKey: true }))).toBe("view-bujo");
+    expect(matchShortcut(ev("Digit2", { altKey: true, shiftKey: true }))).toBe("view-desk");
+    expect(matchShortcut(ev("Digit3", { altKey: true, shiftKey: true }))).toBe("view-drawer");
+    // Alt＋數字留給打數字
+    expect(matchShortcut(ev("Digit1", { altKey: true }))).toBeNull();
     expect(matchShortcut(ev("Digit4", { altKey: true }))).toBeNull();
+    expect(matchShortcut(ev("Backquote", { altKey: true }))).toBe("input-scheme");
     expect(matchShortcut(ev("Comma", { altKey: true }))).toBe("settings");
     expect(matchShortcut(ev("KeyW", { altKey: true }))).toBeNull();
     expect(matchShortcut(ev("KeyD", { altKey: true }))).toBe("desk-switch");

@@ -344,7 +344,7 @@ export function markdownCard(md: string, fallback = ""): { title: string; desc?:
   return desc ? { title, desc } : { title };
 }
 
-/** 行事曆（Alt＋1 的 Calendar）用：有截止日的卡片與所在清單的名稱，依看板順序 */
+/** 行事曆（Alt＋Shift＋1 的 Calendar）用：有截止日的卡片與所在清單的名稱，依看板順序 */
 export function dueCards(b: TaskBoard): { card: TaskCard; list: string }[] {
   const lists = new Map(b.lists.map((l) => [l.id, l.title]));
   return b.cards

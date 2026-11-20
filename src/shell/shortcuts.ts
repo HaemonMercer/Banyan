@@ -18,6 +18,7 @@ export type ShortcutAction =
   | "desk-switch"
   | "settings"
   | "history"
+  | "input-scheme"
   | "help";
 
 type KeyLike = Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> & { key?: string };
@@ -28,14 +29,11 @@ function codeOf(e: KeyLike): string {
   const k = e.key ?? "";
   if (/^[a-z]$/i.test(k)) return `Key${k.toUpperCase()}`;
   if (/^\d$/.test(k)) return `Digit${k}`;
-  return { "/": "Slash", "\\": "Backslash", ",": "Comma" }[k] ?? k;
+  return { "/": "Slash", "\\": "Backslash", ",": "Comma", "`": "Backquote" }[k] ?? k;
 }
 
 const ALT: Record<string, ShortcutAction> = {
   KeyT: "today",
-  Digit1: "view-bujo",
-  Digit2: "view-desk",
-  Digit3: "view-drawer",
   ArrowLeft: "back",
   ArrowRight: "forward",
   ArrowUp: "newer-day",
@@ -43,7 +41,15 @@ const ALT: Record<string, ShortcutAction> = {
   KeyS: "favorite",
   KeyD: "desk-switch",
   KeyH: "history",
+  Backquote: "input-scheme",
   Comma: "settings",
+};
+
+/** Alt＋數字留給打字（字預測：Alt＋數字直接打數字），切換畫面用 Alt＋Shift＋數字 */
+const ALT_SHIFT: Record<string, ShortcutAction> = {
+  Digit1: "view-bujo",
+  Digit2: "view-desk",
+  Digit3: "view-drawer",
 };
 
 const CTRL: Record<string, ShortcutAction> = {
@@ -52,9 +58,9 @@ const CTRL: Record<string, ShortcutAction> = {
 };
 
 export function matchShortcut(e: KeyLike): ShortcutAction | null {
-  if (e.shiftKey) return null;
   const ctrl = e.ctrlKey || e.metaKey;
   const code = codeOf(e);
+  if (e.shiftKey) return e.altKey && !ctrl ? (ALT_SHIFT[code] ?? null) : null;
   if (e.altKey && !ctrl) return ALT[code] ?? null;
   if (ctrl && !e.altKey) return CTRL[code] ?? null;
   return null;
@@ -66,9 +72,9 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
     title: "Navigate",
     items: [
       [["Alt", "T"], "Today's journal"],
-      [["Alt", "1"], "Calendar"],
-      [["Alt", "2"], "Desk"],
-      [["Alt", "3"], "Drawer"],
+      [["Alt", "Shift", "1"], "Calendar"],
+      [["Alt", "Shift", "2"], "Desk"],
+      [["Alt", "Shift", "3"], "Drawer"],
       [["Alt", "←"], "Back"],
       [["Alt", "→"], "Forward"],
       [["Alt", "↑"], "Next day's journal"],
@@ -83,6 +89,9 @@ export const SHORTCUT_GROUPS: { title: string; items: [keys: string[], label: st
       [["Alt", "D"], "Cycle Whiteboard / Dock / Tasks (in a Desk file)"],
       [["Alt", "H"], "Version history"],
       [["Alt", ","], "Settings"],
+      [["Shift"], "Switch Chinese / English input (tap alone)"],
+      [["Alt", "`"], "Switch Cangjie / Quick"],
+      [["Alt", "0–9"], "Type a digit (while suggestions are open, 1–9 pick)"],
       [["Ctrl", "/"], "Keyboard shortcuts"],
     ],
   },

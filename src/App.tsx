@@ -49,6 +49,9 @@ import { allPages, type Source } from "./pages/refIndex";
 import { Backlinks } from "./pages/Backlinks";
 import { OPEN_PAGE_EVENT, setPageNames } from "./pages/pageRef";
 import { setEmbedSources } from "./pages/embeds";
+import { InputModeBadge, PredictBar } from "./editor/PredictBar";
+import { setPredictCorpus, switchInputScheme } from "./editor/predict";
+import { installFieldPrediction } from "./editor/fieldPredict";
 import { collectDocLinks, docLinkOf, docRenames, linkKey, renameDocInLinks, renameFileInLinks, setDocLinks, type DocLink } from "./desk/docLinks";
 import { loadDockDoc, renameFileState, saveDockDoc } from "./desk/store";
 import { isTauri } from "@tauri-apps/api/core";
@@ -309,6 +312,14 @@ function App() {
     [docSources, sources],
   );
 
+  // 字預測：文字框、輸入框（便利貼、格子、標題、搜尋…）也有預測
+  useEffect(() => installFieldPrediction(), []);
+  // 字預測：英文補完優先用使用者寫過的字（日記與頁面）
+  useEffect(
+    () => setPredictCorpus([...Object.values(journals.contents), ...Object.values(pages.contents)]),
+    [journals.contents, pages.contents],
+  );
+
   // 頁面範本（名稱 `Template/…` 的頁面）：給編輯器的斜線選單
   const templates = useMemo(() => collectTemplates(pages.contents), [pages.contents]);
   useEffect(() => setTemplates(templates), [templates]);
@@ -487,7 +498,7 @@ function App() {
     );
 
   /**
-   * 側邊欄的 Desk（Alt+2）：在 Desk 的檔案裡 → 回到首頁；在首頁 → 不動；
+   * 側邊欄的 Desk（Alt+Shift+2）：在 Desk 的檔案裡 → 回到首頁；在首頁 → 不動；
    * 從別的畫面來 → 回到上次停的地方（檔案已經刪掉就回首頁）。
    */
   const openDesk = () => {
@@ -661,6 +672,8 @@ function App() {
         return navigate({ kind: "settings" });
       case "help":
         return setHelp((v) => !v);
+      case "input-scheme":
+        return switchInputScheme();
       case "history":
         if (hasHistory) setHistory((v) => !v);
         return;
@@ -937,6 +950,8 @@ function App() {
         </div>
       </div>
       {help && <ShortcutHelp onClose={() => setHelp(false)} />}
+      <PredictBar />
+      <InputModeBadge />
     </div>
   );
 }
