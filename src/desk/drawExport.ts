@@ -3,6 +3,7 @@ import { mediaUrl } from "../editor/media";
 import {
   arrowHead,
   contentBounds,
+  copyItems,
   edgeGeometry,
   radiusOf,
   renderOrder,
@@ -20,6 +21,7 @@ import {
   type Side,
 } from "./draw";
 import type { Rect } from "./board";
+import { svgToPng } from "./imageClip";
 
 /**
  * Draw 文件匯出：
@@ -243,28 +245,21 @@ export function toSvg(d: Diagram, images: Record<string, string> = {}, only?: st
 
 /** PNG（兩倍解析度）。 */
 export async function toPng(d: Diagram, scale = 2, only?: string): Promise<Uint8Array> {
+  return new Uint8Array(await (await pngBlob(d, scale, only)).arrayBuffer());
+}
+
+/** PNG 的 Blob（複製到剪貼簿用） */
+export async function pngBlob(d: Diagram, scale = 2, only?: string): Promise<Blob> {
   const { svg, w, h } = toSvg(d, await loadImages(d), only);
-  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-  try {
-    const img = new Image();
-    await new Promise<void>((ok, bad) => {
-      img.onload = () => ok();
-      img.onerror = () => bad(new Error("Couldn't draw the diagram"));
-      img.src = url;
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(w * scale);
-    canvas.height = Math.round(h * scale);
-    const c = canvas.getContext("2d");
-    if (!c) throw new Error("Canvas isn't available");
-    c.scale(scale, scale);
-    c.drawImage(img, 0, 0, w, h);
-    const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, "image/png"));
-    if (!blob) throw new Error("Couldn't make the PNG");
-    return new Uint8Array(await blob.arrayBuffer());
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  return svgToPng(svg, w, h, scale);
+}
+
+/** 選取的項目單獨成一張圖（複製成圖片用）；選了一個畫板就是那個畫板 */
+export function selectionDiagram(d: Diagram, ids: string[]): { diagram: Diagram; only?: string } {
+  const frame = ids.length === 1 ? d.shapes.find((s) => s.id === ids[0] && s.kind === "frame") : undefined;
+  if (frame) return { diagram: d, only: frame.id };
+  const clip = copyItems(d, ids);
+  return { diagram: { ...d, shapes: clip.shapes, edges: clip.edges } };
 }
 
 /* ─── HTML ─── */

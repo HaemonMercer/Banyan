@@ -1501,6 +1501,7 @@ function IdentifierBox(props: { onFound: (items: Item[]) => void; onClose: () =>
         autoFocus
         rows={Math.min(5, Math.max(1, text.split("\n").length))}
         value={text}
+        data-no-predict
         placeholder="Paste a DOI, ISBN, arXiv ID or URL — one per line"
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -1572,6 +1573,7 @@ function KeyField(props: { value: string; onCommit: (v: string) => void }) {
       <span className="dr-field-label">Citation Key</span>
       <input
         className="mono"
+        data-no-assist
         value={v}
         onChange={(e) => setV(e.target.value)}
         onBlur={() => (v.trim() && v !== props.value ? props.onCommit(v) : setV(props.value))}
@@ -1978,7 +1980,7 @@ function ItemPane(props: {
                   setLinking(false);
                 }}
               >
-                <input autoFocus value={linkText} placeholder="https://…" onChange={(e) => setLinkText(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setLinking(false)} />
+                <input autoFocus data-no-predict value={linkText} placeholder="https://…" onChange={(e) => setLinkText(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setLinking(false)} />
                 <button className="dr-btn primary" type="submit">
                   Add
                 </button>

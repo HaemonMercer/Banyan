@@ -26,7 +26,9 @@ import {
 } from "../editor/icons";
 import { importMediaPath, kindOf, mediaUrl, saveMedia } from "../editor/media";
 import { parseDiagram } from "./draw";
-import { loadImages, toSvg } from "./drawExport";
+import { loadImages, pngBlob, toSvg } from "./drawExport";
+import { copyPng, svgToPng } from "./imageClip";
+import { mapSvg } from "./mindmapExport";
 import { DrawView } from "./DrawView";
 import { newCardWorkbook, sheetCardSize, sheetPreview, tabularClip } from "./boardSheet";
 import { SheetView } from "../sheet/SheetView";
@@ -480,6 +482,39 @@ export function Whiteboard(props: Props) {
     const t = setTimeout(() => setSent(null), 4000);
     return () => clearTimeout(t);
   }, [sent]);
+  /** 短暫的提示（複製成圖片） */
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
+  /** 心智圖或 Draw 卡片複製成圖片（PNG） */
+  const copyAsImage = (what: { map: string } | { card: string }) => {
+    const b = boardRef.current;
+    let make: (() => Promise<Blob>) | null = null;
+    let label = "";
+    if ("map" in what) {
+      const m = b.maps.find((x) => x.id === what.map);
+      if (m) {
+        const { svg, w, h } = mapSvg(m);
+        make = () => svgToPng(svg, w, h);
+        label = "mind map";
+      }
+    } else {
+      const c = b.cards.find((x) => x.id === what.card);
+      if (c?.ref.kind === "draw") {
+        const d = parseDiagram(c.text ?? "");
+        make = () => pngBlob(d);
+        label = "diagram";
+      }
+    }
+    if (!make) return;
+    copyPng(make).then(
+      () => setNotice(`Copied ${label} as image`),
+      (err) => setNotice(`Couldn't copy: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  };
 
   const focusCanvas = () => rootRef.current?.focus({ preventScroll: true });
   /** 上次拖曳（搬移、拉大小、連線）的時間：剛拖完的兩下點擊不算連按兩下 */
@@ -1372,22 +1407,31 @@ export function Whiteboard(props: Props) {
   const cardById = useMemo(() => new Map(board.cards.map((c) => [c.id, c])), [board.cards]);
   const onBoard = useMemo(() => new Set(board.cards.map((c) => refKey(c.ref))), [board.cards]);
 
+  /**
+   * React 的事件會從 portal（`CardEditor`、選單）沿著元件樹傳到白板，但 DOM 上不在白板裡：這些不處理。
+   * 不在 CardEditor 用 stopPropagation 擋：那會連原生事件一起擋住，Draw／Excel 掛在 window 上的
+   * pointerup、keydown（拖曳結束、空白鍵平移、Esc 關選單）就收不到了。
+   */
+  const own = <E extends React.SyntheticEvent>(fn: (e: E) => void) => (e: E) => {
+    if (rootRef.current?.contains(e.target as Node)) fn(e);
+  };
+
   return (
     <div
       ref={rootRef}
       className={`board no-box${spaceDown || panning ? " panning" : ""}${panning ? " grabbing" : ""}${dragging || link ? " dragging" : ""}${styleBar ? " has-mm-bar" : ""}`}
       tabIndex={0}
-      onPointerDown={onPointerDown}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={onContextMenu}
-      onKeyDown={onKeyDown}
-      onPaste={onPaste}
-      onCopy={(e) => onCopy(e, false)}
-      onCut={(e) => onCopy(e, true)}
-      onFocus={(e) => setCardFocus(!!(e.target as HTMLElement).closest?.(".bc-body"))}
-      onBlur={(e) => {
+      onPointerDown={own(onPointerDown)}
+      onDoubleClick={own(onDoubleClick)}
+      onContextMenu={own(onContextMenu)}
+      onKeyDown={own(onKeyDown)}
+      onPaste={own(onPaste)}
+      onCopy={own((e: React.ClipboardEvent) => onCopy(e, false))}
+      onCut={own((e: React.ClipboardEvent) => onCopy(e, true))}
+      onFocus={own((e: React.FocusEvent) => setCardFocus(!!(e.target as HTMLElement).closest?.(".bc-body")))}
+      onBlur={own((e: React.FocusEvent) => {
         if (!(e.relatedTarget as HTMLElement | null)?.closest?.(".bc-body")) setCardFocus(false);
-      }}
+      })}
       // 畫布是 overflow: hidden，聚焦到主題的文字框時瀏覽器會把它捲過去；一律捲回來（畫面位置只由 cam 決定）
       onScroll={(e) => {
         const el = e.currentTarget;
@@ -1746,6 +1790,11 @@ export function Whiteboard(props: Props) {
 
       {send && <SendMenu x={send.x} y={send.y} dock={props.dock} onPick={sendTo} onClose={() => setSend(null)} />}
 
+      {notice && !sent && (
+        <div className="board-toast board-ui" role="status">
+          {notice}
+        </div>
+      )}
       {sent && (
         <div className="board-toast board-ui" role="status">
           Sent {sent.n === 1 ? "1 card" : `${sent.n} cards`} to “{sent.title}”
@@ -1865,6 +1914,12 @@ export function Whiteboard(props: Props) {
                 return focusCanvas();
               case "topic-send":
                 return setSend({ x: menu.x, y: menu.y });
+              case "topic-image":
+                if (menu.kind === "topic") copyAsImage({ map: menu.map });
+                return focusCanvas();
+              case "copy-image":
+                copyAsImage({ card: a.id });
+                return focusCanvas();
               case "fit":
                 return fit();
             }
@@ -2013,6 +2068,7 @@ const CodeCard = memo(function CodeCard(props: {
           </pre>
           <textarea
             className="code-input"
+            data-no-assist
             value={card.text}
             spellCheck={false}
             autoCapitalize="off"
@@ -2304,7 +2360,7 @@ const SheetCard = memo(function SheetCard(props: { card: Card; selected: boolean
 
 /**
  * 在白板上方編輯圖表或表格卡片：完整的 Draw（`DrawView`）或 Excel（`SheetView`），改了就寫回卡片。
- * 蓋在整個視窗上（portal 到 body），事件在這裡擋下，不會傳到白板（React 的 portal 會把事件往白板傳）。
+ * 蓋在整個視窗上（portal 到 body）。React 的 portal 會把事件往白板傳，由白板的 `own` 略過（不在這裡擋）。
  */
 function CardEditor(props: {
   card: Card;
@@ -2322,28 +2378,10 @@ function CardEditor(props: {
     const t = setTimeout(() => (box.querySelector<HTMLElement>(".st-input") ?? box).focus({ preventScroll: true }), 0);
     return () => clearTimeout(t);
   }, []);
-  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  // 事件不在這裡 stopPropagation（會擋住 Draw／Excel 掛在 window 上的 pointerup、keydown）；
+  // 白板的處理（`own`）自己略過不在白板 DOM 裡的事件
   return createPortal(
-    <div
-      ref={boxRef}
-      tabIndex={-1}
-      className="board-draw-editor"
-      role="dialog"
-      aria-label={sheet ? "Edit table" : "Edit diagram"}
-      onKeyDown={stop}
-      onKeyUp={stop}
-      onPaste={stop}
-      onCopy={stop}
-      onCut={stop}
-      onPointerDown={stop}
-      onPointerUp={stop}
-      onMouseDown={stop}
-      onDoubleClick={stop}
-      onWheel={stop}
-      onContextMenu={stop}
-      onDragOver={stop}
-      onDrop={stop}
-    >
+    <div ref={boxRef} tabIndex={-1} className="board-draw-editor" role="dialog" aria-label={sheet ? "Edit table" : "Edit diagram"}>
       <div className="bde-bar">
         {sheet ? <SheetIcon /> : <DrawIcon />}
         <span className="bde-title">{sheet ? "Table on the whiteboard" : "Diagram on the whiteboard"}</span>
@@ -2654,12 +2692,12 @@ function CardPicker(props: {
 /* ─── 右鍵選單 ─── */
 
 type MenuAction =
-  | { type: "open" | "auto-height" | "remove" | "rename" | "label" | "flip" | "send" | "delete-ref"; id: string }
+  | { type: "open" | "auto-height" | "remove" | "rename" | "label" | "flip" | "send" | "delete-ref" | "copy-image"; id: string }
   | { type: "color"; id: string; color: Color | null }
   | { type: "group" | "fit" }
   | { type: "add-card" | "add-section" | "add-note" | "add-map" | "add-media" | "add-code" | "add-draw" | "add-table"; x: number; y: number }
   | { type: "add-kind"; kind: InsertKind; x: number; y: number }
-  | { type: "topic-child" | "topic-after" | "topic-fold" | "topic-delete" | "topic-send" | "topic-edit" };
+  | { type: "topic-child" | "topic-after" | "topic-fold" | "topic-delete" | "topic-send" | "topic-edit" | "topic-image" };
 
 function BoardMenu(props: {
   menu: Menu;
@@ -2735,6 +2773,14 @@ function BoardMenu(props: {
               <PencilIcon />
             </span>
             <span className="label">{c.ref.kind === "sheet" ? "Edit table" : "Edit diagram"}</span>
+          </button>
+        )}
+        {!many && c.ref.kind === "draw" && (
+          <button onClick={() => act({ type: "copy-image", id: c.id })}>
+            <span className="glyph">
+              <ImageIcon />
+            </span>
+            <span className="label">Copy as image</span>
           </button>
         )}
         <button onClick={() => act({ type: "send", id: c.id })}>
@@ -2832,6 +2878,12 @@ function BoardMenu(props: {
             <SendIcon />
           </span>
           <span className="label">Send mind map to Dock…</span>
+        </button>
+        <button onClick={() => act({ type: "topic-image" })}>
+          <span className="glyph">
+            <ImageIcon />
+          </span>
+          <span className="label">Copy mind map as image</span>
         </button>
         <div className="popover-sep" />
         <button className="danger" onClick={() => act({ type: "topic-delete" })}>

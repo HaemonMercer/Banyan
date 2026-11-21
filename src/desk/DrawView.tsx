@@ -22,7 +22,8 @@ import {
 } from "../editor/icons";
 import { mediaUrl, saveMedia } from "../editor/media";
 import { saveExport } from "./export";
-import { loadImages, toHtml, toPng } from "./drawExport";
+import { loadImages, pngBlob, selectionDiagram, toHtml, toPng } from "./drawExport";
+import { copyPng } from "./imageClip";
 import { boundsOf, fitCamera, toWorld, zoomAt, type Camera, type Rect } from "./board";
 import {
   addEdge,
@@ -780,6 +781,16 @@ export function DrawView(props: { docId: string; title: string; value: string; o
       setToast(`Couldn't export: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
+  /** 複製成圖片（PNG）：選取的項目（一個畫板就是那個畫板），沒有選取就是整張圖。 */
+  const copyImage = (ids: string[]) => {
+    const d = dRef.current;
+    const pick = ids.length ? selectionDiagram(d, ids) : { diagram: d };
+    if (!renderOrder(pick.diagram).length) return;
+    copyPng(() => pngBlob(pick.diagram, 2, pick.only)).then(
+      () => setToast(ids.length ? "Copied selection as image" : "Copied diagram as image"),
+      (err) => setToast(`Couldn't copy: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  };
   /** 加在畫面中央（已經有圖形在同一個位置就往右下錯開）。 */
   const addCenter = (kind: ShapeKind) => {
     const v = viewport();
@@ -931,6 +942,7 @@ export function DrawView(props: { docId: string; title: string; value: string; o
     }
     else if (ctrl && !e.altKey && (k === "z" || k === "y")) undo(k === "y" || e.shiftKey);
     else if (ctrl && k === "a") setSel([...dRef.current.shapes.map((s) => s.id), ...dRef.current.edges.map((x) => x.id)]);
+    else if (ctrl && e.shiftKey && k === "c") copyImage(ids);
     else if (ctrl && k === "c") copySel();
     else if (ctrl && k === "x") {
       copySel();
@@ -1421,6 +1433,8 @@ export function DrawView(props: { docId: string; title: string; value: string; o
             if (a === "edit" && sel.length === 1) setEditing({ id: sel[0] });
             else if (a === "duplicate") duplicate();
             else if (a === "copy") copySel();
+            else if (a === "copy-image") copyImage(ids);
+            else if (a === "copy-all-image") copyImage([]);
             else if (a === "paste") paste();
             else if (a === "front") apply(reorder(dRef.current, ids, true));
             else if (a === "back") apply(reorder(dRef.current, ids, false));
@@ -1614,6 +1628,8 @@ type MenuAction =
   | "lock"
   | "export-png"
   | "export-html"
+  | "copy-image"
+  | "copy-all-image"
   | "delete"
   | "shape"
   | "frame"
@@ -1652,6 +1668,7 @@ function ContextMenu(props: {
           {props.canEdit && row("edit", props.frame ? "Rename frame" : "Edit text", <TextIcon />, "Enter")}
           {row("duplicate", "Duplicate", <CopyIcon />, "Ctrl+D")}
           {row("copy", "Copy", <CopyIcon />, "Ctrl+C")}
+          {row("copy-image", "Copy as image", <ImageIcon />, "Ctrl+Shift+C")}
           {row("front", "Bring to front", <FrontIcon />, "Ctrl+Shift+F")}
           {row("back", "Send to back", <BackIcon />, "Ctrl+Shift+B")}
           {props.canGroup && row("group", "Group", <SectionIcon />, "Ctrl+G")}
@@ -1674,6 +1691,7 @@ function ContextMenu(props: {
           {row("shape", "Add shape here…", <ShapesIcon />)}
           {props.canPaste && row("paste", "Paste", <CopyIcon />, "Ctrl+V")}
           {row("all", "Select all", <SelectAllIcon />, "Ctrl+A")}
+          {row("copy-all-image", "Copy diagram as image", <ImageIcon />, "Ctrl+Shift+C")}
           <div className="popover-sep" />
           {row("grid", "Dots and snapping", props.grid ? <span className="check">✓</span> : null)}
           {row("fit", "Fit to screen", <FitIcon />, "Shift+1")}

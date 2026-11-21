@@ -2803,6 +2803,7 @@ function LinkAsk(props: { onSubmit: (url: string) => void; onCancel: () => void 
       <LinkIcon />
       <input
         ref={ref}
+        data-no-predict
         placeholder="Paste or type a URL, then press Enter"
         onKeyDown={(e) => {
           if (e.key === "Enter") {
