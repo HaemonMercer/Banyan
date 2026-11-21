@@ -1,0 +1,2 @@
+// 輸入法清單與語言列上的圖示（register.rs 用 DLL 本身、索引 0）
+1 ICON "../../src-tauri/icons/icon.ico"

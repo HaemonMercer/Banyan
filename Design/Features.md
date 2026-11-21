@@ -18,6 +18,7 @@
 | Drawer（文獻庫，參考 Zotero） | 🟡 開發中（條目與書目資料、收藏、標籤、附件與 PDF 檢視、用 DOI／ISBN／arXiv 新增、BibTeX／CSL-JSON 匯入、APA／MLA 引用、BibTeX 匯出、`[[@引用鍵]]` 筆記頁面、檔案庫（資料夾）與重複檔案偵測） |
 | 版本歷史（參考 Google Docs） | 🟡 開發中（日記、頁面、Desk 檔案自動記錄版本、預覽與標出差異、還原、命名、做副本） |
 | 介面（側邊欄、設定、快捷鍵） | 🟡 開發中（側邊欄、收藏與最近、上一頁／下一頁、設定（主題、儲存位置、檢查更新）、快捷鍵） |
+| Banyan 輸入法（Windows） | 🟡 開發中（倉頡／速成、聯想、英文補完與下一個字、輔助打字做成系統輸入法，所有程式都能用；已安裝，在 RichEdit 與 EDIT 文字框實際打字測過，還沒在 Word、瀏覽器裡試） |
 | 檔案開啟／儲存 | ⬜ 未開始（文件存在 localStorage；日記已存成檔案） |
 
 狀態：✅ 完成　🟡 開發中　⬜ 未開始
@@ -41,8 +42,8 @@
     - **Capitalize sentences**（預設開）：區塊開頭、英文句尾 `. ` `! ` `? ` 後面的小寫字母換成大寫（`e.g. ` `Mr. ` 等縮寫、`3. ` 編號、中文後面的句點不算）；單獨的 `i`（後面打空白或標點，例如 `i am`、`i'm`）換成 `I`。區塊開頭打網址或刻意的小寫時，按 Backspace 還原。
     - **Space between Chinese and English**（預設關）：中文字緊接英文字母或數字（或反過來）時自動空一格（盤古之白：`用Banyan寫` → `用 Banyan 寫`、`第3章` → `第 3 章`）；標點旁邊、已經有空格不加。
     - 一般打字在 beforeinput 換；輸入法選好字（compositionend）時把剛送出的字換掉，所以用注音、倉頡打出的標點與中文也適用。
-  - **字預測**（`predict.ts`、`PredictBar.tsx`；使用者：「增加字預測 簡單來說打字時 在光標的下方出現個Bar 內顯示預測我正在打什麼字 支持倉頡、速成和英文」）：打字時游標下方出現一排預測（每個前面標著數字），點了就用；數字鍵 1～9 選第幾個、左右鍵移動選中的字、Tab 或 Enter 選它（使用者：「可以用Enter來確定字」；聯想與英文的下一個字是「接下來可能打的」，Enter 要先用左右鍵移動過才選，不然照常換行）；倉頡／速成組字中空白鍵留給系統輸入法（原本也用來選預測列的字，使用者：「當按空白鍵時觸電腦自帶的輸入法 會造成嚴重的干擾」，網頁擋不住輸入法處理空白鍵，所以拿掉）、Esc 關掉（使用者：「不用顯示倉頡碼 且能用左右鍵或數字選取字」），游標移走、捲動、離開編輯也會關掉。設定畫面 Typing 的 Word prediction（localStorage `banyan.predict`）：English 開關、Chinese input method 選 Cangjie／Quick／Off（預設 English 開、Cangjie）。
     - 區塊編輯器以外所有打字的地方也有（`fieldPredict.ts`，和字預測一起在 document 上接；使用者：「Mind Map 不支援打字輔助」「在軟件中的所有角落 只要打字就要支持打字輔助和預測字的功能」）：文字框、輸入框（便利貼、心智圖主題、Tasks、Drawer、標題、搜尋框、試算表格子…）與純文字的可編輯元素（Draw 圖形的文字、圖片的圖說、表格編輯器的格子）。不換的：程式碼卡片、引用鍵（`data-no-assist`）、`=` 開頭的試算表公式；網址、DOI 等輸入框連預測也不出（`data-no-predict`）。
+  - **字預測**（`predict.ts`、`PredictBar.tsx`；使用者：「增加字預測 簡單來說打字時 在光標的下方出現個Bar 內顯示預測我正在打什麼字 支持倉頡、速成和英文」）：打字時游標下方出現一排預測（每個前面標著數字），點了就用；數字鍵 1～9 選第幾個、左右鍵移動選中的字、Tab 或 Enter 選它（使用者：「可以用Enter來確定字」；聯想與英文的下一個字是「接下來可能打的」，Enter 要先用左右鍵移動過才選，不然照常換行）；倉頡／速成組字中空白鍵留給系統輸入法（原本也用來選預測列的字，使用者：「當按空白鍵時觸電腦自帶的輸入法 會造成嚴重的干擾」，網頁擋不住輸入法處理空白鍵，所以拿掉）、Esc 關掉（使用者：「不用顯示倉頡碼 且能用左右鍵或數字選取字」），游標移走、捲動、離開編輯也會關掉。設定畫面 Typing 的 Word prediction（localStorage `banyan.predict`）：English 開關、Chinese input method 選 Cangjie／Quick／Off（預設 English 開、Cangjie）。
     - **英文**：游標前正在打的字（一個字母就開始，使用者：「英文只有兩個字母才有預測字」）→ 以它開頭的字：使用者在日記與頁面寫過兩次以上的字排前面（次數多的先，App 用 `setPredictCorpus` 傳內容），其次是內建的常用字（`predict/english.txt`）；大小寫跟著打的字（`Ban` → `Banyan`、`BAN` → `BANYAN`），選了換掉整個字。
     - **Banyan 自己的倉頡／速成輸入**（使用者：「可以改用你的方案」——Windows 輸入法按空白鍵自己選字，網頁擋不住，所以改成 Banyan 自己做輸入）：關掉 Windows 的中文輸入法、用英文鍵盤打字母碼。中文模式下打 a～y 不進文件，預測列分兩層（使用者：「你能優化下UI顯示」）：上面是打了的字根（`竹手戈`）與字母碼（`hqi`），右邊是頁數與 ‹ › 換頁；下面是候選字（完整符合的在前、依字頻，最多 90 個、每頁 9 個，前面標數字，反白的字用綠底白字）；空白鍵、Enter、Tab 選反白的字，數字鍵 1～9 選第幾個，左右鍵移動，上下鍵（或 `-` `=`、PageUp／PageDown）換頁，Backspace 刪一碼，Esc 取消；倉頡最多 5 碼、速成 2 碼，打滿了還繼續打字母就先選反白的字、這個字母開始下一個字（連打，速成常用：`hioi` → 的每；使用者：「你能適配速成」）；打標點、z、大寫字母等先選反白的字再照常輸入（`我,` → `我，`）。選好字後聯想。中文模式下打大寫字母就暫時打英文（`imeTemp`：大寫字母照常輸入、接著的字母數字都是英文，有英文預測；打空白、標點、Enter、Tab、移動游標或點別的地方就回到中文，那個鍵照常作用；右下角標籤這時顯示「英 English · until space」；使用者：「當輸入中文 時打了打大寫英文 就切換成英文 直到打完才切換回來」）。單獨按一下 Shift 切換中／英（游標下方閃一下「中」／「英」，記在 localStorage `banyan.imeChinese`）；視窗右下角一直顯示現在的輸入法（「中 Cangjie」／「中 Quick」／「英 English」，`InputModeBadge`：點「中／英」切換中英，點右邊的 Cangjie／Quick 直接換倉頡或速成，設定畫面跟著更新；快捷鍵 Alt＋`（使用者：「用 Alt+`」，原本是 Alt＋Q）也是互換倉頡／速成（同時切到中文，游標下方閃一下「中 Cangjie」／「中 Quick」；使用者：「增加一個快捷鍵來切換倉頡」）；白板、Draw 有縮放按鈕時往上讓開；Chinese input 是 Off 時不顯示，使用者：「在右下方增加一個顯示現在什麼輸入法」）；英文模式就是一般打字加英文預測。設定的 Chinese input 選 Cangjie／Quick／Off（Off 就沒有中文輸入）。區塊編輯器、文字框、輸入框都可以用；行內程式碼裡照常打英文。`/` 命令選單開著時（使用者：「我講的是/ 命令要強制切換成英文」）打 a～y 也自動暫時打英文，命令名稱照常篩選、不出英文預測（Enter 留給選單），選了命令、Esc 關掉選單、打空白就回到中文（`predictor.ts` 的 `slashCommand`：行首或空白後的 `/` 加英文字母，且 `.slash-menu` 開著）。只會打英文的 Markdown 語法裡（使用者：「使用Markdown強制切換成英文」）打 a～y 也自動暫時打英文（`punct.ts` 的 `markdownEnglish`，同樣用 `imeTemp`，右下角顯示英文）：還沒關上的反引號裡（行內程式碼、```` ``` ```` 後面的語言）、連結與圖片的 `](` 網址裡、`<` 開頭的 HTML 標籤與自動連結裡、行首（或清單標記後面）剛打的 `{`／`[`（任務標記 `{x}`、核取方塊 `[x]`）；打了關上的 `` ` ``、`)`、`>` 等就回到中文。連結文字、`[[頁面]]` 的名稱照常打中文。
     - **倉頡／速成**（配合 Windows 的輸入法，仍然保留）：組字中（compositionupdate）的字根 `竹手`（或英文字母 `hq`）換成碼，列出碼以它開頭的字：完整符合的在前、其次是還沒打完碼的字，各自依字頻（不顯示倉頡碼）。組字中按鍵先給輸入法（key 是 `Process`），改看 `code`：數字鍵、左右鍵、Enter 一樣操作預測列（空白鍵不算），輸入法同時送出的字在 compositionend 換成選的字；按鍵選字時先等輸入法自己結束組字再換，150ms 內沒結束才用焦點切換強迫結束；選字用的數字、空白，以及輸入法又送出一次的同一個字，在換上去之後 600ms 內都丟掉（含全形，修正選完字後多一個數字、空白鍵出現兩個相同的字）。點候選字時焦點暫時移到預測列讓輸入法結束組字，再把組字的內容換成點的字。碼表是 Rime 倉頡五代（rime-cangjie 的 base＋有字頻的 extended），字頻與詞來自 rime-essay（都是 LGPL-3.0），`scripts/build-predict.mjs` 產生 `predict/cangjie.txt`、`phrases.txt`，開始編輯時才載入（不在主程式裡）。
@@ -402,6 +403,29 @@ Desk 檔案的 Dock 裡的一種文件（取代原本參考 Notion 的資料庫�
 - 收藏與最近存在 localStorage，不跟著日記檔案走；頁面改名或刪除後，收藏裡的舊名稱不會自動更新。
 - 還沒有全文搜尋或指令面板。
 
+## Banyan 輸入法（`ime/`，Windows 的 TSF 輸入法）
+
+使用者：「把專案中的打字預測和輔助獨立成一個輸入法」（問過：要的是 Windows 系統輸入法，不是專案內的模組）。App 裡的字預測與輔助打字（`src/editor/`）照舊；這是另外一個 Rust crate，編成 `banyan_ime.dll`，裝好後在「中文（台灣）」下多一個「Banyan」鍵盤，Word、瀏覽器、記事本等支援 TSF 的程式都能用。說明在 `ime/README.md`。
+
+- **安裝**：`ime/install.ps1`（編譯 release、複製到 `C:\Program Files\Banyan IME\`、`regsvr32` 註冊 COM 類別與輸入法設定檔、加到語言清單；要系統管理員，會自己要求提升）；移除是 `uninstall.ps1`。舊的 DLL 還被載入時先改名成 `.old`。
+- **打字**（和 App 的 Banyan 輸入一樣）：單獨按一下 Shift 切換中／英（游標下方閃「中」「英」），Alt＋` 換倉頡／速成；中文打 a～y 是碼，組字中的字根寫在文件裡（組字），候選視窗在下方：空白鍵、Enter、Tab 選反白的字，1～9 選第幾個，←→ 移動，↑↓／PageUp／PageDown／- = 換頁，Backspace 刪一碼，Esc 取消，打標點先選字，碼打滿繼續打是下一個字，大寫字母暫時打英文；選好字後聯想；英文補完與下一個字；候選列開著時 Alt＋數字直接打數字。點候選視窗也可以選字、換頁。
+- **輔助打字**：中文標點、英文標點、句首大寫與單獨的 i、中英之間加空格（預設關），規則和 App 相同；換完緊接著按 Backspace 還原。
+- **記住打過的英文字**：App 從日記、頁面算「自己寫過的字」，輸入法看不到文件，改成記住打過的字（四個字母以上）與接法，存在 `%APPDATA%\Banyan IME\learned.tsv`，好幾個程式同時開著時存檔前先合併。
+- **設定視窗：關掉字預測與輔助打字**（`tsf/config.rs`；使用者：「做一個可以關掉輸入預測和打字輔助的功能」）：「Banyan IME Settings」視窗有兩個總開關——Word prediction（底下 English 補完與下一個字、Chinese 聯想）與 Typing assist（底下中文標點、英文標點、句首大寫與單獨的 i、中英之間加空格）；總開關關掉時細項變灰、不作用（勾選留著）。兩個都關掉時一般打字不經過輸入法（直接交給程式），倉頡／速成照常。按 OK 存到登錄檔 `HKCU\Software\Banyan IME`（`Predict`、`English`、`Follow`、`Assist`、`CjkPunct`、`EnPunct`、`Capitalize`、`Spacing`，另外記住 `Chinese`、`Quick`），開著的程式切回來（焦點改變）時重新讀。打開的地方：開始功能表的「Banyan IME Settings」（`install.ps1` 建的捷徑，`rundll32 banyan_ime.dll,Settings`）、候選列上按右鍵、Windows 設定裡這個鍵盤的「選項」（`ITfFnConfigure`）。同時只開一個。總開關與細項的換算是 `engine/options.rs` 的 `Options::apply`。
+- **候選視窗**：GDI 畫的小視窗（不搶焦點、有陰影），樣子照 App 的預測列：左邊灰色字根、數字＋候選字、反白是綠色（`--ed-accent`）、頁數與 ‹ ›；跟著 Windows 的淺色／深色與 DPI。位置是組字的範圍，App 量不出來時用系統游標。
+- **程式**：`ime/src/engine/` 是純邏輯（照 `predict.ts`、`predictor.ts`、`typing.ts`、`punct.ts` 移植，字典直接嵌入 `src/editor/predict/`），22 個 `cargo test`；`ime/src/tsf/` 是 COM、按鍵、組字、候選視窗；`cargo run --release --example smoke` 不用註冊就能載入 DLL、在 TSF 上啟用與停用；`examples/typetest.rs` 開一個文字框（RichEdit＝記事本用的，或 `edit` 參數用舊的 EDIT）、用 SendInput 真的打字並比對結果（倉頡選字、聯想、中文標點、中英切換、換行後句首大寫），`dev-test.ps1` 不用重新安裝就拿剛編好的 DLL 跑它。
+- **舊的 Win32 程式**（EDIT 控制項，經過 Windows 的 CUAS 相容層）：讀不到游標前的字、也不能刪前面的字，所以改看輸入法自己記的「剛打出去的字」（游標移動、換焦點就清掉），需要刪字的換法（`i`→`I`、`。`→`……`）在這些程式裡不做；選英文補完一律只插入還沒打的部分。
+- **Shift 切換中／英**時不吃掉放開 Shift 的鍵（吃掉的話程式以為 Shift 一直按著，之後的字全變大寫）。
+- 除錯：設環境變數 `BANYAN_IME_LOG` 後啟動的程式會把按鍵、edit session、候選視窗寫到 `%TEMP%\banyan-ime.log`。
+
+### 已知限制
+
+- 實際打字測過的是 RichEdit 與 EDIT 文字框（測試程式），還沒在 Word、瀏覽器、Terminal 裡試；`typetest` 要拿得到前景視窗，使用者正在操作電腦時會停下來。
+- 只有 64 位元版：32 位元的程式裡不會出現（要再編 `i686-pc-windows-msvc`）。
+- 沒有語言列上的中／英圖示（只在切換時閃一下）；設定視窗改了之後，已經開著的程式要切走再切回來才套用；Windows 設定裡的「選項」按鈕有沒有出現由 Windows 決定（沒有就用開始功能表或右鍵）。
+- 在 Banyan App 裡用時，App 自己的預測列也會出現：要把 App 設定的 Chinese input method 設成 Off、English 預測關掉。
+- Microsoft Store（UWP）程式裡候選視窗可能不顯示（沒有做 UILess 介面）。
+
 
 ## 更新紀錄
 
@@ -582,3 +606,9 @@ Desk 檔案的 Dock 裡的一種文件（取代原本參考 Notion 的資料庫�
 | 2026-11-20 | 從 Excel 插入的表格改回連結、像 Notion 的 Linked database：在 Word／Slides／Note 裡直接改格子就是改 Excel，每個位置可以用 Style 設自己的顏色、交錯底色、字的大小、撐滿寬度（使用者：「會感覺像Notion的Database Excel就母體 … 唯一不同的是表格的樣式可以不一樣」） |
 | 2026-11-20 | 嵌入的 Excel 表格與圖表加上引用的外框：強調色外框＋上方的來源列（檔案/標題 ↗ · 名稱）（使用者：「我希望有引用的外框」） |
 | 2026-11-20 | 拿掉嵌入的 Excel 表格與圖表的綠色外框，留下上方的來源列（使用者：「把那個綠色外框刪掉」） |
+| 2026-11-20 | 心智圖的主題也有輔助打字（使用者：「Mind Map 不支援打字輔助」）：中英文標點、句首大寫、中英之間空格，緊接著按 Backspace 還原；一般文字框加 `data-assist` 就套用（`fieldPredict.ts`） |
+| 2026-11-20 | 複製成圖片（使用者：「Draw和Mind Map 可以複製成圖片」）：Draw 右鍵 Copy as image／Copy diagram as image、Ctrl＋Shift＋C；白板心智圖右鍵 Copy mind map as image、Draw 卡片右鍵 Copy as image；兩倍解析度的 PNG、白底（新增 `imageClip.ts`、`mindmapExport.ts` 與 3 個測試） |
+| 2026-11-21 | 修正：白板上的 Draw 無法使用（使用者：「Draw 在Whiteboard無法使用」）：在白板上方編輯圖表時，拖曳圖形、框選、改大小放開滑鼠後不會結束（一直卡在拖曳中），空白鍵平移、Esc 關選單也沒反應；原因是外層為了不讓事件傳到白板，把 pointerup、keydown 整個擋掉，連 Draw 掛在 window 上的處理也收不到。白板上的表格（Excel）拖曳選格子也一樣修好 |
+| 2026-11-21 | 所有打字的地方都有輔助打字與字預測（使用者：「在軟件中的所有角落 只要打字就要支持打字輔助和預測字的功能」）：輔助打字改成所有文字框、輸入框預設都有；Draw 圖形的文字、圖片的圖說、表格編輯器的格子原本兩樣都沒有，現在也有（倉頡／速成、英文預測、中英文標點、句首大寫）；程式碼卡片、引用鍵、試算表公式不換，網址與 DOI 輸入框不預測 |
+| 2026-11-21 | Banyan 輸入法（使用者：「把專案中的打字預測和輔助獨立成一個輸入法」）：字預測與輔助打字做成 Windows 的 TSF 輸入法（新增 `ime/`：Rust 的 `banyan_ime.dll`、安裝與移除的 PowerShell、22 個測試與冒煙測試）；在「中文（台灣）」下多一個 Banyan 鍵盤，所有支援 TSF 的程式都能用倉頡／速成、聯想、英文預測與輔助打字 |
+| 2026-11-21 | Banyan 輸入法可以關掉字預測與輔助打字（使用者：「做一個可以關掉輸入預測和打字輔助的功能」）：新的設定視窗 Banyan IME Settings（開始功能表、候選列右鍵、Windows 設定的鍵盤選項），Word prediction 與 Typing assist 兩個總開關加上各自的細項，開著的程式切回來就套用（新增 `ime/src/engine/options.rs`、`ime/src/tsf/config.rs` 與 3 個測試） |
